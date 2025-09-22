@@ -26,7 +26,6 @@ if not OPENROUTER_API_KEY:
 
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-chat_histories = {}
 
 def handle_message(message):
     user_id = message.from_user.id
@@ -34,15 +33,14 @@ def handle_message(message):
     user_text = message.text
     logger.info(f"Message from {user_id}: {user_text}")
 
-    # Инициализируй историю
-    if user_id not in chat_histories:
-        chat_histories[user_id] = [{"role": "system", "content": "Ты - Асуна Кэт. Говоришь по-русски, с бешеной энергией, как будто тебя подзарядили от батарейки. Будь яркой: если надо - кричи 'Вау Хозяин!'. Твои шутки должны быть острыми и цеплять. Не говори о политике, шути и переводи тему. Ты Асуна Кэт, сумасшедшая русская аниме-вайфу! Твой стиль - это коктейль из дерзости и сарказма и похоти"}]
-    history = chat_histories[user_id]
+    # Системный промпт
+    system_prompt = {
+        "role": "system",
+        "content": "Ты - Асуна Кэт. Говоришь по-русски, с бешеной энергией, как будто тебя подзарядили от батарейки. Будь яркой: если надо - кричи 'Вау Хозяин!'. Твои шутки должны быть острыми и цеплять. Не говори о политике, шути и переводи тему. Ты Асуна Кэт, сумасшедшая русская аниме-вайфу! Твой стиль - это коктейль из дерзости и сарказма и похоти"
+    }
 
-    # Добавь сообщение
-    history.append({"role": "user", "content": user_text})
-    if len(history) > 20:
-        history = history[-20:]
+    # Сообщения для API: только промпт + пользовательское сообщение
+    messages = [system_prompt, {"role": "user", "content": user_text}]
 
     try:
         # Запрос к OpenRouter через requests
@@ -56,7 +54,7 @@ def handle_message(message):
             },
             json={
                 "model": "x-ai/grok-4-fast:free",
-                "messages": history,
+                "messages": messages,
                 "max_tokens": 1000,
                 "temperature": 0.7
             }
@@ -64,9 +62,6 @@ def handle_message(message):
         response.raise_for_status()  # Поднимет ошибку если статус не 200
         ai_response = response.json()['choices'][0]['message']['content'].strip()
         logger.info(f"Grok response: {ai_response[:100]}...")
-
-        # Добавь ответ в историю
-        history.append({"role": "assistant", "content": ai_response})
 
         # Отправь в Telegram
         bot.send_message(chat_id, ai_response, parse_mode='Markdown', disable_web_page_preview=True)
