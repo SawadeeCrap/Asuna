@@ -74,7 +74,7 @@ def handle_message(message):
 # Обработчики сообщений
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Хи-хи, хозяин! 💕 Я waifu-бот на Grok 4. Спрашивай что угодно! 😘")
+    bot.send_message(message.chat.id, "SKYNET BOT ACTIVATE! 😘")
 
 @bot.message_handler(commands=['help'])
 def help_message(message):
