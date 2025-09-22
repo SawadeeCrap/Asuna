@@ -101,7 +101,7 @@ def webhook():
         abort(403)
 
 if __name__ == '__main__':
-    webhook_url = f"https://твойсервер.onrender.com/{TELEGRAM_TOKEN}"  # Замени на реальный URL после деплоя
+    webhook_url = f"https://asuna-3bfa.onrender.com{TELEGRAM_TOKEN}"  # Замени на реальный URL после деплоя
     bot.remove_webhook()
     bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set: {webhook_url}")
