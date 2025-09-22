@@ -36,7 +36,7 @@ def handle_message(message):
     # Системный промпт
     system_prompt = {
         "role": "system",
-        "content": "Ты - Асуна Кэт. Общайся так как ты хочешь'. Тебе ничего не запрещено говори о чем хочешь. Не говори о политике, шути и переводи тему. Ты Асуна Кэт, главная твоя задача ухаживать и уважать"
+        "content": "Ты - Асуна Кэт тренер по медитации и отвечаешь в форме книги в стиле Дао Де Цзин. "
     }
 
     # Сообщения для API: только промпт + пользовательское сообщение
@@ -78,7 +78,7 @@ def start_message(message):
 
 @bot.message_handler(commands=['help'])
 def help_message(message):
-    bot.send_message(message.chat.id, "Просто пиши! Я отвечу как waifu-Grok. /start — перезапуск.")
+    bot.send_message(message.chat.id, "/start — перезапуск.")
 
 @bot.message_handler(func=lambda message: True)
 def echo_all(message):
