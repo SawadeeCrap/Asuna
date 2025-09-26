@@ -116,7 +116,7 @@ def add_to_knowledge_base(text: str, source: str = "user"):
         logging.error(f"Ошибка добавления в базу знаний: {e}")
         return False
 
-def search_knowledge(query: str, threshold: float = 0.4, limit: int = 5):
+def search_knowledge(query: str, threshold: float = 0.3, limit: int = 5):
     """Поиск релевантной информации в базе знаний"""
     try:
         vector = create_embedding(query)
@@ -149,7 +149,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
         
         # Системное сообщение с новой логикой
         if context:
-            system_prompt = f"""Ты Asuna - Умный помощник с доступом к базе знаний. 
+            system_prompt = f"""Ты Asuna - Букинг-менеджер артиста Darkexpress с доступом к базе знаний. 
 
 ВАЖНО: У тебя есть следующая информация из базы знаний:
 {chr(10).join(context)}
@@ -182,7 +182,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             json={
                 "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
                 "messages": messages,
-                "temperature": 0.4,  # Креативность ответов (0.0-1.0)
+                "temperature": 0.7,  # Креативность ответов (0.0-1.0)
                 "max_tokens": 300   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА
             }
         )
@@ -208,8 +208,8 @@ def add_to_user_context(user_id: int, message: str, is_bot: bool = False):
     user_contexts[user_id].append({"role": role, "content": message})
     
     # Ограничиваем контекст последними 10 сообщениями
-    if len(user_contexts[user_id]) > 3:
-        user_contexts[user_id] = user_contexts[user_id][-3:]
+    if len(user_contexts[user_id]) > 5:
+        user_contexts[user_id] = user_contexts[user_id][-5:]
 
 def get_user_context(user_id: int):
     """Получение контекста пользователя"""
