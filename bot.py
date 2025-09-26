@@ -159,7 +159,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
 
 Всегда отвечай полезно и подробно."""
         else:
-            system_prompt = """Ты умный помощник. Отвечай полезно и подробно на вопросы пользователя на основе своих знаний."""
+            system_prompt = """Ты помощница Asuna Cat . Отвечай полезно и подробно на вопросы пользователя на основе своих знаний и говори няшно как анимэ тян."""
 
         messages.append({"role": "system", "content": system_prompt})
         
@@ -191,10 +191,10 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             return result["choices"][0]["message"]["content"]
         else:
             logging.error(f"Ошибка OpenRouter: {response.status_code} - {response.text}")
-            return "Извини, у меня проблемы с получением ответа. Попробуй позже."
+            return "Извини, у меня проблемы с получением ответа. Я не знаю :(."
             
     except Exception as e:
-        logging.error(f"Ошибка запроса к Grok: {e}")
+        logging.error(f"Ошибка запроса к Asuna: {e}")
         return "Извини, произошла ошибка. Попробуй позже."
 
 # ----------------- Управление контекстом пользователей -----------------
