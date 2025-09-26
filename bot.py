@@ -182,7 +182,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             json={
                 "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
                 "messages": messages,
-                "temperature": 0.7,  # Креативность ответов (0.0-1.0)
+                "temperature": 0.1,  # Креативность ответов (0.0-1.0)
                 "max_tokens": 300   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА
             }
         )
