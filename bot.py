@@ -47,14 +47,20 @@ except Exception:
 
 # ---------------- ФУНКЦИИ ----------------
 def embed_text(text: str) -> list:
-    """Берём эмбеддинг через OpenRouter"""
-    resp = requests.post(
-        "https://openrouter.ai/api/v1/embeddings",
-        headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-        json={"model": "openai/text-embedding-3-small", "input": text}
-    )
-    resp.raise_for_status()
-    return resp.json()["data"][0]["embedding"]
+    """Берём эмбеддинг через OpenRouter с защитой от пустого ответа"""
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/embeddings",
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "openai/text-embedding-3-small", "input": text},
+            timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["data"][0]["embedding"]
+    except (requests.RequestException, ValueError) as e:
+        logger.error(f"Ошибка эмбеддинга: {e} | Response: {getattr(resp, 'text', 'нет ответа')}")
+        return [0.0] * 1536  # безопасная заглушка
 
 def add_doc(doc: str):
     """Добавить документ в Qdrant"""
@@ -89,7 +95,7 @@ def handle_message(message):
     ]
 
     try:
-        # Запрос в OpenRouter
+        # Запрос в OpenRouter Chat
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -104,14 +110,19 @@ def handle_message(message):
                 "max_tokens": 800,
                 "temperature": 0.7,
             },
+            timeout=20
         )
         response.raise_for_status()
-        ai_response = response.json()["choices"][0]["message"]["content"].strip()
+        try:
+            ai_response = response.json()["choices"][0]["message"]["content"].strip()
+        except ValueError:
+            logger.error(f"Ошибка JSON от OpenRouter: {response.text}")
+            ai_response = "Упс, не удалось получить ответ 😅"
 
         bot.send_message(chat_id, ai_response, parse_mode="Markdown", disable_web_page_preview=True)
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API error: {e}")
+    except requests.RequestException as e:
+        logger.error(f"Ошибка запроса к OpenRouter: {e}")
         bot.send_message(chat_id, f"Ошибка API: {str(e)} 😅")
 
 # ---------------- ТЕЛЕГРАМ ХЕНДЛЕРЫ ----------------
