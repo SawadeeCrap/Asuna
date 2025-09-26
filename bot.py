@@ -7,26 +7,36 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
 
-# Логи
+# -------------------
+# Настройка логов
+# -------------------
 logging.basicConfig(level=logging.INFO)
 
-# Настройки
+# -------------------
+# Настройки из окружения
+# -------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL")  # типа https://your-qdrant-url
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # если нужно
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # если требуется
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# OpenAI client
+# -------------------
+# OpenAI клиент
+# -------------------
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Qdrant client
+# -------------------
+# Qdrant клиент
+# -------------------
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 COLLECTION_NAME = "knowledge_base"
 
-# --- Функции ---
+# -------------------
+# Функции
+# -------------------
 def embed_text(text: str):
     try:
         response = openai_client.embeddings.create(
@@ -55,7 +65,7 @@ def search_docs(query: str, top_k=5):
     try:
         results = qdrant.query_points(
             collection_name=COLLECTION_NAME,
-            vector=vector,
+            query_vector=vector,  # Важно: query_vector
             limit=top_k,
         )
         texts = [p.payload["text"] for p in results.result]
@@ -82,7 +92,9 @@ def ask_openai_chat(prompt: str, context: list):
         logging.error(f"Ошибка запроса к OpenAI Chat: {e}")
         return "Извини, не могу ответить сейчас."
 
-# --- Обработка сообщений ---
+# -------------------
+# Обработка сообщений
+# -------------------
 def handle_message(message):
     user_text = message.text
     logging.info(f"Сообщение от {message.from_user.id}: {user_text}")
@@ -102,13 +114,17 @@ def handle_message(message):
 def message_handler(message):
     threading.Thread(target=handle_message, args=(message,)).start()
 
-# --- Flask webhook ---
+# -------------------
+# Flask webhook
+# -------------------
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = request.get_json()
     telebot.types.Update.de_json(update)
     return "", 200
 
+# -------------------
+# Запуск polling (если webhook не используешь)
+# -------------------
 if __name__ == "__main__":
-    # Если нужно polling
     bot.polling(none_stop=True)
