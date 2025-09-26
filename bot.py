@@ -3,12 +3,12 @@ import logging
 import uuid
 from threading import Thread
 
-import openai
-import telebot
 from flask import Flask, request, abort
+import telebot
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct
+from openai import OpenAI
 
 # ---------------- ЛОГИ ----------------
 logging.basicConfig(level=logging.INFO)
@@ -25,14 +25,15 @@ RENDER_URL = os.getenv("RENDER_URL", "https://example.onrender.com")
 if not TELEGRAM_TOKEN or not OPENAI_API_KEY or not QDRANT_API_KEY or not QDRANT_URL:
     raise ValueError("Проверьте все секреты: TELEGRAM, OPENAI, QDRANT")
 
-openai.api_key = OPENAI_API_KEY
-
 # ---------------- ИНИЦИАЛИЗАЦИЯ ----------------
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Qdrant клиент
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+
+# OpenAI клиент
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Создание коллекции
 try:
@@ -46,15 +47,15 @@ except Exception:
 
 # ---------------- ФУНКЦИИ ----------------
 def embed_text(text: str) -> list:
-    """Получение эмбеддинга через OpenAI"""
+    """Получение эмбеддинга через OpenAI 1.0 API"""
     if not text.strip():
         return [0.0]*1536
     try:
-        resp = openai.Embedding.create(
+        resp = openai_client.embeddings.create(
             model="text-embedding-ada-002",
             input=text
         )
-        embedding = resp["data"][0]["embedding"]
+        embedding = resp.data[0].embedding
         logger.info(f"Эмбеддинг получен, длина: {len(embedding)}")
         return embedding
     except Exception as e:
@@ -100,7 +101,7 @@ def handle_message(message):
     ]
 
     try:
-        resp = openai.ChatCompletion.create(
+        resp = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages,
             max_tokens=800,
