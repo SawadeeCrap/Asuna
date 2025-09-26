@@ -1,6 +1,7 @@
-Flask==3.0.3
-pyTelegramBotAPI==4.23.0
-python-dotenv==1.0.1
-requests==2.32.3
-qdrant-client==1.11.1
-openai
+python-dotenv==1.0.0
+pyTelegramBotAPI==4.14.0
+Flask==2.3.3
+qdrant-client==1.2.1
+openai==1.28.0
+requests==2.31.0
+httpx==0.24.1
