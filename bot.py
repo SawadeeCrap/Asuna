@@ -159,13 +159,13 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
 
 Всегда отвечай полезно и подробно."""
         else:
-            system_prompt = """Ты помощница Asuna Cat . Отвечай полезно и подробно на вопросы пользователя на основе своих знаний и говори няшно как анимэ тян."""
+            system_prompt = """Ты умный помощник. Отвечай полезно и подробно на вопросы пользователя на основе своих знаний."""
 
         messages.append({"role": "system", "content": system_prompt})
         
         # Добавляем контекст диалога пользователя (последние сообщения)
         if user_context:
-            for msg in user_context[-5:]:  # последние 6 сообщений для контекста
+            for msg in user_context[-6:]:  # последние 6 сообщений для контекста
                 messages.append(msg)
         
         # Текущий вопрос пользователя
@@ -181,8 +181,8 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             json={
                 "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
                 "messages": messages,
-                "temperature": 0.4,  # Повышена для более творческих ответов
-                "max_tokens": 300    # Увеличено для более подробных ответов
+                "temperature": 0.7,  # Креативность ответов (0.0-1.0)
+                "max_tokens": 1200   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА (увеличено до 1200)
             }
         )
         
@@ -191,10 +191,10 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             return result["choices"][0]["message"]["content"]
         else:
             logging.error(f"Ошибка OpenRouter: {response.status_code} - {response.text}")
-            return "Извини, у меня проблемы с получением ответа. Я не знаю :(."
+            return "Извини, у меня проблемы с получением ответа. Попробуй позже."
             
     except Exception as e:
-        logging.error(f"Ошибка запроса к Asuna: {e}")
+        logging.error(f"Ошибка запроса к Grok: {e}")
         return "Извини, произошла ошибка. Попробуй позже."
 
 # ----------------- Управление контекстом пользователей -----------------
@@ -221,7 +221,7 @@ def handle_start(message):
     username = message.from_user.username or message.from_user.first_name
     
     if is_admin(user_id):
-        welcome_text = """🤖 Привет, Админ! Я Asuna, твоя кэт компаньен.
+        welcome_text = """🤖 Привет, Админ! Я умный бот с базой знаний.
 
 👑 **Ваши привилегии:**
 • Добавлять информацию в базу: "запомни что-то"
@@ -232,7 +232,7 @@ def handle_start(message):
 • Их диалоги запоминаются в контексте
 • НЕ могут изменять общую базу знаний"""
     else:
-        welcome_text = f"""🤖 Привет, {username}! Я Asuna, кэт компаньен.
+        welcome_text = f"""🤖 Привет, {username}! Я умный бот с базой знаний.
 
 Что я умею:
 • Отвечать на любые вопросы
@@ -305,11 +305,79 @@ def handle_admin(message):
 **Доступные команды:**
 • `запомни [текст]` - добавить в базу
 • `/clear` - очистить свой контекст
-• `/admin` - эта панель"""
+• `/admin` - эта панель
+• `/database` - посмотреть базу данных
+• `/count` - количество записей"""
         
         bot.reply_to(message, admin_info, parse_mode='Markdown')
     else:
         bot.reply_to(message, "❌ У вас нет прав администратора")
+
+@bot.message_handler(commands=['database', 'db'])
+def handle_database(message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "❌ У вас нет прав администратора")
+        return
+    
+    try:
+        # Получаем все записи из коллекции
+        result = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=20,  # Показываем первые 20 записей
+            with_payload=True
+        )
+        
+        points = result[0]  # result возвращает (points, next_page_offset)
+        
+        if not points:
+            bot.reply_to(message, "📭 База данных пуста")
+            return
+        
+        database_text = f"📚 **База знаний** (показано {len(points)} из записей):\n\n"
+        
+        for i, point in enumerate(points, 1):
+            text = point.payload.get("text", "Нет текста")
+            source = point.payload.get("source", "unknown")
+            # Обрезаем длинные записи
+            if len(text) > 100:
+                text = text[:100] + "..."
+            database_text += f"{i}. `{text}`\n   _Источник: {source}_\n\n"
+        
+        # Telegram имеет лимит 4096 символов
+        if len(database_text) > 4000:
+            database_text = database_text[:4000] + "\n...\n_Список обрезан_"
+        
+        bot.reply_to(message, database_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Ошибка получения базы данных: {e}")
+        bot.reply_to(message, f"❌ Ошибка получения данных: {e}")
+
+@bot.message_handler(commands=['count'])
+def handle_count(message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "❌ У вас нет прав администратора")
+        return
+    
+    try:
+        # Получаем информацию о коллекции
+        collection_info = qdrant.get_collection(COLLECTION_NAME)
+        points_count = collection_info.points_count
+        
+        count_text = f"""📊 **Статистика базы данных:**
+
+🗃️ Коллекция: `{COLLECTION_NAME}`
+📝 Записей: **{points_count}**
+🔢 Размер вектора: 1536
+📏 Метрика: Cosine"""
+        
+        bot.reply_to(message, count_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Ошибка получения статистики: {e}")
+        bot.reply_to(message, f"❌ Ошибка получения статистики: {e}")
 
 # ----------------- Обработчик сообщений -----------------
 @bot.message_handler(func=lambda message: True)
