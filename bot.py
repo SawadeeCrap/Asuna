@@ -21,33 +21,32 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 RENDER_URL = os.getenv("RENDER_URL", "https://example.onrender.com")
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN not set")
-if not OPENROUTER_API_KEY:
-    raise ValueError("OPENROUTER_API_KEY not set")
-if not QDRANT_API_KEY or not QDRANT_URL:
-    raise ValueError("QDRANT credentials not set")
+if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY or not QDRANT_API_KEY or not QDRANT_URL:
+    raise ValueError("Не установлены все ключи/URL!")
 
 # ---------------- ИНИЦИАЛИЗАЦИЯ ----------------
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-# Qdrant клиент
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-# Создание коллекции (один раз)
+# ---------------- КОЛЛЕКЦИЯ ----------------
+collection_name = "knowledge_base"
 try:
+    qdrant.get_collection(collection_name=collection_name)
+    logger.info(f"Коллекция '{collection_name}' уже существует")
+except Exception:
     qdrant.recreate_collection(
-        collection_name="knowledge_base",
+        collection_name=collection_name,
         vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
     )
-    logger.info("Qdrant collection recreated")
-except Exception:
-    logger.info("Collection already exists or ignored")
+    logger.info(f"Коллекция '{collection_name}' создана")
+
+# ---------------- ПАМЯТЬ ЧАТА ----------------
+chat_history = {}  # chat_id -> [{"role":"user"/"assistant", "content": "..."}]
+MAX_HISTORY = 10  # количество последних сообщений для контекста
 
 # ---------------- ФУНКЦИИ ----------------
 def embed_text(text: str) -> list:
-    """Берём эмбеддинг через OpenRouter с защитой от пустого ответа"""
     try:
         resp = requests.post(
             "https://openrouter.ai/api/v1/embeddings",
@@ -56,95 +55,97 @@ def embed_text(text: str) -> list:
             timeout=15
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data["data"][0]["embedding"]
-    except (requests.RequestException, ValueError) as e:
-        logger.error(f"Ошибка эмбеддинга: {e} | Response: {getattr(resp, 'text', 'нет ответа')}")
-        return [0.0] * 1536  # безопасная заглушка
+        return resp.json()["data"][0]["embedding"]
+    except Exception as e:
+        logger.error(f"Ошибка эмбеддинга: {e}")
+        return [0.0]*1536
 
 def add_doc(doc: str):
-    """Добавить документ в Qdrant"""
     vector = embed_text(doc)
     qdrant.upsert(
-        collection_name="knowledge_base",
+        collection_name=collection_name,
         points=[PointStruct(id=str(uuid.uuid4()), vector=vector, payload={"text": doc})]
     )
+    logger.info(f"Документ добавлен в базу: {doc}")
 
 def search_docs(query: str, top_k=3):
-    """Поиск похожих документов"""
     vector = embed_text(query)
-    results = qdrant.search(collection_name="knowledge_base", query_vector=vector, limit=top_k)
+    results = qdrant.search(collection_name=collection_name, query_vector=vector, limit=top_k)
     return [r.payload["text"] for r in results]
 
-# ---------------- ОСНОВНОЙ ХЕНДЛЕР ----------------
 def handle_message(message):
-    user_id = message.from_user.id
     chat_id = message.chat.id
-    user_text = message.text
-    logger.info(f"Message from {user_id}: {user_text}")
+    user_text = message.text.strip()
+    if not user_text:
+        return
+
+    logger.info(f"Сообщение от {chat_id}: {user_text}")
+
+    # Авто-добавление текста в базу
+    if not user_text.startswith("/"):
+        add_doc(user_text)
 
     # Поиск в базе
     retrieved = search_docs(user_text)
-    context = "\n".join(retrieved) if retrieved else "Нет найденной информации."
+    retrieved_context = "\n".join(retrieved) if retrieved else "Нет найденной информации."
 
-    # Формируем сообщения для LLM
+    # История диалога
+    history = chat_history.get(chat_id, [])
+    history_messages = history[-MAX_HISTORY:]  # последние N сообщений
+
+    # Формируем полный контекст LLM
     messages = [
         {"role": "system", "content": "Ты Asuna Cat — веселая кошка, которая рассказывает анекдоты."},
-        {"role": "system", "content": f"В базе знаний нашлось:\n{context}"},
-        {"role": "user", "content": user_text},
-    ]
+        {"role": "system", "content": f"В базе знаний нашлось:\n{retrieved_context}"},
+    ] + history_messages + [{"role": "user", "content": user_text}]
 
     try:
-        # Запрос в OpenRouter Chat
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": RENDER_URL,
-                "X-Title": "Asuna TG Bot",
                 "Content-Type": "application/json",
             },
             json={
-                "model": "openai/gpt-3.5-turbo",  # Выбор модели
+                "model": "openai/gpt-3.5-turbo",
                 "messages": messages,
                 "max_tokens": 800,
-                "temperature": 0.7,
+                "temperature": 0.7
             },
             timeout=20
         )
         response.raise_for_status()
-        try:
-            ai_response = response.json()["choices"][0]["message"]["content"].strip()
-        except ValueError:
-            logger.error(f"Ошибка JSON от OpenRouter: {response.text}")
-            ai_response = "Упс, не удалось получить ответ 😅"
-
-        bot.send_message(chat_id, ai_response, parse_mode="Markdown", disable_web_page_preview=True)
-
-    except requests.RequestException as e:
+        ai_response = response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
         logger.error(f"Ошибка запроса к OpenRouter: {e}")
-        bot.send_message(chat_id, f"Ошибка API: {str(e)} 😅")
+        ai_response = "Упс, не удалось получить ответ 😅"
 
-# ---------------- КОМАНДЫ TELEGRAM ----------------
+    # Отправка ответа
+    bot.send_message(chat_id, ai_response, parse_mode="Markdown", disable_web_page_preview=True)
+
+    # Обновляем историю чата
+    history.append({"role": "user", "content": user_text})
+    history.append({"role": "assistant", "content": ai_response})
+    chat_history[chat_id] = history[-MAX_HISTORY:]
+
+# ---------------- КОМАНДЫ ----------------
 @bot.message_handler(commands=["start"])
 def start_message(message):
     bot.send_message(message.chat.id, "SKYNET BOT ACTIVATE! 😘")
 
 @bot.message_handler(commands=["help"])
 def help_message(message):
-    bot.send_message(message.chat.id, "/start — перезапуск.\n/add текст — добавить документ\n/search текст — поиск в базе")
+    bot.send_message(message.chat.id, "/start — перезапуск\n/add текст — добавить документ\n/search текст — поиск в базе")
 
-# Добавление документа
 @bot.message_handler(commands=["add"])
 def add_document(message):
     text = message.text.replace("/add", "").strip()
     if text:
         add_doc(text)
-        bot.send_message(message.chat.id, "Документ добавлен в базу ✅")
+        bot.send_message(message.chat.id, "Документ добавлен ✅")
     else:
         bot.send_message(message.chat.id, "Напиши текст после /add")
 
-# Поиск документа
 @bot.message_handler(commands=["search"])
 def search_document(message):
     query = message.text.replace("/search", "").strip()
@@ -167,8 +168,7 @@ def echo_all(message):
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
-        json_string = request.get_data().decode("utf-8")
-        update = telebot.types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
         bot.process_new_updates([update])
         return ""
     else:
@@ -179,6 +179,6 @@ if __name__ == "__main__":
     webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
     bot.remove_webhook()
     bot.set_webhook(url=webhook_url)
-    logger.info(f"Webhook set: {webhook_url}")
+    logger.info(f"Webhook установлен: {webhook_url}")
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
