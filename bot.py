@@ -1,36 +1,39 @@
 import os
 import logging
+import threading
 from flask import Flask, request
 import telebot
 from openai import OpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
-from qdrant_client.models import PointStruct, VectorParams
+from qdrant_client.models import PointStruct
 
-# --- Логи ---
+# ----------------- Логи -----------------
 logging.basicConfig(level=logging.INFO)
 
-# --- Настройки ---
+# ----------------- Настройки -----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "knowledge_base"
+QDRANT_URL = os.getenv("QDRANT_URL")  # Например: https://your-qdrant-url
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # если нужно
 
-# --- Инициализация клиентов ---
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-# --- Функции ---
+# ----------------- OpenAI client -----------------
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# ----------------- Qdrant client -----------------
+qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+COLLECTION_NAME = "knowledge_base"
+
+# ----------------- Функции -----------------
 def embed_text(text: str):
     try:
-        resp = openai_client.embeddings.create(
+        response = openai_client.embeddings.create(
             model="text-embedding-3-small",
             input=text
         )
-        vector = resp.data[0].embedding
+        vector = response.data[0].embedding
         logging.info(f"Эмбеддинг текста '{text}' создан")
         return vector
     except Exception as e:
@@ -50,11 +53,11 @@ def search_docs(query: str, top_k=5):
     if not vector:
         return []
     try:
+        # В новой версии Qdrant нужно использовать vector=vector в query_points
         results = qdrant.query_points(
             collection_name=COLLECTION_NAME,
-            query_vector=vector,
+            vector=vector,
             limit=top_k,
-            with_payload=True
         )
         texts = [p.payload["text"] for p in results.result]
         logging.info(f"Поиск по базе для запроса '{query}' вернул: {texts}")
@@ -71,17 +74,16 @@ def ask_openai_chat(prompt: str, context: list):
             messages.append({"role": "system", "content": f"Контекст из базы: {context_text}"})
         messages.append({"role": "user", "content": prompt})
 
-        resp = openai_client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages
         )
-        return resp.choices[0].message.content
+        return response.choices[0].message.content
     except Exception as e:
         logging.error(f"Ошибка запроса к OpenAI Chat: {e}")
         return "Извини, не могу ответить сейчас."
 
-# --- Обработка сообщений ---
-@bot.message_handler(func=lambda m: True)
+# ----------------- Обработка сообщений -----------------
 def handle_message(message):
     user_text = message.text
     logging.info(f"Сообщение от {message.from_user.id}: {user_text}")
@@ -97,14 +99,21 @@ def handle_message(message):
     reply = ask_openai_chat(user_text, context=retrieved)
     bot.send_message(message.chat.id, reply)
 
-# --- Flask webhook ---
+@bot.message_handler(func=lambda m: True)
+def message_handler(message):
+    threading.Thread(target=handle_message, args=(message,)).start()
+
+# ----------------- Flask webhook -----------------
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = request.get_json()
-    bot.process_new_updates([telebot.types.Update.de_json(update)])
+    if update:
+        update_obj = telebot.types.Update.de_json(update)
+        threading.Thread(target=bot.process_new_updates, args=([update_obj],)).start()
     return "", 200
 
+# ----------------- Запуск -----------------
 if __name__ == "__main__":
-    bot.remove_webhook()  # удаляем старый webhook
-    logging.info("Webhook удалён (если был). Flask сервер запущен.")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    logging.info("Бот запущен. Webhook активен.")
+    # Убираем polling, оставляем только webhook
+    # bot.polling(none_stop=True)
