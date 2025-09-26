@@ -3,3 +3,4 @@ pyTelegramBotAPI==4.23.0
 python-dotenv==1.0.1
 requests==2.32.3
 qdrant-client==1.11.1
+openai
