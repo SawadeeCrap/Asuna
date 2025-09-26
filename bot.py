@@ -47,18 +47,38 @@ MAX_HISTORY = 10  # количество последних сообщений �
 
 # ---------------- ФУНКЦИИ ----------------
 def embed_text(text: str) -> list:
+    """Получаем эмбеддинг через OpenRouter с полной отладкой"""
+    if not text.strip():
+        logger.warning("Пустой текст для эмбеддинга")
+        return [0.0]*1536
+
     try:
         resp = requests.post(
             "https://openrouter.ai/api/v1/embeddings",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "openai/text-embedding-3-small", "input": text},
-            timeout=15
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/text-embedding-3-small",
+                "input": text
+            },
+            timeout=30
         )
+        logger.info(f"Raw response from OpenRouter: {resp.text}")  # <-- печатаем что пришло
         resp.raise_for_status()
-        return resp.json()["data"][0]["embedding"]
-    except Exception as e:
-        logger.error(f"Ошибка эмбеддинга: {e}")
-        return [0.0]*1536
+        data = resp.json()
+        embedding = data["data"][0]["embedding"]
+        logger.info(f"Эмбеддинг получен, длина: {len(embedding)}")
+        return embedding
+    except requests.RequestException as e:
+        logger.error(f"Ошибка запроса к OpenRouter: {e}")
+    except ValueError as e:
+        logger.error(f"Ошибка разбора JSON: {e} | Response: {getattr(resp, 'text', 'нет ответа')}")
+    except KeyError as e:
+        logger.error(f"Ошибка формата ответа: {e} | Response: {resp.text}")
+    
+    return [0.0]*1536
 
 def add_doc(doc: str):
     vector = embed_text(doc)
@@ -71,7 +91,9 @@ def add_doc(doc: str):
 def search_docs(query: str, top_k=3):
     vector = embed_text(query)
     results = qdrant.search(collection_name=collection_name, query_vector=vector, limit=top_k)
-    return [r.payload["text"] for r in results]
+    found = [r.payload["text"] for r in results]
+    logger.info(f"Поиск по базе для запроса '{query}' вернул: {found}")
+    return found
 
 def handle_message(message):
     chat_id = message.chat.id
@@ -91,7 +113,7 @@ def handle_message(message):
 
     # История диалога
     history = chat_history.get(chat_id, [])
-    history_messages = history[-MAX_HISTORY:]  # последние N сообщений
+    history_messages = history[-MAX_HISTORY:]
 
     # Формируем полный контекст LLM
     messages = [
