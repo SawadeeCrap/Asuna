@@ -221,7 +221,7 @@ def handle_start(message):
     username = message.from_user.username or message.from_user.first_name
     
     if is_admin(user_id):
-        welcome_text = """🤖 Привет, Админ! Я умный бот Asuna с базой знаний.
+        welcome_text = """ Привет, Админ! Я умный бот Asuna с базой знаний.
 
 👑 **Ваши привилегии:**
 • Добавлять информацию в базу: "запомни что-то"
@@ -232,7 +232,7 @@ def handle_start(message):
 • Их диалоги запоминаются в контексте
 • НЕ могут изменять общую базу знаний"""
     else:
-        welcome_text = f"""🤖 Привет, {username}! Я умный бот с базой знаний.
+        welcome_text = f""" Привет, {username}! Я умный бот с базой знаний.
 
 Что я умею:
 • Отвечать на любые вопросы
@@ -250,7 +250,7 @@ def handle_help(message):
     user_id = message.from_user.id
     
     if is_admin(user_id):
-        help_text = """📚 **Команды для Администратора:**
+        help_text = """ **Команды для Администратора:**
 
 1. **Добавить в базу знаний:**
    `запомни Python - это язык программирования`
@@ -264,12 +264,12 @@ def handle_help(message):
 4. **Проверить статус:**
    `/admin`
 
-🧠 **Как работаю:**
+ **Как работаю:**
 - База знаний доступна всем пользователям
 - Только вы можете её пополнять
 - У каждого пользователя свой контекст диалога"""
     else:
-        help_text = """📚 **Как пользоваться ботом:**
+        help_text = """ **Как пользоваться ботом:**
 
 1. **Задать вопрос:**
    `что такое Python?`
@@ -278,7 +278,7 @@ def handle_help(message):
 2. **Очистить наш диалог:**
    `/clear`
 
-🧠 **Как я работаю:**
+ **Как я работаю:**
 - Отвечаю на основе общей базы знаний + своих знаний
 - Запоминаю наш диалог для контекста
 - База знаний пополняется администратором"""
@@ -290,13 +290,13 @@ def handle_clear(message):
     user_id = message.from_user.id
     if user_id in user_contexts:
         del user_contexts[user_id]
-    bot.reply_to(message, "✅ Контекст диалога очищен")
+    bot.reply_to(message, " Контекст диалога очищен")
 
 @bot.message_handler(commands=['admin'])
 def handle_admin(message):
     user_id = message.from_user.id
     if is_admin(user_id):
-        admin_info = f"""👑 **Админ панель**
+        admin_info = f""" **Админ панель**
 
 🆔 Ваш ID: `{user_id}`
 📊 Активных пользователей: {len(user_contexts)}
@@ -309,13 +309,13 @@ def handle_admin(message):
         
         bot.reply_to(message, admin_info, parse_mode='Markdown')
     else:
-        bot.reply_to(message, "❌ У вас нет прав администратора")
+        bot.reply_to(message, " У вас нет прав администратора")
 
 @bot.message_handler(commands=['database', 'db'])
 def handle_database(message):
     user_id = message.from_user.id
     if not is_admin(user_id):
-        bot.reply_to(message, "❌ У вас нет прав администратора")
+        bot.reply_to(message, " У вас нет прав администратора")
         return
     
     try:
@@ -350,13 +350,13 @@ def handle_database(message):
         
     except Exception as e:
         logging.error(f"Ошибка получения базы данных: {e}")
-        bot.reply_to(message, f"❌ Ошибка получения данных: {e}")
+        bot.reply_to(message, f" Ошибка получения данных: {e}")
 
 @bot.message_handler(commands=['count'])
 def handle_count(message):
     user_id = message.from_user.id
     if not is_admin(user_id):
-        bot.reply_to(message, "❌ У вас нет прав администратора")
+        bot.reply_to(message, " У вас нет прав администратора")
         return
     
     try:
@@ -364,7 +364,7 @@ def handle_count(message):
         collection_info = qdrant.get_collection(COLLECTION_NAME)
         points_count = collection_info.points_count
         
-        count_text = f"""📊 **Статистика базы данных:**
+        count_text = f"""График: **Статистика базы данных:**
 
 🗃️ Коллекция: `{COLLECTION_NAME}`
 📝 Записей: **{points_count}**
@@ -375,7 +375,7 @@ def handle_count(message):
         
     except Exception as e:
         logging.error(f"Ошибка получения статистики: {e}")
-        bot.reply_to(message, f"❌ Ошибка получения статистики: {e}")
+        bot.reply_to(message, f" Ошибка получения статистики: {e}")
 
 # ----------------- Обработчик сообщений -----------------
 @bot.message_handler(func=lambda message: True)
@@ -396,14 +396,14 @@ def handle_message(message):
                 if knowledge:
                     success = add_to_knowledge_base(knowledge, source=f"admin_{user_id}")
                     if success:
-                        response = f"✅ Запомнил: {knowledge}"
+                        response = f" Запомнил: {knowledge}"
                     else:
-                        response = "❌ Не удалось сохранить информацию"
+                        response = " Не удалось сохранить информацию"
                 else:
                     response = "Что именно запомнить? Напиши: запомни что-то"
             else:
                 username = message.from_user.username or message.from_user.first_name
-                response = f"❌ {username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста наших будущих разговоров! 😊"
+                response = f" {username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста наших будущих разговоров! 😊"
         else:
             # Обычный вопрос - ищем в базе знаний и всегда отвечаем через нейросеть
             knowledge_results = search_knowledge(user_text)
@@ -424,7 +424,7 @@ def handle_message(message):
         
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
-        bot.reply_to(message, "😔 Произошла ошибка. Попробуй еще раз.")
+        bot.reply_to(message, " Произошла ошибка. Попробуй еще раз.")
 
 # ----------------- Flask маршруты -----------------
 @app.route("/", methods=["GET"])
@@ -450,23 +450,23 @@ def set_webhook():
         webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         result = bot.set_webhook(url=webhook_url)
         if result:
-            logging.info(f"✅ Webhook установлен: {webhook_url}")
+            logging.info(f" Webhook установлен: {webhook_url}")
         else:
-            logging.error("❌ Ошибка установки webhook")
+            logging.error(" Ошибка установки webhook")
     except Exception as e:
         logging.error(f"Ошибка при установке webhook: {e}")
 
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
-    logging.info(f"🚀 Запуск Knowledge Bot...")
-    logging.info(f"👑 Admin User ID: {ADMIN_USER_ID}")
+    logging.info(f" Запуск Knowledge Bot...")
+    logging.info(f" Admin User ID: {ADMIN_USER_ID}")
     
     # Инициализация
     init_collections()
     set_webhook()
     
-    logging.info(f"✅ Бот запущен на порту {PORT}")
-    logging.info(f"📡 Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
+    logging.info(f" Бот запущен на порту {PORT}")
+    logging.info(f" Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
     
     # Запуск Flask
     app.run(host="0.0.0.0", port=PORT, debug=False)
