@@ -31,9 +31,11 @@ if not QDRANT_API_KEY or not QDRANT_URL:
 # ---------------- ИНИЦИАЛИЗАЦИЯ ----------------
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+# Qdrant клиент
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
-# Создание коллекции (если её ещё нет)
+# Создание коллекции (один раз)
 try:
     qdrant.recreate_collection(
         collection_name="knowledge_base",
@@ -43,78 +45,69 @@ try:
 except Exception:
     logger.info("Collection already exists or ignored")
 
-# ---------------- ПАМЯТЬ ЧАТА ----------------
-chat_history = {}  # {user_id: [{"role": "user"/"assistant", "content": "..."}]}
-
 # ---------------- ФУНКЦИИ ----------------
 def embed_text(text: str) -> list:
-    """Берём эмбеддинг через OpenRouter"""
+    """Берём эмбеддинг через free-модель OpenRouter"""
     try:
         resp = requests.post(
             "https://openrouter.ai/api/v1/embeddings",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "openai/text-embedding-3-small", "input": text},
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/text-embedding-3-small",  # free модель
+                "input": text
+            },
             timeout=15
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["data"][0]["embedding"]
+        embedding = data["data"][0]["embedding"]
+        logger.info(f"Эмбеддинг получен: {text[:30]}...")
+        return embedding
     except Exception as e:
         logger.error(f"Ошибка эмбеддинга OpenRouter: {e} | Response: {getattr(resp, 'text', 'нет ответа')}")
-        return [0.0] * 1536  # безопасная заглушка
+        return [0.0] * 1536
 
 def add_doc(doc: str):
-    """Добавить документ в Qdrant"""
     vector = embed_text(doc)
     qdrant.upsert(
         collection_name="knowledge_base",
         points=[PointStruct(id=str(uuid.uuid4()), vector=vector, payload={"text": doc})]
     )
-    logger.info(f"Документ добавлен в базу: {doc}")
+    logger.info(f"Документ добавлен в базу: {doc[:50]}")
 
 def search_docs(query: str, top_k=3):
-    """Поиск похожих документов в Qdrant"""
     vector = embed_text(query)
     results = qdrant.search(collection_name="knowledge_base", query_vector=vector, limit=top_k)
-    found = [r.payload["text"] for r in results]
-    logger.info(f"Поиск по базе для запроса '{query}' вернул: {found}")
-    return found
+    texts = [r.payload["text"] for r in results]
+    logger.info(f"Поиск по базе для запроса '{query}' вернул: {texts}")
+    return texts
 
 def handle_message(message):
-    user_id = message.from_user.id
     chat_id = message.chat.id
     user_text = message.text
+    logger.info(f"Сообщение от {message.from_user.id}: {user_text}")
 
-    logger.info(f"Сообщение от {user_id}: {user_text}")
-
-    # --- Сохраняем сообщение в историю ---
-    if user_id not in chat_history:
-        chat_history[user_id] = []
-    chat_history[user_id].append({"role": "user", "content": user_text})
-
-    # --- Сохраняем в Qdrant ---
-    add_doc(user_text)
-
-    # --- Поиск по базе ---
     retrieved = search_docs(user_text)
     context = "\n".join(retrieved) if retrieved else "Нет найденной информации."
 
-    # --- Формируем контекст для LLM ---
     messages = [
-        {"role": "system", "content": "Ты Asuna Cat — веселая кошка, которая рассказывает смешные ответы."},
+        {"role": "system", "content": "Ты Asuna Cat — веселая кошка, которая отвечает на вопросы."},
         {"role": "system", "content": f"В базе знаний нашлось:\n{context}"},
-    ] + chat_history[user_id]  # добавляем историю пользователя
+        {"role": "user", "content": user_text},
+    ]
 
-    # --- Запрос к OpenRouter Chat ---
     try:
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
+                "Content-Type": "application/json"
             },
             json={
-                "model": "x-ai/grok-4-fast:free",
+                "model": "x-ai/grok-4-mini:free",  # free чат-модель
                 "messages": messages,
                 "max_tokens": 800,
                 "temperature": 0.7,
@@ -123,30 +116,51 @@ def handle_message(message):
         )
         response.raise_for_status()
         ai_response = response.json()["choices"][0]["message"]["content"].strip()
+        bot.send_message(chat_id, ai_response, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Ошибка запроса к OpenRouter Chat: {e}")
-        ai_response = "Упс, не удалось получить ответ 😅"
+        bot.send_message(chat_id, f"Ошибка API: {str(e)} 😅")
 
-    # --- Сохраняем ответ в историю ---
-    chat_history[user_id].append({"role": "assistant", "content": ai_response})
-
-    bot.send_message(chat_id, ai_response, parse_mode="Markdown", disable_web_page_preview=True)
-
-# ---------------- TELEGRAM ХЕНДЛЕРЫ ----------------
+# ---------------- КОМАНДЫ TELEGRAM ----------------
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.send_message(message.chat.id, "Привет! Я запоминаю всё, что ты пишешь 😼")
+    bot.send_message(message.chat.id, "Бот активирован! 😼")
 
+@bot.message_handler(commands=["help"])
+def help_message(message):
+    bot.send_message(message.chat.id, "/start — перезапуск.\n/add текст — добавить документ\n/search текст — поиск в базе")
+
+@bot.message_handler(commands=["add"])
+def add_document(message):
+    text = message.text.replace("/add", "").strip()
+    if text:
+        add_doc(text)
+        bot.send_message(message.chat.id, "Документ добавлен в базу ✅")
+    else:
+        bot.send_message(message.chat.id, "Напиши текст после /add")
+
+@bot.message_handler(commands=["search"])
+def search_document(message):
+    query = message.text.replace("/search", "").strip()
+    if query:
+        retrieved = search_docs(query)
+        if retrieved:
+            bot.send_message(message.chat.id, "\n\n".join(retrieved))
+        else:
+            bot.send_message(message.chat.id, "По запросу ничего не найдено 😅")
+    else:
+        bot.send_message(message.chat.id, "Напиши текст после /search")
+
+# ---------------- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ----------------
 @bot.message_handler(func=lambda message: True)
-def all_messages(message):
+def echo_all(message):
     Thread(target=handle_message, args=(message,)).start()
 
 # ---------------- FLASK WEBHOOK ----------------
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
-        json_string = request.get_data().decode("utf-8")
-        update = telebot.types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
         bot.process_new_updates([update])
         return ""
     else:
@@ -154,9 +168,7 @@ def webhook():
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
     bot.remove_webhook()
-    bot.set_webhook(url=webhook_url)
-    logger.info(f"Webhook set: {webhook_url}")
+    bot.set_webhook(url=f"{RENDER_URL}/{TELEGRAM_TOKEN}")
     port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
