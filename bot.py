@@ -21,7 +21,6 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 RENDER_URL = os.getenv("RENDER_URL", "https://example.onrender.com")
 
-# Проверка токенов
 for name, token in [("TELEGRAM_TOKEN", TELEGRAM_TOKEN),
                     ("OPENROUTER_API_KEY", OPENROUTER_API_KEY),
                     ("QDRANT_API_KEY", QDRANT_API_KEY),
@@ -35,7 +34,6 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
 # ---------------- QDRANT ----------------
-# Проверяем наличие коллекции, создаем если нет
 collection_name = "knowledge_base"
 try:
     qdrant.get_collection(collection_name=collection_name)
@@ -76,6 +74,7 @@ def add_doc(doc: str):
         collection_name=collection_name,
         points=[PointStruct(id=str(uuid.uuid4()), vector=vector, payload={"text": doc})]
     )
+    logger.info(f"Документ добавлен в базу: {doc}")
 
 def search_docs(query: str, top_k=3):
     """Поиск похожих документов в Qdrant"""
@@ -86,13 +85,21 @@ def search_docs(query: str, top_k=3):
 def handle_message(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
-    user_text = message.text
+    user_text = message.text.strip()
+    if not user_text:
+        return
+
     logger.info(f"Сообщение от {user_id}: {user_text}")
 
-    # Поиск по базе
+    # Авто-добавление любого обычного текста в базу (не команды)
+    if not user_text.startswith("/"):
+        add_doc(user_text)
+
+    # Поиск в базе
     retrieved = search_docs(user_text)
     context = "\n".join(retrieved) if retrieved else "Нет найденной информации."
 
+    # Формируем сообщения для LLM
     messages = [
         {"role": "system", "content": "Ты Asuna Cat — веселая кошка, которая рассказывает анекдоты."},
         {"role": "system", "content": f"В базе знаний нашлось:\n{context}"},
@@ -158,6 +165,7 @@ def search_document(message):
     else:
         bot.send_message(message.chat.id, "По вашему запросу ничего не найдено 😅")
 
+# ---------------- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ----------------
 @bot.message_handler(func=lambda message: True)
 def echo_all(message):
     Thread(target=handle_message, args=(message,)).start()
