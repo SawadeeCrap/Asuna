@@ -15,6 +15,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")  # Например: https://your-qdrant-url
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # если нужно
+PORT = int(os.getenv("PORT", 5000))  # Render.com использует переменную PORT
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -44,16 +45,18 @@ def add_doc_to_qdrant(text: str):
     vector = embed_text(text)
     if not vector:
         return
-    point = PointStruct(id=None, vector=vector, payload={"text": text})
-    qdrant.upsert(collection_name=COLLECTION_NAME, points=[point])
-    logging.info(f"Документ добавлен в базу: {text}")
+    try:
+        point = PointStruct(id=None, vector=vector, payload={"text": text})
+        qdrant.upsert(collection_name=COLLECTION_NAME, points=[point])
+        logging.info(f"Документ добавлен в базу: {text}")
+    except Exception as e:
+        logging.error(f"Ошибка добавления в Qdrant: {e}")
 
 def search_docs(query: str, top_k=5):
     vector = embed_text(query)
     if not vector:
         return []
     try:
-        # В новой версии Qdrant нужно использовать vector=vector в query_points
         results = qdrant.query_points(
             collection_name=COLLECTION_NAME,
             vector=vector,
@@ -85,35 +88,66 @@ def ask_openai_chat(prompt: str, context: list):
 
 # ----------------- Обработка сообщений -----------------
 def handle_message(message):
-    user_text = message.text
-    logging.info(f"Сообщение от {message.from_user.id}: {user_text}")
+    try:
+        user_text = message.text
+        logging.info(f"Сообщение от {message.from_user.id}: {user_text}")
 
-    if user_text.lower().startswith("запомни "):
-        text_to_remember = user_text[7:]
-        add_doc_to_qdrant(text_to_remember)
-        bot.send_message(message.chat.id, f"Запомнил: {text_to_remember}")
-        return
+        if user_text.lower().startswith("запомни "):
+            text_to_remember = user_text[7:]
+            add_doc_to_qdrant(text_to_remember)
+            bot.send_message(message.chat.id, f"Запомнил: {text_to_remember}")
+            return
 
-    # Поиск по базе
-    retrieved = search_docs(user_text)
-    reply = ask_openai_chat(user_text, context=retrieved)
-    bot.send_message(message.chat.id, reply)
+        # Поиск по базе
+        retrieved = search_docs(user_text)
+        reply = ask_openai_chat(user_text, context=retrieved)
+        bot.send_message(message.chat.id, reply)
+    except Exception as e:
+        logging.error(f"Ошибка обработки сообщения: {e}")
 
 @bot.message_handler(func=lambda m: True)
 def message_handler(message):
     threading.Thread(target=handle_message, args=(message,)).start()
 
 # ----------------- Flask webhook -----------------
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot is running!", 200
+
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
-    update = request.get_json()
-    if update:
-        update_obj = telebot.types.Update.de_json(update)
-        threading.Thread(target=bot.process_new_updates, args=([update_obj],)).start()
-    return "", 200
+    try:
+        update = request.get_json()
+        if update:
+            update_obj = telebot.types.Update.de_json(update)
+            threading.Thread(target=bot.process_new_updates, args=([update_obj],)).start()
+        return "", 200
+    except Exception as e:
+        logging.error(f"Ошибка webhook: {e}")
+        return "", 500
+
+# ----------------- Инициализация коллекции -----------------
+def init_qdrant_collection():
+    try:
+        collections = qdrant.get_collections()
+        collection_names = [col.name for col in collections.collections]
+        
+        if COLLECTION_NAME not in collection_names:
+            logging.info(f"Создаем коллекцию {COLLECTION_NAME}")
+            qdrant.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config={"size": 1536, "distance": "Cosine"}  # размер для text-embedding-3-small
+            )
+        else:
+            logging.info(f"Коллекция {COLLECTION_NAME} уже существует")
+    except Exception as e:
+        logging.error(f"Ошибка инициализации Qdrant коллекции: {e}")
 
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
-    logging.info("Бот запущен. Webhook активен.")
-    # Убираем polling, оставляем только webhook
-    # bot.polling(none_stop=True)
+    logging.info("Инициализация Qdrant коллекции...")
+    init_qdrant_collection()
+    
+    logging.info(f"Бот запущен. Webhook активен на порту {PORT}")
+    # Запускаем Flask на правильном порту для Render.com
+    app.run(host="0.0.0.0", port=PORT, debug=False)
