@@ -117,7 +117,10 @@ def home():
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     try:
+        logging.info("Получен webhook запрос от Telegram")
         update = request.get_json()
+        logging.info(f"Данные webhook: {update}")
+        
         if update:
             update_obj = telebot.types.Update.de_json(update)
             threading.Thread(target=bot.process_new_updates, args=([update_obj],)).start()
@@ -143,10 +146,25 @@ def init_qdrant_collection():
     except Exception as e:
         logging.error(f"Ошибка инициализации Qdrant коллекции: {e}")
 
+# ----------------- Установка webhook -----------------
+def set_webhook():
+    webhook_url = f"https://your-app-name.onrender.com/{TELEGRAM_TOKEN}"
+    try:
+        result = bot.set_webhook(url=webhook_url)
+        if result:
+            logging.info(f"Webhook установлен: {webhook_url}")
+        else:
+            logging.error("Ошибка установки webhook")
+    except Exception as e:
+        logging.error(f"Ошибка при установке webhook: {e}")
+
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
     logging.info("Инициализация Qdrant коллекции...")
     init_qdrant_collection()
+    
+    logging.info("Установка webhook...")
+    set_webhook()
     
     logging.info(f"Бот запущен. Webhook активен на порту {PORT}")
     # Запускаем Flask на правильном порту для Render.com
