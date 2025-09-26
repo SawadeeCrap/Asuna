@@ -113,16 +113,16 @@ def search_knowledge(query: str, threshold: float = 0.7, limit: int = 5):
         if not vector:
             return []
             
-        results = qdrant.search(
+        results = qdrant.query_points(
             collection_name=COLLECTION_NAME,
-            query_vector=vector,
+            query=vector,
             limit=limit,
             score_threshold=threshold  # Снижен порог для большего охвата
-        )
+        ).points
         
         if results:
             logging.info(f"Найдено {len(results)} релевантных записей для запроса: {query}")
-            return [hit.payload["text"] for hit in results]
+            return [point.payload["text"] for point in results]
         else:
             logging.info(f"Релевантной информации не найдено для: {query}")
             return []
@@ -170,7 +170,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
                 "Content-Type": "application/json"
             },
             json={
-                "model": "x-ai/grok-beta",  # Grok free
+                "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
                 "messages": messages,
                 "temperature": 0.7,  # Повышена для более творческих ответов
                 "max_tokens": 800    # Увеличено для более подробных ответов
