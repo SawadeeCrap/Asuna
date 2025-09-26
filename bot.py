@@ -149,7 +149,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
         
         # Системное сообщение с новой логикой
         if context:
-            system_prompt = f"""Ты Asuna. Умный и добрый помощник с доступом к базе знаний. 
+            system_prompt = f"""Ты Asuna - Умный помощник на базе xAi с доступом к базе знаний. 
 
 ВАЖНО: У тебя есть следующая информация из базы знаний:
 {chr(10).join(context)}
@@ -158,9 +158,9 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
 
 Если в базе нет релевантной информации - отвечай на основе своих знаний или скажи что не знаешь ответа.
 
-Всегда отвечай полезно и подробно."""
+Всегда отвечай полезно и лаконично."""
         else:
-            system_prompt = """Ты умный помощник. Отвечай полезно и подробно на вопросы пользователя на основе своих знаний."""
+            system_prompt = """Ты умный помощник. Отвечай полезно и лаконично на вопросы пользователя на основе своих знаний."""
 
         messages.append({"role": "system", "content": system_prompt})
         
@@ -195,7 +195,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             return "Извини, у меня проблемы с получением ответа. Попробуй позже."
             
     except Exception as e:
-        logging.error(f"Ошибка запроса к Grok: {e}")
+        logging.error(f"Ошибка запроса к Asuna Cat: {e}")
         return "Извини, произошла ошибка. Попробуй позже."
 
 # ----------------- Управление контекстом пользователей -----------------
@@ -208,8 +208,8 @@ def add_to_user_context(user_id: int, message: str, is_bot: bool = False):
     user_contexts[user_id].append({"role": role, "content": message})
     
     # Ограничиваем контекст последними 10 сообщениями
-    if len(user_contexts[user_id]) > 10:
-        user_contexts[user_id] = user_contexts[user_id][-10:]
+    if len(user_contexts[user_id]) > 3:
+        user_contexts[user_id] = user_contexts[user_id][-3:]
 
 def get_user_context(user_id: int):
     """Получение контекста пользователя"""
