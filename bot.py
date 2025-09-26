@@ -125,15 +125,40 @@ def handle_message(message):
         logger.error(f"Ошибка запроса к OpenRouter: {e}")
         bot.send_message(chat_id, f"Ошибка API: {str(e)} 😅")
 
-# ---------------- ТЕЛЕГРАМ ХЕНДЛЕРЫ ----------------
+# ---------------- КОМАНДЫ TELEGRAM ----------------
 @bot.message_handler(commands=["start"])
 def start_message(message):
     bot.send_message(message.chat.id, "SKYNET BOT ACTIVATE! 😘")
 
 @bot.message_handler(commands=["help"])
 def help_message(message):
-    bot.send_message(message.chat.id, "/start — перезапуск.")
+    bot.send_message(message.chat.id, "/start — перезапуск.\n/add текст — добавить документ\n/search текст — поиск в базе")
 
+# Добавление документа
+@bot.message_handler(commands=["add"])
+def add_document(message):
+    text = message.text.replace("/add", "").strip()
+    if text:
+        add_doc(text)
+        bot.send_message(message.chat.id, "Документ добавлен в базу ✅")
+    else:
+        bot.send_message(message.chat.id, "Напиши текст после /add")
+
+# Поиск документа
+@bot.message_handler(commands=["search"])
+def search_document(message):
+    query = message.text.replace("/search", "").strip()
+    if not query:
+        bot.send_message(message.chat.id, "Напиши текст после /search")
+        return
+    retrieved = search_docs(query)
+    if retrieved:
+        result_text = "\n\n".join(f"{i+1}. {doc}" for i, doc in enumerate(retrieved))
+        bot.send_message(message.chat.id, f"Найденные документы:\n{result_text}")
+    else:
+        bot.send_message(message.chat.id, "По вашему запросу ничего не найдено 😅")
+
+# ---------------- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ----------------
 @bot.message_handler(func=lambda message: True)
 def echo_all(message):
     Thread(target=handle_message, args=(message,)).start()
