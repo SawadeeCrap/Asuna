@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import logging
 import threading
@@ -182,7 +183,7 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
                 "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
                 "messages": messages,
                 "temperature": 0.2,  # Креативность ответов (0.0-1.0)
-                "max_tokens": 250   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА (увеличено до 1200)
+                "max_tokens": 250   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА
             }
         )
         
@@ -221,25 +222,25 @@ def handle_start(message):
     username = message.from_user.username or message.from_user.first_name
     
     if is_admin(user_id):
-        welcome_text = """ Привет, Админ! Я умный бот Asuna с базой знаний.
+        welcome_text = """Привет, Админ! Я умный бот Asuna с базой знаний.
 
- **Ваши привилегии:**
+**Ваши привилегии:**
 • Добавлять информацию в базу: "запомни что-то"
 • Полный доступ ко всем функциям
 
- **Для обычных пользователей:**
+**Для обычных пользователей:**
 • Могут задавать вопросы и получать ответы
 • Их диалоги запоминаются в контексте
 • НЕ могут изменять общую базу знаний"""
     else:
-        welcome_text = f""" Привет, {username}! Я умный бот с базой знаний.
+        welcome_text = f"""Привет, {username}! Я умный бот с базой знаний.
 
 Что я умею:
 • Отвечать на любые вопросы
 • Запоминать наш диалог для контекста
 • Использовать знания из базы для более точных ответов
 
- Примечание: Общую базу знаний может пополнять только администратор."""
+Примечание: Общую базу знаний может пополнять только администратор."""
     
     bot.reply_to(message, welcome_text)
     add_to_user_context(message.from_user.id, message.text)
@@ -250,7 +251,7 @@ def handle_help(message):
     user_id = message.from_user.id
     
     if is_admin(user_id):
-        help_text = """ **Команды для Администратора:**
+        help_text = """**Команды для Администратора:**
 
 1. **Добавить в базу знаний:**
    `запомни Python - это язык программирования`
@@ -264,12 +265,12 @@ def handle_help(message):
 4. **Проверить статус:**
    `/admin`
 
- **Как работаю:**
+**Как работаю:**
 - База знаний доступна всем пользователям
 - Только вы можете её пополнять
 - У каждого пользователя свой контекст диалога"""
     else:
-        help_text = """ **Как пользоваться ботом:**
+        help_text = """**Как пользоваться ботом:**
 
 1. **Задать вопрос:**
    `что такое Python?`
@@ -278,7 +279,7 @@ def handle_help(message):
 2. **Очистить наш диалог:**
    `/clear`
 
- **Как я работаю:**
+**Как я работаю:**
 - Отвечаю на основе общей базы знаний + своих знаний
 - Запоминаю наш диалог для контекста
 - База знаний пополняется администратором"""
@@ -290,32 +291,31 @@ def handle_clear(message):
     user_id = message.from_user.id
     if user_id in user_contexts:
         del user_contexts[user_id]
-    bot.reply_to(message, " Контекст диалога очищен")
+    bot.reply_to(message, "Контекст диалога очищен")
 
 @bot.message_handler(commands=['admin'])
 def handle_admin(message):
     user_id = message.from_user.id
     if is_admin(user_id):
-        admin_info = f""" **Админ панель**
-
- Ваш ID: `{user_id}`
- Активных пользователей: {len(user_contexts)}
- Статус базы знаний: Активна
-
-**Доступные команды:**
-• `запомни [текст]` - добавить в базу
-• `/clear` - очистить свой контекст
-• `/admin` - эта панель
-        
+        admin_info = (
+            "**Админ панель**\n\n"
+            f"Ваш ID: `{user_id}`\n"
+            f"Активных пользователей: {len(user_contexts)}\n"
+            "Статус базы знаний: Активна\n\n"
+            "**Доступные команды:**\n"
+            "• `запомни [текст]` - добавить в базу\n"
+            "• `/clear` - очистить свой контекст\n"
+            "• `/admin` - эта панель"
+        )
         bot.reply_to(message, admin_info, parse_mode='Markdown')
     else:
-        bot.reply_to(message, " У вас нет прав администратора")
+        bot.reply_to(message, "У вас нет прав администратора")
 
 @bot.message_handler(commands=['database', 'db'])
 def handle_database(message):
     user_id = message.from_user.id
     if not is_admin(user_id):
-        bot.reply_to(message, " У вас нет прав администратора")
+        bot.reply_to(message, "У вас нет прав администратора")
         return
     
     try:
@@ -329,10 +329,10 @@ def handle_database(message):
         points = result[0]  # result возвращает (points, next_page_offset)
         
         if not points:
-            bot.reply_to(message, "📭 База данных пуста")
+            bot.reply_to(message, "База данных пуста")
             return
         
-        database_text = f"📚 **База знаний** (показано {len(points)} из записей):\n\n"
+        database_text = f"**База знаний** (показано {len(points)} из записей):\n\n"
         
         for i, point in enumerate(points, 1):
             text = point.payload.get("text", "Нет текста")
@@ -350,13 +350,13 @@ def handle_database(message):
         
     except Exception as e:
         logging.error(f"Ошибка получения базы данных: {e}")
-        bot.reply_to(message, f" Ошибка получения данных: {e}")
+        bot.reply_to(message, f"Ошибка получения данных: {e}")
 
 @bot.message_handler(commands=['count'])
 def handle_count(message):
     user_id = message.from_user.id
     if not is_admin(user_id):
-        bot.reply_to(message, " У вас нет прав администратора")
+        bot.reply_to(message, "У вас нет прав администратора")
         return
     
     try:
@@ -364,18 +364,19 @@ def handle_count(message):
         collection_info = qdrant.get_collection(COLLECTION_NAME)
         points_count = collection_info.points_count
         
-        count_text = f"""График: **Статистика базы данных:**
-
- Коллекция: `{COLLECTION_NAME}`
- Записей: **{points_count}**
- Размер вектора: 1536
- Метрика: Cosine"""
+        count_text = (
+            "График: **Статистика базы данных:**\n\n"
+            f"Коллекция: `{COLLECTION_NAME}`\n"
+            f"Записей: **{points_count}**\n"
+            "Размер вектора: 1536\n"
+            "Метрика: Cosine"
+        )
         
         bot.reply_to(message, count_text, parse_mode='Markdown')
         
     except Exception as e:
         logging.error(f"Ошибка получения статистики: {e}")
-        bot.reply_to(message, f" Ошибка получения статистики: {e}")
+        bot.reply_to(message, f"Ошибка получения статистики: {e}")
 
 # ----------------- Обработчик сообщений -----------------
 @bot.message_handler(func=lambda message: True)
@@ -396,14 +397,14 @@ def handle_message(message):
                 if knowledge:
                     success = add_to_knowledge_base(knowledge, source=f"admin_{user_id}")
                     if success:
-                        response = f" Запомнил: {knowledge}"
+                        response = f"Запомнил: {knowledge}"
                     else:
-                        response = " Не удалось сохранить информацию"
+                        response = "Не удалось сохранить информацию"
                 else:
                     response = "Что именно запомнить? Напиши: запомни что-то"
             else:
                 username = message.from_user.username or message.from_user.first_name
-                response = f" {username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста наших будущих разговоров! 😊"
+                response = f"{username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста наших будущих разговоров!"
         else:
             # Обычный вопрос - ищем в базе знаний и всегда отвечаем через нейросеть
             knowledge_results = search_knowledge(user_text)
@@ -424,12 +425,12 @@ def handle_message(message):
         
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
-        bot.reply_to(message, " Произошла ошибка. Попробуй еще раз.")
+        bot.reply_to(message, "Произошла ошибка. Попробуй еще раз.")
 
 # ----------------- Flask маршруты -----------------
 @app.route("/", methods=["GET"])
 def home():
-    return "🤖 Knowledge Bot is running!", 200
+    return "Knowledge Bot is running!", 200
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
@@ -450,23 +451,23 @@ def set_webhook():
         webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         result = bot.set_webhook(url=webhook_url)
         if result:
-            logging.info(f" Webhook установлен: {webhook_url}")
+            logging.info(f"Webhook установлен: {webhook_url}")
         else:
-            logging.error(" Ошибка установки webhook")
+            logging.error("Ошибка установки webhook")
     except Exception as e:
         logging.error(f"Ошибка при установке webhook: {e}")
 
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
-    logging.info(f" Запуск Knowledge Bot...")
-    logging.info(f" Admin User ID: {ADMIN_USER_ID}")
+    logging.info(f"Запуск Knowledge Bot...")
+    logging.info(f"Admin User ID: {ADMIN_USER_ID}")
     
     # Инициализация
     init_collections()
     set_webhook()
     
-    logging.info(f" Бот запущен на порту {PORT}")
-    logging.info(f" Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
+    logging.info(f"Бот запущен на порту {PORT}")
+    logging.info(f"Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
     
     # Запуск Flask
     app.run(host="0.0.0.0", port=PORT, debug=False)
