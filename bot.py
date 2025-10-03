@@ -116,7 +116,7 @@ def add_to_knowledge_base(text: str, source: str = "user"):
         logging.error(f"Ошибка добавления в базу знаний: {e}")
         return False
 
-def search_knowledge(query: str, threshold: float = 0.5, limit: int = 5):
+def search_knowledge(query: str, threshold: float = 0.8, limit: int = 5):
     """Поиск релевантной информации в базе знаний"""
     try:
         vector = create_embedding(query)
