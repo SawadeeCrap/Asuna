@@ -116,7 +116,7 @@ def add_to_knowledge_base(text: str, source: str = "user"):
         logging.error(f"Ошибка добавления в базу знаний: {e}")
         return False
 
-def search_knowledge(query: str, threshold: float = 0.8, limit: int = 5):
+def search_knowledge(query: str, threshold: float = 0.5, limit: int = 5):
     """Поиск релевантной информации в базе знаний"""
     try:
         vector = create_embedding(query)
@@ -180,9 +180,9 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
                 "Content-Type": "application/json"
             },
             json={
-                "model": "x-ai/grok-4-fast:free",  # Бесплатная модель Grok
+                "model": "meituan/longcat-flash-chat:free",  # Бесплатная модель Grok
                 "messages": messages,
-                "temperature": 0.1,  # Креативность ответов (0.0-1.0)
+                "temperature": 0.2,  # Креативность ответов (0.0-1.0)
                 "max_tokens": 300   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА
             }
         )
