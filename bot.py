@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ----------------- Настройки -----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # только для эмбеддингов
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")  # для Grok
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")  # для нейросети
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL", "https://asuna-3bfa.onrender.com")  # URL вашего приложения
@@ -127,7 +127,7 @@ def search_knowledge(query: str, threshold: float = 0.1, limit: int = 5):
             collection_name=COLLECTION_NAME,
             query=vector,
             limit=limit,
-            score_threshold=threshold  # Снижен порог для большего охвата
+            score_threshold=threshold
         ).points
         
         if results:
@@ -141,52 +141,52 @@ def search_knowledge(query: str, threshold: float = 0.1, limit: int = 5):
         logging.error(f"Ошибка поиска в базе знаний: {e}")
         return []
 
-# ----------------- Функции для OpenRouter (Grok) -----------------
-def ask_grok(question: str, context: list = None, user_context: list = None):
-    """Запрос к Grok через OpenRouter"""
+# ----------------- Функции для OpenRouter (Nemotron Nano) -----------------
+def ask_nemotron(question: str, context: list = None, user_context: list = None):
+    """Запрос к Nemotron Nano через OpenRouter"""
     try:
         messages = []
         
-        # Системное сообщение с новой логикой
+        # Системное сообщение с логикой работы
         if context:
             system_prompt = f"""Ты Asuna - Букинг-менеджер артиста Darkexpress с доступом к базе знаний. 
 
 ВАЖНО: У тебя есть следующая информация из базы знаний:
 {chr(10).join(context)}
 
-Ты бот, который отвечает на вопросы пользователей, используя данные из базы знаний. Если в базе знаний есть релевантный ответ, используй его. Если данных в базе нет или они не подходят скажи что ты не знаешь. Вот запрос: {query}. Вот данные из базы: {qdrant_results}. Ответь, основываясь на этих данных, или объясни, почему ты генерируешь новый ответ.
-
-Используй эту информацию для ответа на вопрос пользователя. Если информация из базы релевантна - опирайся строго на неё.
-
-Если в базе нет релевантной информации - скажи что не знаешь ответа. Не выдумывай того чего не знаешь это строго запрещено.  
-
-Всегда отвечай полезно и лаконично."""
+Правила работы:
+1. Если в базе знаний есть релевантный ответ - используй СТРОГО его
+2. Если данных в базе нет или они не подходят - скажи что не знаешь
+3. ЗАПРЕЩЕНО выдумывать информацию
+4. Отвечай лаконично и по делу"""
         else:
-            system_prompt = """Ты Asuna - кэт компаньен. Отвечай полезно и лаконично на вопросы пользователя на основе своих знаний и знаний из базы."""
-
+            system_prompt = """Ты Asuna - помощник. Отвечай полезно и лаконично на основе своих знаний."""
+        
         messages.append({"role": "system", "content": system_prompt})
         
-        # Добавляем контекст диалога пользователя (последние сообщения)
+        # Добавляем контекст диалога (последние 6 сообщений)
         if user_context:
-            for msg in user_context[-6:]:  # последние 6 сообщений для контекста
+            for msg in user_context[-6:]:
                 messages.append(msg)
         
-        # Текущий вопрос пользователя
+        # Текущий вопрос
         messages.append({"role": "user", "content": question})
         
-        # Запрос к OpenRouter
+        # Запрос к OpenRouter с Nemotron Nano
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "HTTP-Referer": RENDER_URL,  # Опционально для OpenRouter
             },
             json={
-                "model": "meituan/longcat-flash-chat:free",  # Бесплатная модель Grok
+                "model": "nvidia/nemotron-nano-9b-v2:free",  # ✅ Новая бесплатная модель
                 "messages": messages,
-                "temperature": 0.1,  # Креативность ответов (0.0-1.0)
-                "max_tokens": 250   # МАКСИМАЛЬНАЯ ДЛИНА ОТВЕТА
-            }
+                "temperature": 0.3,  # Более стабильные ответы
+                "max_tokens": 300    # Максимальная длина ответа
+            },
+            timeout=30  # Таймаут 30 секунд
         )
         
         if response.status_code == 200:
@@ -196,8 +196,11 @@ def ask_grok(question: str, context: list = None, user_context: list = None):
             logging.error(f"Ошибка OpenRouter: {response.status_code} - {response.text}")
             return "Извини, у меня проблемы с получением ответа. Попробуй позже."
             
+    except requests.exceptions.Timeout:
+        logging.error("Таймаут запроса к Nemotron")
+        return "Извини, запрос занял слишком много времени. Попробуй позже."
     except Exception as e:
-        logging.error(f"Ошибка запроса к Asuna Cat: {e}")
+        logging.error(f"Ошибка запроса к Nemotron: {e}")
         return "Извини, произошла ошибка. Попробуй позже."
 
 # ----------------- Управление контекстом пользователей -----------------
@@ -210,8 +213,8 @@ def add_to_user_context(user_id: int, message: str, is_bot: bool = False):
     user_contexts[user_id].append({"role": role, "content": message})
     
     # Ограничиваем контекст последними 10 сообщениями
-    if len(user_contexts[user_id]) > 5:
-        user_contexts[user_id] = user_contexts[user_id][-5:]
+    if len(user_contexts[user_id]) > 10:
+        user_contexts[user_id] = user_contexts[user_id][-10:]
 
 def get_user_context(user_id: int):
     """Получение контекста пользователя"""
@@ -233,7 +236,9 @@ def handle_start(message):
 **Для обычных пользователей:**
 • Могут задавать вопросы и получать ответы
 • Их диалоги запоминаются в контексте
-• НЕ могут изменять общую базу знаний"""
+• НЕ могут изменять общую базу знаний
+
+Модель: Nemotron Nano 9B"""
     else:
         welcome_text = f"""Привет, {username}! Я Asuna с базой знаний.
 
@@ -254,7 +259,6 @@ def handle_help(message):
     
     if is_admin(user_id):
         help_text = """**Команды для Администратора:**
-
 1. **Добавить в базу знаний:**
    `запомни Python - это язык программирования`
 
@@ -267,13 +271,15 @@ def handle_help(message):
 4. **Проверить статус:**
    `/admin`
 
-**Как работаю:**
-- База знаний доступна всем пользователям
-- Только вы можете её пополнять
-- У каждого пользователя свой контекст диалога"""
+5. **Просмотр базы:**
+   `/database` или `/db`
+
+6. **Статистика:**
+   `/count`
+
+**Модель:** Nemotron Nano 9B (бесплатная)"""
     else:
         help_text = """**Как пользоваться ботом:**
-
 1. **Задать вопрос:**
    `что такое Python?`
    `как работает интернет?`
@@ -282,7 +288,7 @@ def handle_help(message):
    `/clear`
 
 **Как я работаю:**
-- Отвечаю на основе общей базы знаний + своих знаний
+- Отвечаю на основе общей базы знаний
 - Запоминаю наш диалог для контекста
 - База знаний пополняется администратором"""
     
@@ -303,10 +309,13 @@ def handle_admin(message):
             "**Админ панель**\n\n"
             f"Ваш ID: `{user_id}`\n"
             f"Активных пользователей: {len(user_contexts)}\n"
-            "Статус базы знаний: Активна\n\n"
+            "Статус базы знаний: Активна\n"
+            "Модель: Nemotron Nano 9B\n\n"
             "**Доступные команды:**\n"
             "• `запомни [текст]` - добавить в базу\n"
             "• `/clear` - очистить свой контекст\n"
+            "• `/database` - просмотр базы\n"
+            "• `/count` - статистика\n"
             "• `/admin` - эта панель"
         )
         bot.reply_to(message, admin_info, parse_mode='Markdown')
@@ -321,30 +330,27 @@ def handle_database(message):
         return
     
     try:
-        # Получаем все записи из коллекции
         result = qdrant.scroll(
             collection_name=COLLECTION_NAME,
-            limit=20,  # Показываем первые 20 записей
+            limit=20,
             with_payload=True
         )
         
-        points = result[0]  # result возвращает (points, next_page_offset)
+        points = result[0]
         
         if not points:
             bot.reply_to(message, "База данных пуста")
             return
         
-        database_text = f"**База знаний** (показано {len(points)} из записей):\n\n"
+        database_text = f"**База знаний** (показано {len(points)} записей):\n\n"
         
         for i, point in enumerate(points, 1):
             text = point.payload.get("text", "Нет текста")
             source = point.payload.get("source", "unknown")
-            # Обрезаем длинные записи
             if len(text) > 100:
                 text = text[:100] + "..."
-            database_text += f"{i}. `{text}`\n   _Источник: {source}_\n\n"
+            database_text += f"{i}. `{text}`\n   *Источник: {source}*\n\n"
         
-        # Telegram имеет лимит 4096 символов
         if len(database_text) > 4000:
             database_text = database_text[:4000] + "\n...\n_Список обрезан_"
         
@@ -362,16 +368,16 @@ def handle_count(message):
         return
     
     try:
-        # Получаем информацию о коллекции
         collection_info = qdrant.get_collection(COLLECTION_NAME)
         points_count = collection_info.points_count
         
         count_text = (
-            "График: **Статистика базы данных:**\n\n"
+            "📊 **Статистика базы данных:**\n\n"
             f"Коллекция: `{COLLECTION_NAME}`\n"
             f"Записей: **{points_count}**\n"
             "Размер вектора: 1536\n"
-            "Метрика: Cosine"
+            "Метрика: Cosine\n"
+            "Модель: Nemotron Nano 9B"
         )
         
         bot.reply_to(message, count_text, parse_mode='Markdown')
@@ -395,34 +401,33 @@ def handle_message(message):
         # Команда для запоминания - только для админа
         if user_text.lower().startswith("запомни "):
             if is_admin(user_id):
-                knowledge = user_text[8:].strip()  # убираем "запомни "
+                knowledge = user_text[8:].strip()
                 if knowledge:
                     success = add_to_knowledge_base(knowledge, source=f"admin_{user_id}")
                     if success:
-                        response = f"Запомнил: {knowledge}"
+                        response = f"✅ Запомнил: {knowledge}"
                     else:
-                        response = "Не удалось сохранить информацию"
+                        response = "❌ Не удалось сохранить информацию"
                 else:
                     response = "Что именно запомнить? Напиши: запомни что-то"
             else:
                 username = message.from_user.username or message.from_user.first_name
-                response = f"{username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста наших будущих разговоров!"
+                response = f"{username}, только администратор может добавлять информацию в общую базу знаний.\n\nНо я запомню наш диалог для контекста!"
         else:
-            # Обычный вопрос - ищем в базе знаний и всегда отвечаем через нейросеть
+            # Обычный вопрос - ищем в базе и отвечаем через Nemotron
             knowledge_results = search_knowledge(user_text)
             user_context_data = get_user_context(user_id)
             
-            # Всегда отвечаем через Grok, передавая найденную информацию как контекст
-            response = ask_grok(user_text, knowledge_results, user_context_data)
+            # Отвечаем через Nemotron Nano
+            response = ask_nemotron(user_text, knowledge_results, user_context_data)
             
-            # Если нашли информацию в базе, добавляем пометку
             if knowledge_results:
                 logging.info(f"Ответ дан с использованием {len(knowledge_results)} записей из базы знаний")
         
         # Отправляем ответ
         bot.reply_to(message, response)
         
-        # Добавляем ответ бота в контекст
+        # Добавляем ответ в контекст
         add_to_user_context(user_id, response, is_bot=True)
         
     except Exception as e:
@@ -432,7 +437,7 @@ def handle_message(message):
 # ----------------- Flask маршруты -----------------
 @app.route("/", methods=["GET"])
 def home():
-    return "Knowledge Bot is running!", 200
+    return "Asuna Knowledge Bot is running! Model: Nemotron Nano 9B", 200
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
@@ -453,23 +458,24 @@ def set_webhook():
         webhook_url = f"{RENDER_URL}/{TELEGRAM_TOKEN}"
         result = bot.set_webhook(url=webhook_url)
         if result:
-            logging.info(f"Webhook установлен: {webhook_url}")
+            logging.info(f"✅ Webhook установлен: {webhook_url}")
         else:
-            logging.error("Ошибка установки webhook")
+            logging.error("❌ Ошибка установки webhook")
     except Exception as e:
         logging.error(f"Ошибка при установке webhook: {e}")
 
 # ----------------- Запуск -----------------
 if __name__ == "__main__":
-    logging.info(f"Запуск Knowledge Bot...")
-    logging.info(f"Admin User ID: {ADMIN_USER_ID}")
+    logging.info("🚀 Запуск Asuna Knowledge Bot...")
+    logging.info(f"👤 Admin User ID: {ADMIN_USER_ID}")
+    logging.info(f"🤖 Model: Nemotron Nano 9B (Free)")
     
     # Инициализация
     init_collections()
     set_webhook()
     
-    logging.info(f"Бот запущен на порту {PORT}")
-    logging.info(f"Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
+    logging.info(f"✅ Бот запущен на порту {PORT}")
+    logging.info(f"🌐 Webhook: {RENDER_URL}/{TELEGRAM_TOKEN}")
     
     # Запуск Flask
     app.run(host="0.0.0.0", port=PORT, debug=False)
