@@ -181,7 +181,7 @@ def ask_nemotron(question: str, context: list = None, user_context: list = None)
                 "HTTP-Referer": RENDER_URL,  # Опционально для OpenRouter
             },
             json={
-                "model": "nvidia/nemotron-nano-9b-v2:free",  # ✅ Новая бесплатная модель
+                "model": "meta-llama/llama-3.3-70b-instruct:free",  # ✅ Новая бесплатная модель
                 "messages": messages,
                 "temperature": 0.3,  # Более стабильные ответы
                 "max_tokens": 300    # Максимальная длина ответа
