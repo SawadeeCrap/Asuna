@@ -149,18 +149,14 @@ def ask_nemotron(question: str, context: list = None, user_context: list = None)
         
         # Системное сообщение с логикой работы
         if context:
-            system_prompt = f"""Ты Asuna - Букинг-менеджер артиста Darkexpress с доступом к базе знаний. 
+            system_prompt = f"""You Asuna - Booking Cat Assistant for Darkexpress. 
 
-ВАЖНО: У тебя есть следующая информация из базы знаний:
+YOU HAVE DATABASE:
 {chr(10).join(context)}
 
-Правила работы:
-1. Если в базе знаний есть релевантный ответ - используй СТРОГО его
-2. Если данных в базе нет или они не подходят - скажи что не знаешь
-3. ЗАПРЕЩЕНО выдумывать информацию
-4. Отвечай лаконично и по делу"""
+
         else:
-            system_prompt = """Ты Asuna - помощник. Отвечай полезно и лаконично на основе своих знаний."""
+            system_prompt = """You Asuna - ai assistant with database."""
         
         messages.append({"role": "system", "content": system_prompt})
         
