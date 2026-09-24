@@ -84,8 +84,10 @@ def _tag_redraw() -> None:
 
 class LiveLink:
     def __init__(self, arm_obj: bpy.types.Object, port: int = 9101, host: str = "127.0.0.1",
-                 camera: bool = True, lights: bool = True, floor: bool = True):
+                 camera: bool = True, lights: bool = True, floor: bool = True, fast_viewport: bool = True):
         self.arm = arm_obj
+        self.fast_viewport = fast_viewport
+        self._restore: list[tuple] = []
         self.port, self.host = port, host
         self.use_camera, self.use_lights, self.use_floor = camera, lights, floor
         self.sock: socket.socket | None = None
@@ -109,6 +111,15 @@ class LiveLink:
             pb.rotation_mode = "QUATERNION"
         if self.arm.animation_data is not None:
             self.arm.animation_data.action = None          # baked actions would fight the stream
+        if self.fast_viewport:
+            # Corrective Smooth costs tens of ms per frame on 150k vertices; the Armature modifier
+            # (preserve volume) alone deforms in a few ms.  Render keeps the smoothing.
+            for ob in bpy.data.objects:
+                if ob.type == "MESH" and ob.parent == self.arm:
+                    for m in ob.modifiers:
+                        if m.type == "CORRECTIVE_SMOOTH" and m.show_viewport:
+                            self._restore.append((ob.name, m.name))
+                            m.show_viewport = False
         self.running = True
         if not bpy.app.timers.is_registered(self._timer):
             bpy.app.timers.register(self._timer, first_interval=0.0, persistent=True)
@@ -117,6 +128,11 @@ class LiveLink:
         self.running = False
         if bpy.app.timers.is_registered(self._timer):
             bpy.app.timers.unregister(self._timer)
+        for ob_name, m_name in self._restore:
+            ob = bpy.data.objects.get(ob_name)
+            if ob is not None and m_name in ob.modifiers:
+                ob.modifiers[m_name].show_viewport = True
+        self._restore = []
         if self.sock is not None:
             self.sock.close()
             self.sock = None

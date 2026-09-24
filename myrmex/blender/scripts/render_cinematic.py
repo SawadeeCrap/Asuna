@@ -21,6 +21,7 @@ import numpy as np  # noqa: E402
 
 from myrmex.camera import cinematographer as cine  # noqa: E402
 from myrmex.performance.performance import Performance  # noqa: E402
+from myrmex.performance.takes import recorded_camera_track, take_audio_offset  # noqa: E402
 from myrmex_blender import bake, cinema, ingest, preview, skin  # noqa: E402
 
 
@@ -42,6 +43,10 @@ def parse(argv):
     p.add_argument("--no-blur", action="store_true")
     p.add_argument("--shadows", default="all", choices=["all", "key"])
     p.add_argument("--smooth", type=int, default=6, help="Laplacian smoothing iterations on the rest mesh")
+    p.add_argument("--camera", default="auto", choices=["auto", "recorded", "planned"],
+                   help="recorded = the live camera saved in a take; planned = offline cinematographer")
+    p.add_argument("--audio-offset", type=float, default=None,
+                   help="seconds of the audio file at take frame 0 (default: from the recorded song position)")
     return p.parse_args(argv)
 
 
@@ -105,8 +110,10 @@ def main():
     feet = np.mean([world_point_path(perf, rig, b) for b in feet_bones], axis=0) if feet_bones else path * [1, 1, 0]
     height = float(perf.meta.get("height", 1.7))
     beats = np.asarray(perf.meta.get("beat_times", []), dtype=float)
-    track = cine.compose(path, head, feet, perf.fps, perf.meta.get("sections", []), beats,
-                         float(perf.meta.get("heading0", -1.5708)), height, a.seed, a.shot)
+    track = recorded_camera_track(perf) if a.camera in ("auto", "recorded") else None
+    if track is None:
+        track = cine.compose(path, head, feet, perf.fps, perf.meta.get("sections", []), beats,
+                             float(perf.meta.get("heading0", -1.5708)), height, a.seed, a.shot)
     cinema.apply_camera_track(track)
     print("shots:", [(s.kind, s.start, s.end) for s in track.shots])
     S, F = cine.subject_frames(path, perf.fps, float(perf.meta.get("heading0", -1.5708)))
@@ -126,8 +133,9 @@ def main():
     files = preview.render_frames(outdir, frames)
     print(f"rendered {len(files)} frames in {time.time() - t0:.1f}s")
     start = frames.start if frames else 1
+    base_off = a.audio_offset if a.audio_offset is not None else (take_audio_offset(perf) or 0.0)
     res = preview.encode_video(outdir, perf.fps, a.out, audio if (audio and os.path.exists(audio)) else None,
-                               start_number=start, audio_offset=(start - 1) / perf.fps)
+                               start_number=start, audio_offset=base_off + (start - 1) / perf.fps)
     print("video:", res)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.splitext(a.out)[0] + ".blend")
 

@@ -123,7 +123,9 @@ def encode_video(frames_dir: str, fps: float, out_path: str, audio: str | None =
            "-i", os.path.join(frames_dir, "f_%05d.png")]
     if audio:
         if audio_offset > 0:
-            cmd += ["-ss", f"{audio_offset:.4f}"]
+            cmd += ["-ss", f"{audio_offset:.4f}"]            # skip into the audio
+        elif audio_offset < 0:
+            cmd += ["-itsoffset", f"{-audio_offset:.4f}"]    # audio starts after the first frame
         cmd += ["-i", audio, "-c:a", "aac", "-b:a", "192k", "-shortest"]
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf), out_path]
     subprocess.run(cmd, check=True)

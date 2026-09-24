@@ -181,3 +181,33 @@ def test_audio_onsets_from_a_rendered_song(tmp_path):
     recall = np.mean([np.min(np.abs(got - k)) < 0.04 for k in kicks])
     lat = np.median([got[np.argmin(np.abs(got - k))] - k for k in kicks])
     assert recall > 0.8 and 0.0 <= lat < 0.02
+
+
+def test_recorded_take_keeps_live_camera_and_audio_alignment(biped_plan, tmp_path):
+    from myrmex.performance.performance import Performance
+    from myrmex.performance.takes import recorded_camera_track, take_audio_offset
+    cfg = LiveConfig(clock="auto", link=False, out=[], latency=0.0, record=str(tmp_path),
+                     inputs=InputConfig(osc_port=0))
+    T0 = 100.0
+    s = LiveSession(cfg, biped_plan, start_inputs=False, now=T0)
+    song0 = T0 + 1.0                                     # Ableton starts playing 1 s after we record
+    dt = 1.0 / 120.0
+    next_tr, next_kick = song0, song0
+    for i in range(int(8.0 / dt)):
+        now = T0 + (i + 1) * dt
+        while now >= next_tr:
+            s.inputs.push(LiveEvent("transport", next_tr, {"beat": (next_tr - song0) * 2.0, "bpm": 120.0,
+                                                           "playing": True}))
+            next_tr += 0.05
+        while now >= next_kick:
+            s.inputs.push(LiveEvent("note", next_kick, {"channel": 1, "pitch": 36.0, "velocity": 0.9}))
+            next_kick += 0.5
+        s.step(now)
+    path = s.save_take()
+    perf = Performance.load(path)
+    track = recorded_camera_track(perf)
+    assert track is not None and track.positions.shape == (perf.frames, 3)
+    assert np.isfinite(track.positions).all() and len(track.shots) >= 1
+    assert sum(sh.end - sh.start for sh in track.shots) == perf.frames
+    off = take_audio_offset(perf)
+    assert off == pytest.approx(-1.0, abs=0.06)

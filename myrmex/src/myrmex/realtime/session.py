@@ -156,8 +156,17 @@ class LiveSession:
             self.last_frame = fr
         if self.recorder is not None and t + 1e-9 >= self.next_rec:
             self.next_rec += 1.0 / cfg.record_fps
-            self.recorder.add(res.pose.delta, {"beat": st.beat, "bpm": st.bpm, "hold": float(self.hold)},
-                              {"behavior": self.engine.behavior_name})
+            ch = {"beat": st.beat, "bpm": st.bpm, "hold": float(self.hold), "playing": float(st.playing),
+                  "song_beat": st.song_beat if st.song_beat is not None else float("nan"),
+                  "wall": now - self.t0}
+            cam = self.camera.state if self.camera is not None else None
+            if cam is not None:
+                for i, a in enumerate("xyz"):
+                    ch["cam_p" + a] = float(cam.position[i])
+                    ch["cam_t" + a] = float(cam.target[i])
+                ch.update(cam_lens=cam.lens, cam_focus=cam.focus, cam_fstop=cam.fstop, cam_shot=float(cam.shot_id))
+            self.recorder.add(res.pose.delta, ch, {"behavior": self.engine.behavior_name,
+                                                   "camera": cam.kind if cam is not None else ""})
         return fr
 
     def _apply_controls(self, now: float, t: float) -> None:
@@ -172,7 +181,8 @@ class LiveSession:
             link = self.clock.sources.get("link")
             authoritative = st is not None and (st.source in ("osc", "midi") or
                                                 (st.source == "link" and getattr(link, "_seen_playing", False)))
-            walking = recent or (st is not None and st.playing and authoritative)
+            # A real transport decides (Stop means stop, at once); without one, the music does.
+            walking = (st.playing if authoritative else recent) if st is not None else recent
             manual = c.get("hold")
             if manual is not None and manual > 0.5:
                 self.hold = True

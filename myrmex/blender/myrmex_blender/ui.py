@@ -42,6 +42,8 @@ class MyrmexLiveSettings(bpy.types.PropertyGroup):
     follow_camera: BoolProperty(name="Live camera", default=True)
     follow_lights: BoolProperty(name="Lights follow", default=True)
     follow_floor: BoolProperty(name="Endless floor", default=True)
+    fast_viewport: BoolProperty(name="Fast viewport", default=True,
+                                description="Skip Corrective Smooth in the viewport while live (render keeps it)")
     engine_mode: EnumProperty(name="Engine", items=[
         ("EXTERNAL", "Separate process", "Run `myrmex live` in Terminal (recommended)"),
         ("EMBEDDED", "Inside Blender", "Run the engine in a background thread of Blender")], default="EXTERNAL")
@@ -82,7 +84,8 @@ class MYRMEX_OT_live_start(bpy.types.Operator):
             return {"CANCELLED"}
         s.armature = arm
         _stop_link()
-        link = live.LiveLink(arm, port=s.port, camera=s.follow_camera, lights=s.follow_lights, floor=s.follow_floor)
+        link = live.LiveLink(arm, port=s.port, camera=s.follow_camera, lights=s.follow_lights, floor=s.follow_floor,
+                             fast_viewport=s.fast_viewport)
         try:
             link.start()
         except OSError as e:
@@ -224,7 +227,9 @@ class MYRMEX_PT_live(bpy.types.Panel):
         row.prop(s, "follow_camera", toggle=True)
         row.prop(s, "follow_lights", toggle=True)
         row.prop(s, "follow_floor", toggle=True)
-        L.prop(s, "port")
+        row = L.row(align=True)
+        row.prop(s, "port")
+        row.prop(s, "fast_viewport")
         row = L.row(align=True)
         if link is None:
             row.operator("myrmex.live_start", icon="PLAY")

@@ -89,7 +89,10 @@ def cmd_simulate(a) -> int:
     if a.mode in ("score", "both"):
         for tid, tr in tracks.items():
             send(OscMessage("/myrmex/score/track", [tid, tr.name, tr.group]))
+    if a.duration:
+        dur = min(dur, a.duration)
     loops = 0
+    paused = 0.0
     while True:
         t_start = time.perf_counter() + 0.2
         k = 0
@@ -98,7 +101,17 @@ def cmd_simulate(a) -> int:
         song_offset = loops * tl.tempo.beats(dur)
         while True:
             now = time.perf_counter()
-            t = now - t_start
+            t = now - t_start - paused
+            if a.stop_at is not None and a.stop_for > 0 and t >= a.stop_at and paused == 0.0:
+                # Press Stop, wait, press Play again (continue from the same song position).
+                b = tl.tempo.beats(a.stop_at) + song_offset
+                t_stop = time.perf_counter()
+                while time.perf_counter() - t_stop < a.stop_for:
+                    send(OscMessage("/myrmex/transport", [float(b), float(tl.tempo.bpm_at(a.stop_at)), 0, 4, 4]))
+                    time.sleep(1.0 / a.rate)
+                paused = time.perf_counter() - t_stop
+                next_score = -1.0
+                continue
             if t > dur:
                 break
             beat = tl.tempo.beats(max(t, 0.0)) + song_offset
@@ -246,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--mode", default="notes", choices=["notes", "score", "both"])
     q.add_argument("--rate", type=float, default=20.0, help="transport messages per second")
     q.add_argument("--loop", action="store_true")
+    q.add_argument("--duration", type=float, default=None, help="stop the song after this many seconds")
+    q.add_argument("--stop-at", type=float, default=None, help="press Stop at this song time (s) ...")
+    q.add_argument("--stop-for", type=float, default=0.0, help="... and Play again after this many seconds")
     q.set_defaults(fn=cmd_simulate)
 
     q = sub.add_parser("monitor", help="print the pose stream")
