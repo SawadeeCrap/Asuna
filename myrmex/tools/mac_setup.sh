@@ -20,8 +20,35 @@ if [[ ! -x "$VENV/bin/python" ]]; then
   echo "-- creating $VENV (Python 3.12)"
   uv venv --python 3.12 "$VENV"
 fi
-echo "-- installing myrmex[live] into $VENV"
-uv pip install --python "$VENV/bin/python" -e "$REPO[live]"
+echo "-- installing myrmex[live,app] into $VENV"
+uv pip install --python "$VENV/bin/python" -e "$REPO[live,app]"
+
+# 1b. Myrmex.app (a thin bundle around the venv) in ~/Applications + a shortcut on the Desktop
+APP="$HOME/Applications/Myrmex.app"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Myrmex</string>
+  <key>CFBundleDisplayName</key><string>Myrmex</string>
+  <key>CFBundleIdentifier</key><string>app.myrmex.live</string>
+  <key>CFBundleVersion</key><string>0.3</string>
+  <key>CFBundleShortVersionString</key><string>0.3</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>Myrmex</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Myrmex listens to the music input to animate the character.</string>
+</dict></plist>
+PLIST
+cat > "$APP/Contents/MacOS/Myrmex" <<LAUNCH
+#!/bin/bash
+exec "$VENV/bin/python" -m myrmex.app "\$@"
+LAUNCH
+chmod +x "$APP/Contents/MacOS/Myrmex"
+ln -sfn "$APP" "$HOME/Desktop/Myrmex.app" 2>/dev/null || true
+echo "-- app: $APP (shortcut on the Desktop)"
 
 # 2. Blender add-on (symlink, so updates of the repo are picked up)
 ADDONS="$HOME/Library/Application Support/Blender/$BLENDER_VER/scripts/addons"
@@ -50,11 +77,8 @@ echo "-- checking ports"
 
 cat <<MSG
 
-Done.  Next:
-  source $VENV/bin/activate
-  /Applications/Blender.app/Contents/MacOS/Blender -b --python "$REPO/blender/scripts/prepare_character.py" -- \\
-      --glb ~/Downloads/character.glb --out ~/Myrmex/character_live.blend
-  myrmex live --rig ~/Myrmex/character_live.rig.json
-  (Blender: open character_live.blend, N > Myrmex > Start Live)
+Done.  Start Myrmex.app (Desktop / ~/Applications):
+  Live tab: the engine runs; "Open character in Blender" shows her live.
+  Ableton: LINK on (+ Start Stop Sync) or Control Surface: Myrmex -> Play.
 Guide: $REPO/docs/REALTIME.md
 MSG

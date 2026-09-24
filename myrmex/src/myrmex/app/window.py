@@ -1,0 +1,626 @@
+"""Myrmex desktop app (PySide6).
+
+    python -m myrmex.app          (or double-click Myrmex.app / Myrmex.command on macOS)
+
+One window for everything the live performance needs:
+
+* Live      - engine start/stop, what the engine hears (clock, tempo, beat, play state,
+              section), the character's knobs (style, energy, stride, sway, hold) and
+              one-shot moves (poses, gestures, camera cuts);
+* Inputs    - Ableton (Link, Remote Script), MIDI ports, audio input, clock source, latency;
+* Character - which character, prepare a new one from a Hunyuan3D GLB, open it in Blender live;
+* Camera & output - live camera, pose stream, recording takes;
+* Log.
+
+Settings are saved on exit and restored on the next launch.
+"""
+from __future__ import annotations
+
+import math
+import os
+import sys
+import time
+
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
+from PySide6.QtGui import QAction, QFont
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+                               QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSlider,
+                               QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+
+from . import controllers as C
+from .settings import AppSettings, characters_dir
+
+CLOCKS = [("auto", "Auto (best available)"), ("link", "Ableton Link"), ("osc", "Remote Script (Ableton)"),
+          ("midi", "MIDI clock"), ("onsets", "Follow the kicks"), ("internal", "Internal tempo")]
+MATERIALS = ["black_chrome", "keep", "chrome", "liquid_metal", "gunmetal", "ceramic", "clay", "iridescent"]
+MOVES = [("Pose", "pose"), ("Look back", "pose:look_back"), ("Hand on hip", "flourish:hand_hip"),
+         ("Hair touch", "flourish:hair_touch"), ("Shoulder roll", "flourish:shoulder_roll"),
+         ("Side glance", "flourish:side_glance"), ("Chin up", "flourish:chin_up")]
+
+
+class Knob(QWidget):
+    """Slider 0..100 with an 'Auto' switch (auto = the music decides)."""
+
+    def __init__(self, name: str, value: float | None, on_change):
+        super().__init__()
+        self.name = name
+        self.on_change = on_change
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 100)
+        self.slider.setValue(int(round((0.5 if value is None else value) * 100)))
+        self.auto = QCheckBox("Auto")
+        self.auto.setChecked(value is None)
+        self.slider.setEnabled(value is not None)
+        self.val = QLabel()
+        self.val.setMinimumWidth(34)
+        lay.addWidget(self.slider, 1)
+        lay.addWidget(self.val)
+        lay.addWidget(self.auto)
+        self.slider.valueChanged.connect(self._changed)
+        self.auto.toggled.connect(self._changed)
+        self._update_label()
+
+    def value(self) -> float | None:
+        return None if self.auto.isChecked() else self.slider.value() / 100.0
+
+    def _update_label(self):
+        self.val.setText("auto" if self.auto.isChecked() else f"{self.slider.value()}")
+
+    def _changed(self, *_):
+        self.slider.setEnabled(not self.auto.isChecked())
+        self._update_label()
+        self.on_change(self.name, self.value())
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, settings: AppSettings | None = None):
+        super().__init__()
+        self.s = settings or AppSettings.load()
+        self.setWindowTitle("Myrmex – live character")
+        self.resize(760, 640)
+        self.engine = C.EngineController(self.s, self.log)
+        self.blender_proc: QProcess | None = None
+        self.prepare_proc: QProcess | None = None
+        self._last_notes = (0, time.time())
+        self._notes_rate = 0.0
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
+        self.logbox = QPlainTextEdit()
+        self.logbox.setReadOnly(True)
+        self.logbox.setMaximumBlockCount(4000)
+        tabs.addTab(self._live_tab(), "Live")
+        tabs.addTab(self._inputs_tab(), "Inputs")
+        tabs.addTab(self._character_tab(), "Character")
+        tabs.addTab(self._output_tab(), "Camera && Output")
+        tabs.addTab(self.logbox, "Log")
+        self.tabs = tabs
+        act = QAction("Quit", self)
+        act.setShortcut("Ctrl+Q")
+        act.triggered.connect(self.close)
+        self.addAction(act)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._refresh)
+        self.timer.start(100)
+        self._refresh_devices()
+        if self.s.start_engine_on_launch:
+            QTimer.singleShot(200, self.start_engine)
+        if self.s.open_blender_on_start:
+            QTimer.singleShot(800, self.open_blender)
+
+    # ================================================================== tabs
+    def _live_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.btn_engine = QPushButton("▶  Start engine")
+        self.btn_engine.setMinimumHeight(40)
+        f = QFont()
+        f.setPointSize(13)
+        f.setBold(True)
+        self.btn_engine.setFont(f)
+        self.btn_engine.clicked.connect(self.toggle_engine)
+        self.btn_blender = QPushButton("Open character in Blender")
+        self.btn_blender.setMinimumHeight(40)
+        self.btn_blender.clicked.connect(self.open_blender)
+        row.addWidget(self.btn_engine, 1)
+        row.addWidget(self.btn_blender, 1)
+        v.addLayout(row)
+        # ---- status
+        box = QGroupBox("What the character hears")
+        g = QGridLayout(box)
+        self.st = {}
+        items = [("clock", "Clock"), ("bpm", "Tempo"), ("beat", "Bar.Beat"), ("transport", "Transport"),
+                 ("state", "Character"), ("section", "Section"), ("behavior", "Doing"), ("camera", "Camera"),
+                 ("notes", "Notes / s"), ("peers", "Link peers"), ("tick", "Engine tick"), ("sent", "Poses sent")]
+        for i, (k, label) in enumerate(items):
+            lab = QLabel(label + ":")
+            lab.setStyleSheet("color: gray")
+            val = QLabel("–")
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            g.addWidget(lab, i // 3, (i % 3) * 2)
+            g.addWidget(val, i // 3, (i % 3) * 2 + 1)
+            self.st[k] = val
+        beats = QHBoxLayout()
+        self.beat_leds = []
+        for _ in range(4):
+            led = QLabel()
+            led.setFixedSize(28, 12)
+            led.setStyleSheet("background: #444; border-radius: 3px")
+            beats.addWidget(led)
+            self.beat_leds.append(led)
+        beats.addStretch(1)
+        g.addLayout(beats, 4, 0, 1, 6)
+        v.addWidget(box)
+        # ---- knobs
+        box = QGroupBox("Character (Auto = the music decides)")
+        form = QFormLayout(box)
+        self.cmb_style = QComboBox()
+        self.cmb_style.addItems(C.STYLES)
+        self.cmb_style.setCurrentText(self.s.style)
+        self.cmb_style.currentTextChanged.connect(self._style_changed)
+        form.addRow("Walk style", self.cmb_style)
+        self.knobs = {}
+        for k, label in (("energy", "Energy"), ("stride", "Stride"), ("sway", "Hip sway")):
+            kb = Knob(k, getattr(self.s, k), self._knob_changed)
+            self.knobs[k] = kb
+            form.addRow(label, kb)
+        self.chk_hold = QCheckBox("Stand and pose (hold) — otherwise she walks while the music plays")
+        self.chk_hold.toggled.connect(lambda on: self.engine.control("hold", 1.0 if on else 0.0))
+        form.addRow("", self.chk_hold)
+        v.addWidget(box)
+        # ---- moves
+        box = QGroupBox("Moves (one-shot)")
+        grid = QGridLayout(box)
+        for i, (label, name) in enumerate(MOVES):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, n=name: self.engine.trigger(n))
+            grid.addWidget(b, i // 4, i % 4)
+        cam = QPushButton("Camera cut ▸")
+        cam.clicked.connect(self._camera_cut)
+        self.cmb_shot = QComboBox()
+        self.cmb_shot.addItems(C.SHOTS)
+        grid.addWidget(cam, 2, 0)
+        grid.addWidget(self.cmb_shot, 2, 1)
+        v.addWidget(box)
+        v.addStretch(1)
+        return w
+
+    def _inputs_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        box = QGroupBox("Ableton Live")
+        form = QFormLayout(box)
+        self.chk_link = QCheckBox("Join Ableton Link (tempo + phase; enable LINK and Start Stop Sync in Live)")
+        self.chk_link.setChecked(self.s.link)
+        form.addRow(self.chk_link)
+        rs = QHBoxLayout()
+        self.lbl_rs = QLabel()
+        b = QPushButton("Install / update Remote Script")
+        b.clicked.connect(self._install_rs)
+        rs.addWidget(self.lbl_rs, 1)
+        rs.addWidget(b)
+        form.addRow("Remote Script", rs)
+        form.addRow(QLabel("After installing: Live > Settings > Link, Tempo & MIDI > Control Surface: Myrmex.\n"
+                           "It sends play/stop, tempo and the notes of playing MIDI clips (ahead of time).\n"
+                           "A track named “Myrmex” with a Rack: its macros steer the character "
+                           "(Energy, Stride, Sway, Style, Hold, Camera, Pose, Flourish);\n"
+                           "notes in its clips: C3 pose, D3 gesture, E3 camera cut, C4 hold."))
+        v.addWidget(box)
+        box = QGroupBox("Clock and timing")
+        form = QFormLayout(box)
+        self.cmb_clock = QComboBox()
+        for key, label in CLOCKS:
+            self.cmb_clock.addItem(label, key)
+        self.cmb_clock.setCurrentIndex([k for k, _ in CLOCKS].index(self.s.clock) if self.s.clock in dict(CLOCKS) else 0)
+        form.addRow("Beat source", self.cmb_clock)
+        self.spin_bpm = QDoubleSpinBox()
+        self.spin_bpm.setRange(40, 240)
+        self.spin_bpm.setValue(self.s.bpm)
+        form.addRow("Internal tempo (BPM)", self.spin_bpm)
+        self.spin_lat = QSpinBox()
+        self.spin_lat.setRange(0, 300)
+        self.spin_lat.setSuffix(" ms")
+        self.spin_lat.setValue(int(self.s.latency_ms))
+        self.spin_lat.valueChanged.connect(lambda ms: (setattr(self.s, "latency_ms", ms), self.engine.set_latency(ms)))
+        form.addRow("Latency compensation", self.spin_lat)
+        v.addWidget(box)
+        box = QGroupBox("MIDI / OSC / audio (VCV Rack, controllers, audio-only sets)")
+        form = QFormLayout(box)
+        self.spin_osc = QSpinBox()
+        self.spin_osc.setRange(1024, 65535)
+        self.spin_osc.setValue(int(self.s.osc_port))
+        form.addRow("OSC in port", self.spin_osc)
+        self.list_midi = QListWidget()
+        self.list_midi.setMaximumHeight(90)
+        form.addRow("MIDI inputs (IAC …)", self.list_midi)
+        self.cmb_audio = QComboBox()
+        form.addRow("Audio input (BlackHole …)", self.cmb_audio)
+        mp = QHBoxLayout()
+        self.ed_mapping = QLineEdit(self.s.mapping_file)
+        self.ed_mapping.setPlaceholderText("optional mapping.json (MIDI channels, CC, OSC addresses)")
+        b = QPushButton("…")
+        b.clicked.connect(lambda: self._pick_file(self.ed_mapping, "Mapping JSON", "JSON (*.json)"))
+        mp.addWidget(self.ed_mapping, 1)
+        mp.addWidget(b)
+        form.addRow("Mapping", mp)
+        self.lbl_dev = QLabel()
+        self.lbl_dev.setStyleSheet("color: gray")
+        form.addRow(self.lbl_dev)
+        row = QHBoxLayout()
+        b = QPushButton("Refresh devices")
+        b.clicked.connect(self._refresh_devices)
+        apply = QPushButton("Apply (restart engine)")
+        apply.clicked.connect(self.apply_and_restart)
+        row.addWidget(b)
+        row.addStretch(1)
+        row.addWidget(apply)
+        v.addWidget(box)
+        v.addLayout(row)
+        v.addStretch(1)
+        return w
+
+    def _character_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        box = QGroupBox("Character")
+        form = QFormLayout(box)
+        row = QHBoxLayout()
+        self.cmb_char = QComboBox()
+        self._fill_characters()
+        b = QPushButton("Browse…")
+        b.clicked.connect(self._browse_character)
+        row.addWidget(self.cmb_char, 1)
+        row.addWidget(b)
+        form.addRow("Live character (.blend)", row)
+        row = QHBoxLayout()
+        self.ed_blender = QLineEdit(self.s.blender or (C.find_blender() or ""))
+        b = QPushButton("…")
+        b.clicked.connect(lambda: self._pick_file(self.ed_blender, "Blender executable", "All (*)"))
+        row.addWidget(self.ed_blender, 1)
+        row.addWidget(b)
+        form.addRow("Blender", row)
+        self.chk_open_blender = QCheckBox("Open Blender automatically when the app starts")
+        self.chk_open_blender.setChecked(self.s.open_blender_on_start)
+        form.addRow(self.chk_open_blender)
+        self.spin_seed = QSpinBox()
+        self.spin_seed.setRange(0, 9999)
+        self.spin_seed.setValue(int(self.s.seed))
+        form.addRow("Personality seed", self.spin_seed)
+        v.addWidget(box)
+        box = QGroupBox("New character from a Hunyuan3D GLB")
+        form = QFormLayout(box)
+        row = QHBoxLayout()
+        self.ed_glb = QLineEdit()
+        self.ed_glb.setPlaceholderText("model.glb")
+        b = QPushButton("…")
+        b.clicked.connect(lambda: self._pick_file(self.ed_glb, "Hunyuan3D model", "3D (*.glb *.gltf *.obj *.fbx)"))
+        row.addWidget(self.ed_glb, 1)
+        row.addWidget(b)
+        form.addRow("GLB", row)
+        self.spin_height = QDoubleSpinBox()
+        self.spin_height.setRange(0.2, 20.0)
+        self.spin_height.setSingleStep(0.05)
+        self.spin_height.setValue(1.70)
+        self.spin_height.setSuffix(" m")
+        form.addRow("Height", self.spin_height)
+        self.cmb_mat = QComboBox()
+        self.cmb_mat.addItems(MATERIALS)
+        form.addRow("Material", self.cmb_mat)
+        self.spin_smooth = QSpinBox()
+        self.spin_smooth.setRange(0, 30)
+        self.spin_smooth.setValue(6)
+        form.addRow("Surface smoothing", self.spin_smooth)
+        self.btn_prepare = QPushButton("Prepare character (auto-rig, ~1 min)")
+        self.btn_prepare.clicked.connect(self.prepare_character)
+        form.addRow(self.btn_prepare)
+        v.addWidget(box)
+        v.addStretch(1)
+        return w
+
+    def _output_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        box = QGroupBox("Camera")
+        form = QFormLayout(box)
+        self.chk_camera = QCheckBox("Cinematic live camera (cuts on downbeats)")
+        self.chk_camera.setChecked(self.s.camera)
+        form.addRow(self.chk_camera)
+        v.addWidget(box)
+        box = QGroupBox("Pose stream (to Blender / other renderers)")
+        form = QFormLayout(box)
+        self.spin_pose = QSpinBox()
+        self.spin_pose.setRange(1024, 65535)
+        self.spin_pose.setValue(int(self.s.pose_port))
+        form.addRow("Pose port", self.spin_pose)
+        self.spin_fps = QSpinBox()
+        self.spin_fps.setRange(15, 240)
+        self.spin_fps.setValue(int(self.s.out_fps))
+        form.addRow("Poses per second", self.spin_fps)
+        self.ed_targets = QLineEdit(self.s.extra_targets)
+        self.ed_targets.setPlaceholderText("extra targets, e.g. 192.168.1.20:9101")
+        form.addRow("Also send to", self.ed_targets)
+        v.addWidget(box)
+        box = QGroupBox("Recording (for final renders)")
+        form = QFormLayout(box)
+        self.chk_record = QCheckBox("Record the performance (saved when the engine stops)")
+        self.chk_record.setChecked(self.s.record)
+        form.addRow(self.chk_record)
+        row = QHBoxLayout()
+        self.ed_rec = QLineEdit(self.s.record_dir)
+        b = QPushButton("…")
+        b.clicked.connect(lambda: self._pick_dir(self.ed_rec))
+        row.addWidget(self.ed_rec, 1)
+        row.addWidget(b)
+        form.addRow("Takes folder", row)
+        b = QPushButton("Save take now")
+        b.clicked.connect(self._save_take)
+        form.addRow(b)
+        self.chk_autostart = QCheckBox("Start the engine when the app starts")
+        self.chk_autostart.setChecked(self.s.start_engine_on_launch)
+        form.addRow(self.chk_autostart)
+        v.addWidget(box)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        apply = QPushButton("Apply (restart engine)")
+        apply.clicked.connect(self.apply_and_restart)
+        row.addWidget(apply)
+        v.addLayout(row)
+        v.addStretch(1)
+        return w
+
+    # ================================================================== actions
+    def log(self, msg: str) -> None:
+        self.logbox.appendPlainText(time.strftime("%H:%M:%S  ") + msg)
+
+    def _collect(self) -> None:
+        s = self.s
+        s.link = self.chk_link.isChecked()
+        s.clock = self.cmb_clock.currentData()
+        s.bpm = float(self.spin_bpm.value())
+        s.latency_ms = float(self.spin_lat.value())
+        s.osc_port = int(self.spin_osc.value())
+        s.midi_ports = [self.list_midi.item(i).text() for i in range(self.list_midi.count())
+                        if self.list_midi.item(i).checkState() == Qt.CheckState.Checked]
+        a = self.cmb_audio.currentText()
+        s.audio_device = "" if a.startswith("(") else a
+        s.mapping_file = self.ed_mapping.text().strip()
+        s.character = self.cmb_char.currentData() or s.character
+        s.blender = self.ed_blender.text().strip()
+        s.open_blender_on_start = self.chk_open_blender.isChecked()
+        s.seed = int(self.spin_seed.value())
+        s.camera = self.chk_camera.isChecked()
+        s.pose_port = int(self.spin_pose.value())
+        s.out_fps = float(self.spin_fps.value())
+        s.extra_targets = self.ed_targets.text().strip()
+        s.record = self.chk_record.isChecked()
+        s.record_dir = self.ed_rec.text().strip() or s.record_dir
+        s.start_engine_on_launch = self.chk_autostart.isChecked()
+        s.style = self.cmb_style.currentText()
+        for k, kb in self.knobs.items():
+            setattr(s, k, kb.value())
+
+    def start_engine(self) -> None:
+        self._collect()
+        if self.engine.start():
+            self.btn_engine.setText("■  Stop engine")
+            if self.chk_hold.isChecked():
+                self.engine.control("hold", 1.0)
+        else:
+            self.tabs.setCurrentIndex(4)
+
+    def stop_engine(self) -> None:
+        self.engine.stop()
+        self.btn_engine.setText("▶  Start engine")
+
+    def toggle_engine(self) -> None:
+        if self.engine.running:
+            self.stop_engine()
+        else:
+            self.start_engine()
+
+    def apply_and_restart(self) -> None:
+        self._collect()
+        self.s.save()
+        if self.engine.running:
+            self.stop_engine()
+            self.start_engine()
+        self.log("settings applied")
+
+    def _knob_changed(self, name: str, value: float | None) -> None:
+        setattr(self.s, name, value)
+        self.engine.control(name, -1.0 if value is None else value)
+
+    def _style_changed(self, style: str) -> None:
+        self.s.style = style
+        self.engine.control("style", (C.STYLES.index(style) + 0.5) / len(C.STYLES))
+
+    def _camera_cut(self) -> None:
+        shot = self.cmb_shot.currentText()
+        self.engine.trigger("camera" if shot == "auto" else f"camera:{shot}")
+
+    def _save_take(self) -> None:
+        path = self.engine.save_take()
+        self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
+
+    def _install_rs(self) -> None:
+        try:
+            dst = C.install_remote_script()
+            self.log(f"Remote Script installed: {dst} (restart Live, pick Control Surface: Myrmex)")
+        except Exception as e:
+            self.log(f"! Remote Script install failed: {e}")
+        self._refresh_devices()
+
+    def _refresh_devices(self) -> None:
+        self.lbl_rs.setText("installed ✓" if C.remote_script_installed() else "not installed")
+        names, err1 = C.midi_inputs()
+        self.list_midi.clear()
+        for n in names:
+            it = QListWidgetItem(n)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            on = n in self.s.midi_ports or ("auto" in self.s.midi_ports and "IAC" in n)
+            it.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            self.list_midi.addItem(it)
+        audio, err2 = C.audio_inputs()
+        self.cmb_audio.clear()
+        self.cmb_audio.addItem("(off)")
+        self.cmb_audio.addItems(audio)
+        if self.s.audio_device in audio:
+            self.cmb_audio.setCurrentText(self.s.audio_device)
+        notes = [e for e in (err1, err2) if e]
+        if not C.link_available():
+            notes.append("Ableton Link unavailable (pip install aalink)")
+        self.lbl_dev.setText("\n".join(notes) if notes else "devices ok")
+
+    def _fill_characters(self) -> None:
+        self.cmb_char.clear()
+        for p in C.known_characters(self.s.character):
+            self.cmb_char.addItem(os.path.basename(p), p)
+        i = self.cmb_char.findData(self.s.character)
+        if i >= 0:
+            self.cmb_char.setCurrentIndex(i)
+
+    def _browse_character(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Live character", characters_dir(), "Blender (*.blend)")
+        if path:
+            if not os.path.exists(os.path.splitext(path)[0] + ".rig.json"):
+                QMessageBox.warning(self, "Myrmex", "This .blend has no .rig.json next to it.\n"
+                                                    "Prepare the character from its GLB first.")
+                return
+            self.s.character = path
+            self._fill_characters()
+
+    def _pick_file(self, edit: QLineEdit, title: str, flt: str) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, title, os.path.expanduser("~"), flt)
+        if path:
+            edit.setText(path)
+
+    def _pick_dir(self, edit: QLineEdit) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Folder", edit.text() or os.path.expanduser("~"))
+        if path:
+            edit.setText(path)
+
+    # ------------------------------------------------------------------ blender
+    def open_blender(self) -> None:
+        self._collect()
+        blender = C.find_blender(self.s.blender)
+        if not blender:
+            QMessageBox.warning(self, "Myrmex", "Blender not found. Install Blender 5.2 or set its path "
+                                                "on the Character tab.")
+            return
+        if not self.engine.running:
+            self.start_engine()
+        cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port)
+        p = QProcess(self)
+        qenv = QProcessEnvironment.systemEnvironment()
+        for k, val in env.items():
+            qenv.insert(k, val)
+        p.setProcessEnvironment(qenv)
+        p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        p.readyReadStandardOutput.connect(lambda: self._pipe(p, "blender"))
+        p.finished.connect(lambda *_: self.log("Blender closed"))
+        p.start(cmd[0], cmd[1:])
+        self.blender_proc = p
+        self.log(f"opening {os.path.basename(self.s.character)} in Blender (live link on port {self.s.pose_port})")
+
+    def prepare_character(self) -> None:
+        self._collect()
+        glb = self.ed_glb.text().strip()
+        blender = C.find_blender(self.s.blender)
+        if not glb or not os.path.exists(glb):
+            QMessageBox.warning(self, "Myrmex", "Choose a GLB file first.")
+            return
+        if not blender:
+            QMessageBox.warning(self, "Myrmex", "Blender not found (Character tab).")
+            return
+        out = os.path.join(characters_dir(), os.path.splitext(os.path.basename(glb))[0] + "_live.blend")
+        cmd = C.prepare_command(blender, glb, out, self.spin_height.value(), self.cmb_mat.currentText(),
+                                self.spin_smooth.value())
+        p = QProcess(self)
+        p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        p.readyReadStandardOutput.connect(lambda: self._pipe(p, "prepare", only=("[", "!!", "Error", "rror")))
+        p.finished.connect(lambda code, *_: self._prepared(out, code))
+        self.btn_prepare.setEnabled(False)
+        self.btn_prepare.setText("Preparing… (see Log)")
+        p.start(cmd[0], cmd[1:])
+        self.prepare_proc = p
+        self.log(f"preparing {os.path.basename(glb)} -> {out}")
+        self.tabs.setCurrentIndex(4)
+
+    def _prepared(self, out: str, code: int) -> None:
+        self.btn_prepare.setEnabled(True)
+        self.btn_prepare.setText("Prepare character (auto-rig, ~1 min)")
+        if code == 0 and os.path.exists(out):
+            self.s.character = out
+            self._fill_characters()
+            self.log(f"character ready: {out} — selected; press Apply (restart engine) or Open in Blender")
+        else:
+            self.log(f"! prepare failed (exit {code})")
+
+    def _pipe(self, p: QProcess, tag: str, only=None) -> None:
+        data = bytes(p.readAllStandardOutput()).decode("utf-8", "replace")
+        for line in data.splitlines():
+            if line.strip() and (only is None or any(o in line for o in only)):
+                self.log(f"[{tag}] {line.strip()}")
+
+    # ------------------------------------------------------------------ status
+    def _refresh(self) -> None:
+        st = self.engine.status()
+        if not st:
+            for k in self.st:
+                self.st[k].setText("–")
+            for led in self.beat_leds:
+                led.setStyleSheet("background: #444; border-radius: 3px")
+            return
+        now = time.time()
+        n0, t0 = self._last_notes
+        if now - t0 >= 1.0:
+            self._notes_rate = (st["notes"] - n0) / (now - t0)
+            self._last_notes = (st["notes"], now)
+        beat = st.get("beat_raw", 0.0) or 0.0
+        bpb = max(1, int(round(st.get("bpb", 4.0))))
+        bar = int(beat // bpb) + 1
+        inbar = int(beat % bpb)
+        names = {"auto": "auto", "link": "Ableton Link", "osc": "Remote Script", "midi": "MIDI clock",
+                 "onsets": "following kicks", "internal": "internal"}
+        self.st["clock"].setText(names.get(st["clock"], str(st["clock"])))
+        self.st["bpm"].setText(f"{st['bpm']:.1f} BPM" if st["bpm"] else "–")
+        self.st["beat"].setText(f"{bar}.{inbar + 1}")
+        self.st["transport"].setText("▶ playing" if st["playing"] else "■ stopped")
+        self.st["state"].setText("holding a pose" if st["hold"] else "walking")
+        self.st["section"].setText(str(st["section"]))
+        self.st["behavior"].setText(str(st["behavior"]))
+        self.st["camera"].setText(str(st["camera"]))
+        self.st["notes"].setText(f"{self._notes_rate:.1f}")
+        self.st["peers"].setText(str(st["peers"]))
+        self.st["tick"].setText(f"{st['tick_ms']} ms")
+        self.st["sent"].setText(str(st["sent"]))
+        frac = beat - math.floor(beat)
+        for i, led in enumerate(self.beat_leds):
+            on = i == inbar % 4 and st["playing"]
+            col = ("#ff5a36" if i == 0 else "#36c3ff") if on and frac < 0.35 else ("#666" if on else "#333")
+            led.setStyleSheet(f"background: {col}; border-radius: 3px")
+
+    def closeEvent(self, ev) -> None:
+        self._collect()
+        try:
+            self.s.save()
+        except OSError:
+            pass
+        self.engine.stop()
+        super().closeEvent(ev)
+
+
+def main(argv: list[str] | None = None) -> int:
+    app = QApplication(sys.argv if argv is None else argv)
+    app.setApplicationName("Myrmex")
+    app.setApplicationDisplayName("Myrmex")
+    w = MainWindow()
+    w.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

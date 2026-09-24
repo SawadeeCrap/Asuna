@@ -8,8 +8,17 @@ Sent to 127.0.0.1:9100 (change HOST / PORT below):
     /myrmex/score/notes s id  b float32[beat, dur, pitch, vel]*  f from  f to   every half second:
                         the notes of every playing MIDI clip in the next WINDOW beats, in song beats
 
+    /myrmex/control     s name  f value                                        knobs of the "Myrmex" track
+
 Because notes arrive *before* they sound, the creature can anticipate hits (and the
 engine schedules them on its own clock with sub-millisecond precision).
+
+Work with the character inside Live: name a track "Myrmex", put any Rack on it (an empty
+Audio Effect Rack is enough).  Its macros drive the character - by name (Energy, Stride,
+Sway, Style, Hold, Camera, Pose, Flourish) or by position (Macro 1..8 in that order);
+a knob at zero means "automatic".  Automate them in the arrangement.  MIDI notes in the
+track's clips are choreography: C3 pose, D3 gesture, E3 camera cut, F3 look back,
+G3 hair touch, A3 hand on hip, B3 shoulder roll, C4 hold while the note lasts.
 """
 from __future__ import absolute_import
 
@@ -67,7 +76,52 @@ def _osc(address, args):
     return _pad(address.encode("utf-8")) + _pad(tags.encode("utf-8")) + body
 
 
+# The character's own track: any track whose name starts with "Myrmex".
+#   * its first Rack's macros are the character's knobs (automate them in the arrangement);
+#   * notes in its MIDI clips are choreography commands (C3 pose, D3 gesture, E3 camera cut, ...).
+CONTROL_PREFIX = "myrmex"
+MACRO_NAMES = {
+    "energy": ("energy", "энергия", "intensity"),
+    "stride": ("stride", "step", "шаг"),
+    "sway": ("sway", "hips", "бёдра", "бедра"),
+    "style": ("style", "стиль"),
+    "hold": ("hold", "stop", "стоп", "пауза"),
+    "camera": ("camera", "cam", "камера"),
+    "pose": ("pose", "поза"),
+    "flourish": ("flourish", "gesture", "жест"),
+}
+MACRO_ORDER = ("energy", "stride", "sway", "style", "hold", "camera", "pose", "flourish")
+TRIGGERS = ("camera", "pose", "flourish")
+
+
+def is_control_track(track):
+    return track.name.strip().lower().startswith(CONTROL_PREFIX)
+
+
+def macro_role(name, index):
+    """Map a macro to a character control by its name, else by its position (Macro 1 = energy, ...)."""
+    n = name.strip().lower()
+    for role, words in MACRO_NAMES.items():
+        for w in words:
+            if n == w or n.startswith(w):
+                return role
+    if n.startswith("macro") and 0 <= index < len(MACRO_ORDER):
+        return MACRO_ORDER[index]
+    return None
+
+
+def macro_value(role, param):
+    """Rack macro -> control value.  Knobs at 0 mean "automatic" (-1); triggers stay 0..1."""
+    lo, hi = float(param.min), float(param.max)
+    v = (float(param.value) - lo) / max(hi - lo, 1e-9)
+    if role in TRIGGERS or role == "hold":
+        return v
+    return -1.0 if v <= 0.5 / 127.0 else v
+
+
 def group_hint(track):
+    if is_control_track(track):
+        return "control"
     try:
         for dev in track.devices:
             if getattr(dev, "can_have_drum_pads", False):
@@ -128,6 +182,7 @@ class MyrmexSurface(ControlSurface):
         self._ticks = 0
         self._known = {}
         self._last_tx = 0.0
+        self._macros = {}
         s = self.song()
         s.add_is_playing_listener(self._on_transport)
         s.add_tempo_listener(self._on_transport)
@@ -194,11 +249,40 @@ class MyrmexSurface(ControlSurface):
             blob = struct.pack(">%df" % len(flat), *flat) if flat else b""
             self._send("/myrmex/score/notes", [tid, blob, now, now + WINDOW])
 
+    # ------------------------------------------------------------------ the character's knobs
+    def _send_macros(self):
+        for track in self.song().tracks:
+            if not is_control_track(track):
+                continue
+            rack = None
+            for dev in track.devices:
+                if getattr(dev, "can_have_chains", False):
+                    rack = dev
+                    break
+            if rack is None:
+                return
+            idx = 0
+            for p in rack.parameters:
+                name = str(p.name)
+                if name in ("Device On", "Chain Selector"):
+                    continue
+                role = macro_role(name, idx)
+                idx += 1
+                if role is None:
+                    continue
+                v = macro_value(role, p)
+                last = self._macros.get(role)
+                if last is None or abs(v - last) > 1e-3 or self._ticks % 20 == 0:
+                    self._macros[role] = v
+                    self._send("/myrmex/control", [role, float(v)])
+            return
+
     # ------------------------------------------------------------------ Live callbacks
     def _tick(self):
         try:
             self._send_transport()
             self._ticks += 1
+            self._send_macros()
             if self._ticks % SCORE_EVERY == 0:
                 self._send_score()
         except Exception as e:

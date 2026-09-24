@@ -211,3 +211,30 @@ def test_recorded_take_keeps_live_camera_and_audio_alignment(biped_plan, tmp_pat
     assert sum(sh.end - sh.start for sh in track.shots) == perf.frames
     off = take_audio_offset(perf)
     assert off == pytest.approx(-1.0, abs=0.06)
+
+
+def test_myrmex_track_knobs_and_choreography_notes(biped_plan):
+    rs = _remote_script()
+    assert rs.macro_role("Energy", 5) == "energy" and rs.macro_role("Macro 2", 1) == "stride"
+    assert rs.macro_role("Камера", 0) == "camera" and rs.macro_role("Filter", 0) is None
+
+    class P:
+        min, max, value = 0.0, 127.0, 0.0
+    assert rs.macro_value("energy", P()) == -1.0          # knob at zero = automatic
+    cfg = LiveConfig(clock="internal", link=False, out=[], latency=0.0, inputs=InputConfig(osc_port=0))
+    s = LiveSession(cfg, biped_plan, start_inputs=False, now=0.0)
+    s.inputs.push(LiveEvent("control", 0.0, {"name": "energy", "value": 0.9}))
+    s.step(1 / 120)
+    assert s.engine.runway.live["energy"] == pytest.approx(0.9)
+    s.inputs.push(LiveEvent("control", 0.0, {"name": "energy", "value": -1.0}))
+    s.step(2 / 120)
+    assert "energy" not in s.engine.runway.live
+    # Choreography on MIDI channel 16 (the "control" channel): E3 = camera cut, C4 held = hold.
+    s.inputs.push(LiveEvent("note", 0.0, {"channel": 16, "pitch": 64.0, "velocity": 1.0}))
+    s.inputs.push(LiveEvent("note", 0.0, {"channel": 16, "pitch": 72.0, "velocity": 1.0}))
+    s.step(3 / 120)
+    assert s.hold and s.camera.pending_cut
+    s.inputs.push(LiveEvent("note_off", 0.0, {"channel": 16, "pitch": 72.0}))
+    for k in range(4, 12):
+        s.step(k / 120)
+    assert not s._hold_notes

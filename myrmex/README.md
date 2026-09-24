@@ -10,26 +10,33 @@ Ableton / VCV ─► myrmex live (120 Гц) ─► UDP ─► Blender: аддо�
                                   └──────► запись дубля ─► финальный рендер (EEVEE / Cycles)
 ```
 
-## Быстрый старт (Mac)
+## Запуск (Mac)
 
-```bash
-uv venv --python 3.12 ~/.venvs/myrmex && source ~/.venvs/myrmex/bin/activate
-uv pip install -e ".[live]"
+1. Скачай ветку `claude/practical-planck-0lanlz` и дважды кликни **`Myrmex.command`** в папке `myrmex`.
+   При первом запуске всё установится само (Python 3.12, зависимости, аддон Blender, Remote Script
+   для Ableton, **Myrmex.app** в `~/Applications` и ярлык на рабочем столе). Дальше запускай **Myrmex.app**.
+2. В приложении нажми **Open character in Blender**. Персонаж из твоего GLB уже подготовлен и
+   лежит в `characters/humanoid`, он откроется с включённой живой связью.
+3. В **Ableton** один раз сделай одно из двух:
+   * включи **LINK** и в Settings → Link, Tempo & MIDI поставь **Start Stop Sync**;
+   * или там же выбери **Control Surface: Myrmex**: ноты клипов будут приходить заранее.
 
-# 1) персонаж: GLB -> готовый .blend + описание рига
-/Applications/Blender.app/Contents/MacOS/Blender -b --python blender/scripts/prepare_character.py -- \
-    --glb character.glb --out character_live.blend
+   Нажми **Play**.
 
-# 2) движок (Ableton: включи Link или Remote Script «Myrmex»)
-myrmex live --rig character_live.rig.json
+Всё настраивается в окне приложения:
+- «Live»: статус, стиль походки, энергия, шаг, бёдра, поза, жесты, смена планов камеры;
+- «Inputs»: Link, Remote Script, MIDI, аудио, источник ритма, задержка;
+- «Character»: выбор персонажа, **новый персонаж из GLB**, путь к Blender;
+- «Camera & Output»: камера, порты, запись дублей.
 
-# 3) Blender: открыть character_live.blend -> N -> Myrmex -> Start Live
-```
+**Управление из самого Ableton.** Дорожка с именем **Myrmex** и любым рэком на ней:
+макросы (Energy, Stride, Sway, Style, Hold, Camera, Pose, Flourish; ручка на нуле значит «автомат»)
+можно автоматизировать в аранжировке. Ноты в её клипах работают как хореография:
+C3 поза, D3 жест, E3 смена плана, F3 взгляд назад, G3 волосы, A3 рука на бедро,
+B3 плечо, C4 стоять, пока звучит нота.
 
-Без Ableton проверяется так: `myrmex simulate --mode both` («виртуальный Ableton») и `myrmex monitor`.
-
-**Подробно: [docs/REALTIME.md](docs/REALTIME.md)**: Ableton (Link, Remote Script, MIDI/IAC,
-аудио через BlackHole), VCV Rack (CV-Gate/CV-CC/cvOSCcv), ручки и триггеры, задержка, неполадки.
+Для терминала: `myrmex live --rig …`, `myrmex simulate` (виртуальный Ableton), `myrmex monitor`, `myrmex ports`.
+**Подробно: [docs/REALTIME.md](docs/REALTIME.md).**
 
 ## Что умеет
 

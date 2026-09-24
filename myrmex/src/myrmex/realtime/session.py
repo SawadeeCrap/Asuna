@@ -116,6 +116,7 @@ class LiveSession:
         self.recorder = Recorder(self.names, cfg.record_fps) if cfg.record else None
         self.next_rec = 0.0
         self.style_idx = None
+        self._hold_notes: list = []
         self.last_state: ClockState | None = None
         self.last_frame: PoseFrame | None = None
         self.hold = True
@@ -140,6 +141,9 @@ class LiveSession:
         # Evaluate the grid where the frame will be *seen*: footfalls land on screen on the beat.
         st = self.clock.state(now + cfg.latency)
         notes.extend(self.inputs.score_due(st, t))
+        if any(n.group == "control" for n in notes):
+            self._control_notes([n for n in notes if n.group == "control"], t)
+            notes = [n for n in notes if n.group != "control"]
         self.last_state = st
         self._apply_controls(now, t)
         lvl = self.inputs.controls.get("audio_level")
@@ -169,13 +173,29 @@ class LiveSession:
                                                    "camera": cam.kind if cam is not None else ""})
         return fr
 
+    # Notes on the character's own track ("Myrmex" in Ableton, or a MIDI channel mapped to "control").
+    CONTROL_NOTES = {60: "pose", 62: "flourish", 64: "camera", 65: "pose:look_back", 67: "flourish:hair_touch",
+                     69: "flourish:hand_hip", 71: "flourish:shoulder_roll"}
+    HOLD_NOTE = 72
+
+    def _control_notes(self, notes, t: float) -> None:
+        for n in notes:
+            p = int(round(n.pitch))
+            if p == self.HOLD_NOTE:
+                self._hold_notes.append(n)
+            elif p in self.CONTROL_NOTES:
+                self.inputs.triggers.append((self.CONTROL_NOTES[p], t))
+
     def _apply_controls(self, now: float, t: float) -> None:
         c = self.inputs.controls
         rw = self.engine.runway
+        self._hold_notes = [n for n in self._hold_notes if n.time + n.duration > t]
         if rw is not None:
             for k in ("energy", "stride", "sway"):
                 if k in c:
                     rw.live[k] = c[k]
+                else:
+                    rw.live.pop(k, None)
             recent = now - self.inputs.stats["last_note"] < 2.5
             st = self.last_state
             link = self.clock.sources.get("link")
@@ -184,7 +204,7 @@ class LiveSession:
             # A real transport decides (Stop means stop, at once); without one, the music does.
             walking = (st.playing if authoritative else recent) if st is not None else recent
             manual = c.get("hold")
-            if manual is not None and manual > 0.5:
+            if (manual is not None and manual > 0.5) or self._hold_notes:
                 self.hold = True
             elif self.cfg.auto_hold:
                 self.hold = not walking

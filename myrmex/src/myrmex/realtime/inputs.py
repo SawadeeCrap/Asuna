@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     # MIDI channel (1-16) -> group, or "gm" (GM / Drum Rack map), or "pitch" (low = bass, high = melody)
     "midi_channels": {"1": "gm", "2": "bass", "3": "melody", "4": "harmony", "5": "fx", "6": "texture",
                       "7": "kick", "8": "snare", "9": "hats", "10": "gm", "11": "perc", "12": "perc",
-                      "13": "melody", "14": "harmony", "15": "texture", "16": "fx"},
+                      "13": "melody", "14": "harmony", "15": "texture", "16": "control"},
     # MIDI CC number -> control name (any channel)
     "midi_cc": {"1": "energy", "2": "stride", "3": "sway", "4": "style", "5": "hold", "6": "camera",
                 "7": "none", "16": "energy", "17": "stride", "18": "sway", "19": "style", "20": "hold",
@@ -129,7 +129,9 @@ class ScoreFollower:
             tr = self.tracks.get(tid, {})
             hint = tr.get("group") or ""
             for b, dur, pitch, vel in arr[i0:i1]:
-                if hint == "gm" or not hint:
+                if hint == "control":
+                    g = "control"
+                elif hint == "gm" or not hint:
                     g = GM_DRUMS.get(int(round(pitch))) if hint == "gm" else None
                     g = g or ("perc" if hint == "gm" else ("bass" if pitch < 48 else "melody"))
                 else:
@@ -204,11 +206,15 @@ class InputHub:
             return
         if name in GROUPS:
             return
-        if name in TRIGGERS or name.startswith("pose:") or name.startswith("flourish:"):
+        if name in TRIGGERS or name.startswith("pose:") or name.startswith("flourish:") or name.startswith("camera:"):
+            value = max(0.0, value)
             prev = self.controls.get("_trig_" + name, 0.0)
             if value > 0.5 >= prev:
                 self.triggers.append((name, t))
             self.controls["_trig_" + name] = value
+            return
+        if value < 0.0:
+            self.controls.pop(name, None)          # negative = back to automatic
             return
         self.controls[name] = float(np.clip(value, 0.0, 1.0))
 
