@@ -115,13 +115,15 @@ def render_frames(outdir: str, frames: range | None = None) -> list[str]:
 
 
 def encode_video(frames_dir: str, fps: float, out_path: str, audio: str | None = None,
-                 start_number: int = 1, crf: int = 20) -> str | None:
+                 start_number: int = 1, crf: int = 20, audio_offset: float = 0.0) -> str | None:
     exe = ffmpeg_exe()
     if exe is None:
         return None
     cmd = [exe, "-y", "-loglevel", "error", "-framerate", f"{fps}", "-start_number", str(start_number),
            "-i", os.path.join(frames_dir, "f_%05d.png")]
     if audio:
+        if audio_offset > 0:
+            cmd += ["-ss", f"{audio_offset:.4f}"]
         cmd += ["-i", audio, "-c:a", "aac", "-b:a", "192k", "-shortest"]
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf), out_path]
     subprocess.run(cmd, check=True)

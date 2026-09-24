@@ -82,3 +82,15 @@ def test_entry_event_after_silence():
         p.advance(bar, 0.0)
     _, entry = p.observe("hats", 4, 0.0, 0.5)
     assert entry
+
+
+def test_midi_roundtrip(tmp_path):
+    from myrmex.adapters.midi_file import load_midi, write_midi
+    tl = synthetic.test_b_broken(bars=4)
+    p = tmp_path / "b.mid"
+    write_midi(tl, str(p))
+    tl2 = load_midi(str(p))
+    assert abs(len(tl2.notes) - len(tl.notes)) <= 2
+    kicks = [n for n in tl2.notes if tl2.group_of(n) == "kick"]
+    assert len(kicks) > 10
+    assert abs(tl2.tempo.bpm_at(1.0) - 136.0) < 0.1

@@ -140,14 +140,22 @@ class FeatureExtractor:
             return self.tl.tracks[n.track].group
         return "other"
 
-    def update(self, t: float, onsets: list[NoteEvent], curves: dict[str, float] | None = None) -> ControlFrame:
+    def update(self, t: float, onsets: list[NoteEvent], curves: dict[str, float] | None = None, *,
+               beat: float | None = None, tempo: float | None = None,
+               beats_per_bar: float | None = None) -> ControlFrame:
+        """``beat``/``tempo`` override the timeline's tempo map (live clock input)."""
         dt = max(1e-4, t - self.t) if self.t > 0 else 1.0 / 120.0
         self.t = t
         tl = self.tl
-        tempo = tl.tempo.bpm_at(t) if tl else 120.0
-        beat = tl.tempo.beats(t) if tl else t * tempo / 60.0
-        bpb = tl.tempo.beats_per_bar(beat) if tl else 4.0
-        bar, in_bar = (tl.tempo.bar_position(beat) if tl else (int(beat // bpb), beat % bpb))
+        if beat is None:
+            tempo = tl.tempo.bpm_at(t) if tl else (tempo or 120.0)
+            beat = tl.tempo.beats(t) if tl else t * tempo / 60.0
+            bpb = tl.tempo.beats_per_bar(beat) if tl else 4.0
+            bar, in_bar = (tl.tempo.bar_position(beat) if tl else (int(beat // bpb), beat % bpb))
+        else:
+            tempo = tempo or 120.0
+            bpb = beats_per_bar or 4.0
+            bar, in_bar = int(beat // bpb), beat % bpb
         # ---- decay envelopes
         for g in FEATURE_GROUPS:
             self.imp[g] *= math.exp(-dt / 0.09)

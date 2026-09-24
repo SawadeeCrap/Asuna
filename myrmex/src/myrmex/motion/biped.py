@@ -49,6 +49,57 @@ def rot_about(point: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
     return M
 
 
+STYLES: dict[str, dict] = {
+    "natural": {
+        "stance_width": 1.0,        # scale of the rest foot spacing (<0 = crossover steps)
+        "step_length": 1.0,
+        "toe_out": math.radians(4.0),
+        "heel_strike": math.radians(14.0),
+        "toe_off": math.radians(38.0),
+        "knee_softness": 0.03,
+        "pelvis_drop": 0.015,       # nominal knee flex (fraction of leg length)
+        "hip_rotation": math.radians(7.0),
+        "hip_drop": math.radians(5.0),
+        "lateral_sway": 0.45,       # fraction of half stance width
+        "hip_sway_m": 0.018,        # minimum lateral pelvis sway amplitude (m, for 1.7 m)
+        "pelvis_f": 1.4, "pelvis_zeta": 0.7,     # lateral / roll spring (hip "pop" when underdamped)
+        "arm_swing": math.radians(20.0),
+        "arm_hang": math.radians(9.0),
+        "arm_cross": 0.0,           # hands drift to the midline on the forward swing
+        "elbow_bend": math.radians(12.0),
+        "wrist_follow": 0.15,
+        "counter_rotation": 0.8,    # shoulders vs pelvis yaw (>1 = strong counter-twist)
+        "counter_tilt": 0.8,        # shoulders vs pelvis roll (>1 = S-curve)
+        "chest_out": 0.0,           # negative = arched back / chest forward
+        "chin": 0.0,
+        "swing_bulge": 0.0,         # m: swing foot passes outside the stance foot
+        "swing_frac": 0.4,          # swing share of a stride when steps are beat-locked
+        "bounce": 1.0,
+        "breath_rate": 0.24,
+        "micro": 1.0,
+    },
+    "heels": {
+        "heel_strike": math.radians(4.0), "toe_off": math.radians(26.0), "stance_width": 0.55,
+        "hip_rotation": math.radians(9.0), "hip_drop": math.radians(6.5), "step_length": 0.8,
+    },
+    "catwalk": {
+        "stance_width": -0.12, "step_length": 0.95, "toe_out": math.radians(7.0),
+        "hip_rotation": math.radians(13.0), "hip_drop": math.radians(9.0), "lateral_sway": 0.9,
+        "hip_sway_m": 0.045, "pelvis_f": 2.2, "pelvis_zeta": 0.42,
+        "arm_swing": math.radians(17.0), "arm_hang": math.radians(7.0), "arm_cross": 0.55,
+        "elbow_bend": math.radians(18.0), "wrist_follow": 0.6,
+        "counter_rotation": 1.25, "counter_tilt": 1.35, "chest_out": -0.06, "chin": 0.05,
+        "swing_bulge": 0.07, "swing_frac": 0.38, "bounce": 1.3,
+    },
+    "swagger": {
+        "stance_width": 0.9, "step_length": 1.05, "toe_out": math.radians(10.0),
+        "hip_rotation": math.radians(9.0), "hip_drop": math.radians(4.0), "hip_sway_m": 0.03,
+        "pelvis_f": 1.8, "pelvis_zeta": 0.5, "arm_swing": math.radians(26.0), "elbow_bend": math.radians(22.0),
+        "counter_rotation": 1.4, "counter_tilt": 0.9, "chest_out": -0.03, "bounce": 1.6, "wrist_follow": 0.4,
+    },
+}
+
+
 @dataclass
 class FootState:
     leg: LegPlan
@@ -76,6 +127,7 @@ class FootState:
     clearance: float = 0.08
     hold: float = 0.0                 # hesitation amount 0..1
     steps: int = 0
+    td_time: float | None = None      # scheduled touchdown time (beat-locked stepping)
 
     def rotation(self, yaw: float | None = None, pitch: float | None = None) -> np.ndarray:
         y = self.yaw if yaw is None else yaw
@@ -112,30 +164,18 @@ class BipedMotor:
         self.sk = plan.sk
         self.pose = Pose(self.sk)
         self.rng = RngStreams(seed)
-        self.style = {
-            "stance_width": 1.0,        # scale of the rest foot spacing
-            "step_length": 1.0,
-            "toe_out": math.radians(4.0),
-            "heel_strike": math.radians(14.0),
-            "toe_off": math.radians(38.0),
-            "knee_softness": 0.03,
-            "pelvis_drop": 0.015,       # nominal knee flex (fraction of leg length)
-            "hip_rotation": math.radians(7.0),
-            "hip_drop": math.radians(5.0),
-            "lateral_sway": 0.45,       # fraction of half stance width
-            "arm_swing": math.radians(20.0),
-            "arm_hang": math.radians(9.0),
-            "elbow_bend": math.radians(12.0),
-            "counter_rotation": 0.8,
-            "breath_rate": 0.24,
-            "micro": 1.0,
-        }
+        H = plan.height
+        self.style = dict(STYLES["natural"])
         if plan.high_heels:
-            self.style.update({"heel_strike": math.radians(4.0), "toe_off": math.radians(26.0),
-                               "stance_width": 0.55, "hip_rotation": math.radians(9.0),
-                               "hip_drop": math.radians(6.5), "step_length": 0.8})
+            self.style.update(STYLES["heels"])
+        preset = (style or {}).get("preset")
+        if preset:
+            self.style.update(STYLES[preset])
         if style:
-            self.style.update(style)
+            self.style.update({k: v for k, v in style.items() if k != "preset"})
+        self._style_target: dict | None = None
+        # Metre-valued style entries are defined for a 1.7 m character.
+        self._hscale = H / 1.7
         self.t = 0.0
         self.events: list[tuple[float, str, dict]] = []
         # ------------------------------------------------ root / locomotion state
@@ -165,10 +205,10 @@ class BipedMotor:
         # ------------------------------------------------ pelvis / body springs
         pe = plan.pelvis_height
         self.pelvis_z = SecondOrder(2.8, 0.8, 0.0, pe)
-        self.pelvis_lat = SecondOrder(1.4, 0.7, 0.0, 0.0)
+        self.pelvis_lat = SecondOrder(self.style["pelvis_f"], self.style["pelvis_zeta"], 0.0, 0.0)
         self.pelvis_fwd = SecondOrder(1.6, 0.8, 0.0, 0.0)
         self.pelvis_yaw = SecondOrder(1.6, 0.6, 0.0, 0.0)
-        self.pelvis_roll = SecondOrder(1.8, 0.55, 0.0, 0.0)
+        self.pelvis_roll = SecondOrder(self.style["pelvis_f"] * 1.2, self.style["pelvis_zeta"], 0.0, 0.0)
         self.pelvis_pitch = SecondOrder(1.5, 0.7, 0.0, 0.0)
         self.chest_rot = SecondOrder(1.5, 0.6, 0.0, np.zeros(3))      # (lean, side, twist)
         self.head_rot = SecondOrder(2.6, 0.62, 0.15, np.zeros(2))     # (yaw, pitch) relative to chest
@@ -188,7 +228,10 @@ class BipedMotor:
                                  delays={"p_lat": 0.0, "lean": 0.08, "side": 0.1, "twist": 0.12,
                                          "h_yaw": 0.22, "h_pitch": 0.2, "arm_l": 0.3, "arm_r": 0.33})
         self._arm_rest_abd = {s: self._rest_abduction(a) for s, a in plan.arms.items()}
+        self._wrist: dict[str, float] = {}
         self._step_len = 0.0
+        self._next_slot: float | None = None
+        self._slot_period = 0.0
         self._zlim_hist: list[tuple[float, float]] = []
         self._low_water = plan.pelvis_height
         self._last_pelvis_delta = np.eye(4)
@@ -231,8 +274,40 @@ class BipedMotor:
         return clamp(base / max(cmd.cadence_scale, 0.3), 0.22, 0.7)
 
     # ------------------------------------------------------------------ main update
+    def set_style(self, preset: str | None = None, overrides: dict | None = None) -> None:
+        """Change the walking style live; numeric parameters glide there over ~1 s."""
+        tgt = dict(STYLES["natural"])
+        if self.plan.high_heels:
+            tgt.update(STYLES["heels"])
+        if preset:
+            tgt.update(STYLES[preset])
+        if overrides:
+            tgt.update(overrides)
+        self._style_target = tgt
+
+    def _glide_style(self, dt: float) -> None:
+        tgt = self._style_target
+        if tgt is None:
+            return
+        a = 1.0 - math.exp(-dt / 0.35)
+        done = True
+        for k, v in tgt.items():
+            cur = self.style.get(k, v)
+            if isinstance(v, (int, float)) and isinstance(cur, (int, float)):
+                nv = cur + (v - cur) * a
+                done &= abs(nv - v) < 1e-4 * (1.0 + abs(v))
+                self.style[k] = nv
+            else:
+                self.style[k] = v
+        self.pelvis_lat.set_params(self.style["pelvis_f"], self.style["pelvis_zeta"], 0.0)
+        self.pelvis_roll.set_params(self.style["pelvis_f"] * 1.2, self.style["pelvis_zeta"], 0.0)
+        if done:
+            self._style_target = None
+
     def update(self, dt: float, cmd: MotionCommand) -> Pose:
         self.t += dt
+        self._glide_style(dt)
+        self._apply_impulses(cmd)
         self._update_root(dt, cmd)
         self._update_steps(dt, cmd)
         pelvis_D = self._update_pelvis(dt, cmd)
@@ -240,6 +315,23 @@ class BipedMotor:
         self._update_upper_body(dt, cmd, pelvis_D)
         self.pose.solve()
         return self.pose
+
+    def _apply_impulses(self, cmd: MotionCommand) -> None:
+        """Musical accents as physical kicks (velocity impulses) on body springs."""
+        for kind, val in cmd.impulses:
+            a = float(val) if not isinstance(val, np.ndarray) else 1.0
+            if kind == "hip_pop":
+                side = 1.0 if self.feet["l"].load >= 0.5 else -1.0
+                self.pelvis_lat.kick(side * 0.35 * a * self._hscale)
+                self.pelvis_roll.kick(side * 1.1 * a)
+                self.pelvis_yaw.kick(-side * 0.6 * a)
+            elif kind == "bounce":
+                self.impulse.kick(np.array([0.0, 0.0, -0.35 * a]))
+            elif kind == "twist":
+                self.chest_rot.kick(np.array([0.0, 0.0, a]))
+            elif isinstance(val, np.ndarray) and kind == "body":
+                self.impulse.kick(val)
+        cmd.impulses = []
 
     # ------------------------------------------------------------------ root
     def _update_root(self, dt: float, cmd: MotionCommand) -> None:
@@ -299,6 +391,10 @@ class BipedMotor:
         heel_td[2] = 0.0
         ankle_td = heel_td + R_td @ (f.leg.ankle - f.leg.heel)
         ankle = f.lo_ankle + (ankle_td - f.lo_ankle) * h
+        bulge = self.style["swing_bulge"] * self._hscale
+        if bulge > 0.0:
+            _, left_w = self.char_axes()
+            ankle = ankle + left_w * f.leg.sign * bulge * math.sin(math.pi * s) ** 1.5
         a_, b_ = 0.75, 1.25
         peak = (a_ / (a_ + b_)) ** a_ * (b_ / (a_ + b_)) ** b_
         lift = (s ** a_) * ((1.0 - s) ** b_) / peak
@@ -330,42 +426,90 @@ class BipedMotor:
         speed = self.speed_ref
         vdir = self.vel / speed if speed > 1e-4 else self.char_axes()[0]
         step_len = self.step_length(speed, cmd)
+        moving_cmd = abs(cmd.speed) > 0.05 or abs(cmd.lateral) > 0.05
+        locked = cmd.step_period is not None and cmd.step_period > 0.15 and cmd.step_ref is not None \
+            and (moving_cmd or speed > 0.12)
+        if locked:
+            # Step length follows from speed and the musical cadence.
+            step_len = max(0.35 * step_len, speed * float(cmd.step_period))
         self._step_len = step_len
         swinging = [f for f in self.feet.values() if not f.planted]
         # ---- advance swings
         for f in swinging:
             hold_target = 1.0 if cmd.hold_step else 0.0
             f.hold += (hold_target - f.hold) * min(1.0, dt * (12.0 if hold_target else 6.0))
-            rate = (1.0 - 0.97 * f.hold) / max(f.swing_T, 1e-3)
+            if f.hold > 0.05:
+                f.td_time = None
+            if f.td_time is not None:
+                remaining_t = f.td_time - self.t
+                rate = (1.0 - f.swing_t) / max(remaining_t + dt, dt) if remaining_t > 1e-9 else 1e9
+                rate = min(rate, 3.0 / max(f.swing_T, 1e-3))
+            else:
+                rate = (1.0 - 0.97 * f.hold) / max(f.swing_T, 1e-3)
             f.swing_t = min(1.0, f.swing_t + rate * dt)
             if f.swing_t < 0.72:
-                remaining = (1.0 - f.swing_t) * f.swing_T
+                remaining = (1.0 - f.swing_t) * f.swing_T if f.td_time is None else max(f.td_time - self.t, 0.0)
                 c, y = self._target_for(f, remaining, cmd, step_len, vdir)
                 k = min(1.0, dt * 10.0)
                 f.tgt_center = f.tgt_center + (c - f.tgt_center) * k
                 f.tgt_yaw = f.tgt_yaw + wrap_angle(y - f.tgt_yaw) * k
             if f.swing_t >= 1.0:
                 self._touchdown(f, cmd)
-        # ---- decide lift-off
         planted = [f for f in self.feet.values() if f.planted]
-        if len(planted) == 2 and not cmd.hold_step:
-            ds_min = clamp(0.16 - 0.1 * speed / max(math.sqrt(G * self.plan.leg_length), 1e-3), 0.05, 0.16)
-            candidates = []
-            for f in planted:
-                other = [o for o in planted if o is not f][0]
-                urgent = f.pivot == "ball" and f.pitch >= 0.92 * self.style["toe_off"] * 1.6
-                if self.t - other.touchdown_time < (0.4 * ds_min if urgent else ds_min):
-                    continue
-                if self.t - f.touchdown_time < 0.25:
-                    continue
-                need = self._need(f, cmd, step_len, vdir)
-                if f.pivot == "ball" and f.pitch >= 0.92 * self.style["toe_off"] * 1.6:
-                    need = max(need, 1.0)          # trailing leg at its limit: go now
-                candidates.append((need, f))
-            if candidates:
-                need, f = max(candidates, key=lambda x: x[0])
-                if need >= 1.0:
-                    self._liftoff(f, cmd, step_len, vdir)
+        if len(planted) != 2 or cmd.hold_step:
+            return
+        if locked:
+            self._locked_liftoff(cmd, step_len, vdir, planted)
+            return
+        self._next_slot = None
+        # ---- need-driven lift-off
+        ds_min = clamp(0.16 - 0.1 * speed / max(math.sqrt(G * self.plan.leg_length), 1e-3), 0.05, 0.16)
+        candidates = []
+        for f in planted:
+            other = [o for o in planted if o is not f][0]
+            urgent = f.pivot == "ball" and f.pitch >= 0.92 * self.style["toe_off"] * 1.6
+            if self.t - other.touchdown_time < (0.4 * ds_min if urgent else ds_min):
+                continue
+            if self.t - f.touchdown_time < 0.25:
+                continue
+            need = self._need(f, cmd, step_len, vdir)
+            if urgent:
+                need = max(need, 1.0)          # trailing leg at its limit: go now
+            candidates.append((need, f))
+        if candidates:
+            need, f = max(candidates, key=lambda x: x[0])
+            if need >= 1.0:
+                self._liftoff(f, cmd, step_len, vdir)
+
+    def _locked_liftoff(self, cmd: MotionCommand, step_len: float, vdir: np.ndarray, planted) -> None:
+        """Footfalls on a musical grid: lift so that the heel lands exactly on the next slot."""
+        period = float(cmd.step_period)
+        T_sw = clamp(self.style["swing_frac"] * 2.0 * period, 0.2, 0.55)
+        ref = float(cmd.step_ref) + float(cmd.step_offset)
+        if self._next_slot is not None:
+            # Re-sync when the grid changed (tempo / subdivision change).
+            phase_err = ((self._next_slot - ref) / period) % 1.0
+            if min(phase_err, 1.0 - phase_err) > 0.08 or abs(self._slot_period - period) > 1e-3:
+                self._next_slot = None
+        if self._next_slot is None or self._next_slot < self.t + 0.6 * T_sw:
+            k = math.ceil((self.t + T_sw - ref) / period)
+            self._next_slot = ref + k * period
+        self._slot_period = period
+        lift_at = self._next_slot - T_sw
+        trailing = min(planted, key=lambda f: f.touchdown_time)
+        other = planted[0] if planted[1] is trailing else planted[1]
+        urgent = trailing.pivot == "ball" and trailing.pitch >= 0.92 * self.style["toe_off"] * 1.6
+        if self.t < lift_at and not urgent:
+            return
+        if self.t - other.touchdown_time < 0.04 and not urgent:
+            return
+        need = self._need(trailing, cmd, step_len, vdir)
+        if need < 0.25 and self.speed_ref < 0.08:
+            self._next_slot += period          # nothing to do on this slot
+            return
+        remaining = max(self._next_slot - self.t, 0.18)
+        self._liftoff(trailing, cmd, step_len, vdir, swing_T=remaining, td_time=self.t + remaining)
+        self._next_slot += period
 
     def _target_for(self, f: FootState, horizon: float, cmd: MotionCommand, step_len: float,
                     vdir: np.ndarray) -> tuple[np.ndarray, float]:
@@ -399,7 +543,8 @@ class BipedMotor:
         C[2] = 0.0
         return C
 
-    def _liftoff(self, f: FootState, cmd: MotionCommand, step_len: float, vdir: np.ndarray) -> None:
+    def _liftoff(self, f: FootState, cmd: MotionCommand, step_len: float, vdir: np.ndarray,
+                 swing_T: float | None = None, td_time: float | None = None) -> None:
         D = f.delta()
         f.planted = False
         f.swing_t = 0.0
@@ -407,10 +552,14 @@ class BipedMotor:
         f.lo_yaw = f.yaw
         f.lo_pitch = f.pitch
         cur = D[:3, :3] @ f.C0 + D[:3, 3]
-        T_guess = self.swing_duration(cmd, step_len)
+        T_guess = swing_T if swing_T is not None else self.swing_duration(cmd, step_len)
         tc, ty = self._target_for(f, T_guess, cmd, step_len, vdir)
         dist = float(np.linalg.norm((tc - cur)[:2]))
-        f.swing_T = self.swing_duration(cmd, dist) * self.rng.stream(f"swing_{f.leg.side}").lognormal_factor(0.06)
+        if swing_T is not None:
+            f.swing_T = swing_T
+        else:
+            f.swing_T = self.swing_duration(cmd, dist) * self.rng.stream(f"swing_{f.leg.side}").lognormal_factor(0.06)
+        f.td_time = td_time
         f.tgt_center, f.tgt_yaw = tc, ty
         L = self.plan.leg_length
         f.clearance = (0.045 + 0.05 * cmd.energy) * cmd.step_height * (L / 0.85) \
@@ -431,10 +580,12 @@ class BipedMotor:
         f.set_pivot("heel", D)
         f.pivot_world[2] = 0.0
         f.touchdown_time = self.t
+        f.td_time = None
         f.steps += 1
         speed = self.speed_ref
         # Weight acceptance: a small vertical dip proportional to speed and energy.
-        self.impulse.kick(np.array([0.0, 0.0, -(0.05 + 0.25 * speed) * (0.4 + 0.6 * cmd.energy)]))
+        self.impulse.kick(np.array([0.0, 0.0, -(0.05 + 0.25 * speed) * (0.4 + 0.6 * cmd.energy)
+                                    * self.style["bounce"]]))
         self.events.append((self.t, "touchdown", {"foot": f.leg.side, "speed": speed}))
 
     # ------------------------------------------------------------------ pelvis
@@ -466,7 +617,8 @@ class BipedMotor:
         cr = self._foot_center_world(feet["r"])
         mid = 0.5 * (cl + cr)
         half_w = 0.5 * abs(float(np.dot(cl - cr, left)))
-        sway = (load_l - 0.5) * 2.0 * half_w * self.style["lateral_sway"] * (1.0 - 0.4 * cmd.tension)
+        sway_amp = max(half_w * self.style["lateral_sway"], self.style["hip_sway_m"] * self._hscale * cmd.hip_sway)
+        sway = (load_l - 0.5) * 2.0 * sway_amp * (1.0 - 0.4 * cmd.tension)
         mc = self.micro.sample(self.t)
         amp = self.style["micro"] * (0.4 + 0.6 * cmd.energy) * (1.0 + 0.8 * cmd.tension)
         lat_off = float(self.pelvis_lat.update(dt, sway + 0.004 * amp * mc["p_lat"]))
@@ -695,8 +847,9 @@ class BipedMotor:
         acc_lean = -0.03 * float(np.dot(self.vel_dyn.yd if isinstance(self.vel_dyn.yd, np.ndarray) else np.zeros(3),
                                         self.char_axes()[0]))
         target = np.array([
-            cmd.lean + 0.04 * self.speed_ref + acc_lean + 0.012 * breath + 0.015 * amp * mc["lean"],
-            cmd.side_lean + 0.8 * pel_roll + 0.012 * amp * mc["side"],
+            cmd.lean + self.style["chest_out"] + 0.04 * self.speed_ref + acc_lean + 0.012 * breath
+            + 0.015 * amp * mc["lean"],
+            cmd.side_lean - self.style["counter_tilt"] * pel_roll + 0.012 * amp * mc["side"],
             cmd.twist - self.style["counter_rotation"] * pel_yaw + 0.02 * amp * mc["twist"],
         ])
         self.chest_rot.set_params(1.2 + 1.2 * cmd.tension, 0.55 + 0.25 * cmd.tension, 0.0)
@@ -727,7 +880,7 @@ class BipedMotor:
             yaw_t = math.atan2(float(np.dot(local, left0)), float(np.dot(local, fwd0)))
             pitch_t = math.asin(clamp(float(local[2]), -1.0, 1.0))
             yaw_t = clamp(yaw_t + 0.03 * amp * mc["h_yaw"], -1.2, 1.2)
-            pitch_t = clamp(pitch_t + cmd.head_nod + 0.02 * amp * mc["h_pitch"], -0.6, 0.5)
+            pitch_t = clamp(pitch_t + cmd.head_nod + self.style["chin"] + 0.02 * amp * mc["h_pitch"], -0.6, 0.5)
             self.head_rot.set_params(2.0 + 2.2 * cmd.energy, 0.55 + 0.2 * cmd.tension, 0.1)
             hy, hp = self.head_rot.update(dt, np.array([yaw_t, pitch_t]))
             for name, frac in ((plan.neck, 0.4), (plan.head, 0.6)):
@@ -761,6 +914,9 @@ class BipedMotor:
             if arm.clavicle:
                 pose.set_rot(arm.clavicle, axis_angle_matrix(fwd0, sign * 0.18 * cmd.shoulder_raise
                                                              + sign * 0.02 * breath))
+            abd = abd - self.style["arm_cross"] * max(0.0, flex)
+            flex_v = float(self.arm_flex[s].yd)
+            self._wrist[s] = -self.style["wrist_follow"] * clamp(flex_v, -3.0, 3.0) * 0.12
             self._pose_arm(arm, flex, elbow, abd, sign)
             if gw > 0.01 and g is not None:
                 self._blend_gesture(arm, g, gw, dt)
@@ -771,7 +927,7 @@ class BipedMotor:
         R_up = axis_angle_matrix(sk.left, -flex) @ axis_angle_matrix(sk.forward, sign * abd)
         self.pose.set_rot(arm.upper, R_up)
         self.pose.set_rot(arm.lower, axis_angle_matrix(sk.left, -elbow))
-        self.pose.set_rot(arm.hand, axis_angle_matrix(sk.left, -0.25 * elbow))
+        self.pose.set_rot(arm.hand, axis_angle_matrix(sk.left, -0.25 * elbow - self._wrist.get(arm.side, 0.0)))
 
     def _blend_gesture(self, arm, g, gw: float, dt: float) -> None:
         pose, sk, plan = self.pose, self.sk, self.plan
@@ -797,44 +953,70 @@ class BipedMotor:
         pose.set_world_delta(arm.lower, Dl)
         pose.set_world_delta(arm.hand, Dl @ rot_about(arm.wrist, l0, -g.hand_pitch))
 
-    def _resolve_arm_collisions(self, arm, flex, elbow, abd, sign, gw) -> None:
+    def _collision_geometry(self, margin: float):
+        """World-space torso ellipses and thigh capsules for the current body pose (vectorised)."""
         plan, pose, sk = self.plan, self.pose, self.sk
+        geo = {}
+        if plan.ellipses:
+            D = pose.delta[[sk.index[e.bone] for e in plan.ellipses]]
+            R = D[:, :3, :3]
+            cen = np.array([e.center for e in plan.ellipses])
+            geo["e_c"] = np.einsum("eij,ej->ei", R, cen) + D[:, :3, 3]
+            geo["e_R"] = R
+            hl = np.array([e.half_left for e in plan.ellipses])
+            geo["e_hl"] = hl
+            geo["e_hlm"] = np.maximum(hl + margin, 1e-4)
+            geo["e_hfm"] = np.maximum(np.array([e.half_fwd for e in plan.ellipses]) + margin, 1e-4)
+        if plan.capsules:
+            D = pose.delta[[sk.index[c.bone] for c in plan.capsules]]
+            R = D[:, :3, :3]
+            a = np.einsum("cij,cj->ci", R, np.array([c.a for c in plan.capsules])) + D[:, :3, 3]
+            b = np.einsum("cij,cj->ci", R, np.array([c.b for c in plan.capsules])) + D[:, :3, 3]
+            geo["c_a"] = a
+            geo["c_ab"] = b - a
+            geo["c_ab2"] = np.maximum((geo["c_ab"] ** 2).sum(1), 1e-9)
+            geo["c_r"] = np.array([c.radius for c in plan.capsules]) + margin
+            geo["c_left"] = R @ sk.left
+        return geo
+
+    def _collision_push(self, geo: dict, P: np.ndarray, shoulder: np.ndarray, sign: float) -> float:
+        """Largest angular push (rad) needed to get the arm points ``P`` (N, 3) out of the body."""
+        sk, H = self.sk, self.plan.height
+        dist = np.maximum(np.linalg.norm(P - shoulder, axis=1), 1e-3)[:, None]
+        push = 0.0
+        if "e_c" in geo:
+            rel = np.einsum("eji,pej->pei", geo["e_R"], P[:, None, :] - geo["e_c"][None])
+            lx = rel @ sk.left
+            fx = rel @ sk.forward
+            rho = np.sqrt((lx / geo["e_hlm"]) ** 2 + (fx / geo["e_hfm"]) ** 2)
+            hit = (np.abs(rel[..., 2]) <= 0.03 * H) & (rho < 1.0) & (lx * sign > -0.3 * geo["e_hl"])
+            if hit.any():
+                push = max(push, float(np.max(np.where(hit, (1.0 - rho) * geo["e_hlm"] / dist, 0.0))))
+        if "c_a" in geo:
+            ap = P[:, None, :] - geo["c_a"][None]
+            tt = np.clip((ap * geo["c_ab"][None]).sum(2) / geo["c_ab2"][None], 0.0, 1.0)
+            dq = ap - geo["c_ab"][None] * tt[..., None]
+            d = np.linalg.norm(dq, axis=2)
+            r = geo["c_r"][None]
+            side_ok = (dq * geo["c_left"][None]).sum(2) * sign > -0.5 * r
+            hit = (d < r) & side_ok
+            if hit.any():
+                push = max(push, float(np.max(np.where(hit, (r - d) / dist, 0.0))))
+        return push
+
+    def _resolve_arm_collisions(self, arm, flex, elbow, abd, sign, gw) -> None:
+        plan, pose = self.plan, self.pose
         if not plan.ellipses and not plan.capsules:
             return
+        margin = 0.012 * plan.height
+        geo = None
         for _ in range(4):
             pose.solve()
-            push = 0.0
-            pts = [pose.world_head(arm.lower), pose.world_head(arm.hand),
-                   0.5 * (pose.world_head(arm.lower) + pose.world_head(arm.hand)),
-                   0.5 * (pose.world_head(arm.hand) + pose.world_tail(arm.hand)), pose.world_tail(arm.hand)]
-            shoulder = pose.world_head(arm.upper)
-            margin = 0.012 * plan.height
-            for p in pts:
-                for e in plan.ellipses:
-                    D = pose.delta[sk.index[e.bone]]
-                    c = D[:3, :3] @ e.center + D[:3, 3]
-                    Rl = D[:3, :3]
-                    rel = Rl.T @ (p - c)
-                    if abs(float(rel[2])) > 0.03 * plan.height:
-                        continue
-                    lx = float(np.dot(rel, sk.left))
-                    fx = float(np.dot(rel, sk.forward))
-                    rho = math.sqrt((lx / max(e.half_left + margin, 1e-4)) ** 2 + (fx / max(e.half_fwd + margin, 1e-4)) ** 2)
-                    if rho < 1.0 and lx * sign > -0.3 * e.half_left:
-                        depth = (1.0 - rho) * (e.half_left + margin)
-                        push = max(push, depth / max(float(np.linalg.norm(p - shoulder)), 1e-3))
-                for cap in plan.capsules:
-                    D = pose.delta[sk.index[cap.bone]]
-                    a = D[:3, :3] @ cap.a + D[:3, 3]
-                    b = D[:3, :3] @ cap.b + D[:3, 3]
-                    ab = b - a
-                    tt = clamp(float(np.dot(p - a, ab)) / max(float(np.dot(ab, ab)), 1e-9), 0.0, 1.0)
-                    q = a + ab * tt
-                    d = float(np.linalg.norm(p - q))
-                    r = cap.radius + margin
-                    side_ok = float(np.dot(p - q, D[:3, :3] @ sk.left)) * sign > -0.5 * r
-                    if d < r and side_ok:
-                        push = max(push, (r - d) / max(float(np.linalg.norm(p - shoulder)), 1e-3))
+            if geo is None:
+                geo = self._collision_geometry(margin)   # body bones do not move while the arm is re-posed
+            lo, ha, ht = pose.world_head(arm.lower), pose.world_head(arm.hand), pose.world_tail(arm.hand)
+            P = np.array([lo, ha, 0.5 * (lo + ha), 0.5 * (ha + ht), ht])
+            push = self._collision_push(geo, P, pose.world_head(arm.upper), sign)
             if push < 1e-4:
                 break
             abd = abd + push * 1.1

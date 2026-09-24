@@ -1,6 +1,8 @@
 """Build a Blender armature from a :class:`myrmex.rig.rigdesc.RigDescription`."""
 from __future__ import annotations
 
+import json
+
 import bpy
 from mathutils import Vector
 
@@ -46,4 +48,6 @@ def build_armature(rd: RigDescription, name: str = "MyrmexRig",
         pb.rotation_mode = "QUATERNION"
     obj["myrmex_rig"] = True
     obj["myrmex_body_plan"] = rd.body_plan
+    # The .blend carries its own rig description: the live engine can start from the armature alone.
+    obj["myrmex_rig_desc"] = json.dumps(rd.to_dict())
     return obj

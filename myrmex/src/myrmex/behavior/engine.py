@@ -29,6 +29,7 @@ from .groove import GrooveOscillator
 from .mapping import DEFAULT_MAPPINGS, MappingSet
 from .novelty import RecencyTracker
 from .reactions import Reactions
+from .runway import RunwayDirector
 from .vocab_biped import SECTION_STRATEGIES, STRATEGIES, VOCABULARY, Ctx
 
 SMOOTH_FIELDS = {"crouch": 0.12, "rise": 0.15, "lean": 0.18, "side_lean": 0.18, "twist": 0.15,
@@ -39,6 +40,8 @@ SMOOTH_FIELDS = {"crouch": 0.12, "rise": 0.15, "lean": 0.18, "side_lean": 0.18, 
 
 @dataclass
 class EngineConfig:
+    mode: str = "runway"            # runway (continuous beat-locked walking) | free (wander / dance in place)
+    style: str = "catwalk"          # motor style preset used by the generator in runway mode
     stage_radius: float = 3.0
     variation: float = 0.5          # 0 = predictable, 1 = adventurous choices
     novelty: float = 0.6            # strength of the anti-repetition penalty
@@ -70,7 +73,8 @@ class BehaviorEngine:
         self.mapping = MappingSet.from_dict(self.cfg.mappings)
         self.groove = GrooveOscillator(self.rs.stream("groove"))
         self.gaze = Gaze(self.rs.stream("gaze"), 0.93 * height, FEATURE_GROUPS)
-        self.reactions = Reactions(self.rs.stream("reactions"))
+        self.reactions = Reactions(self.rs.stream("reactions"), mode=self.cfg.mode)
+        self.runway = RunwayDirector(self.rs.stream("runway"), height, psi0, seed) if self.cfg.mode == "runway" else None
         self.beh_hist = RecencyTracker(half_life=25.0, strength=1.0)
         self.strat_hist = RecencyTracker(half_life=60.0, strength=0.8)
         self.gesture_hist = RecencyTracker(half_life=30.0, strength=1.2)
@@ -179,6 +183,9 @@ class BehaviorEngine:
         # ---------------- strategy (slow layer)
         new_section = section != self.section
         self.section = section
+        if self.runway is not None:
+            return self._update_runway(ctx, dt, mods, onsets, events, motor_pos, motor_psi, motor_speed,
+                                       anticipation)
         phrase = any(e.type in ("phrase", "drop", "break") for e in events)
         if new_section or (phrase and d.boredom > 0.35) or self.behavior is None or \
                 (t - self.strategy_t0 > 45.0 and d.boredom > 0.6):
@@ -262,6 +269,48 @@ class BehaviorEngine:
         self.last_cmd = cmd
         return cmd
 
+    def _update_runway(self, ctx: Ctx, dt: float, mods: dict, onsets, events, motor_pos, motor_psi,
+                       motor_speed, anticipation) -> MotionCommand:
+        d, t, fr = self.drives, ctx.t, ctx.fr
+        self.strategy = "runway"
+        for e in events:
+            if e.type == "entry" and e.group:
+                self.gaze.orient(t, e.group, 0.4 * e.strength)
+                d.attention = min(1.0, d.attention + 0.3 * e.strength)
+        cmd = MotionCommand()
+        cmd.energy = clamp(0.3 + 0.65 * d.arousal + mods.get("energy", 0.0), 0.0, 1.0)
+        cmd.tension = clamp(0.1 + 0.35 * d.tension + 0.2 * d.startle + mods.get("tension", 0.0), 0.0, 0.8)
+        cmd.sharpness = clamp(0.4 + 0.5 * d.arousal + mods.get("sharpness", 0.0), 0.0, 1.0)
+        cmd.crouch = 0.35 * mods.get("crouch", 0.0)
+        self.runway.apply(ctx, cmd, events, self.structure)
+        cmd.hip_sway *= mods.get("hip_sway", 1.0)
+        cmd.arm_swing *= mods.get("arm_swing", 1.0)
+        R = rot_z(wrap_angle(motor_psi))
+        fwd = R @ np.array([1.0, 0.0, 0.0])
+        left = R @ np.array([0.0, 1.0, 0.0])
+        gt = self.gaze.world_target(np.array([motor_pos[0], motor_pos[1], 0.0]), fwd, left)
+        gt[2] += float(mods.get("gaze_height", 0.0)) * 0.3
+        cmd.gaze_target = gt
+        cmd.gaze_weight = 0.9
+        self._smooth_cmd(cmd, dt)
+        for group, vel, sur in onsets:
+            self.reactions.trigger(t, group, vel, sur, d, mods, self.gaze,
+                                   anticipated=(anticipation or {}).get(group, 0.0))
+        self.reactions.update(t, dt)
+        self.reactions.apply(t, cmd, None, 0.0)
+        cmd.crouch = clamp(cmd.crouch, 0.0, 0.5)
+        cmd.shoulder_raise = clamp(cmd.shoulder_raise, 0.0, 1.0)
+        cmd.weight_bias = clamp(cmd.weight_bias, -1.0, 1.0)
+        label = "pose" if not self.runway.walking else ("strut:" + (self.runway.flourish.kind
+                                                                   if self.runway.flourish else "walk"))
+        if not self.log or self.log[-1][2] != label:
+            self.log.append((t, "runway", label))
+        self._runway_label = label
+        self.last_cmd = cmd
+        return cmd
+
     @property
     def behavior_name(self) -> str:
+        if self.runway is not None:
+            return getattr(self, "_runway_label", "strut")
         return self.behavior.name if self.behavior else ""

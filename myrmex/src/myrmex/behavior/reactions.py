@@ -31,10 +31,23 @@ POOLS = {
     "fx": [("flinch", 1.0), ("orient", 1.0), ("twist", 0.3)],
 }
 
+RUNWAY_POOLS = {
+    "kick": [("dip", 1.0)],
+    "snare": [("hip_pop", 1.0), ("shrug", 0.25)],
+    "hats": [("shimmy", 0.6), ("nod", 0.15)],
+    "perc": [("shimmy", 0.5), ("tilt", 0.4)],
+    "bass": [("dip", 0.5)],
+    "melody": [("tilt", 0.5), ("orient", 0.3)],
+    "harmony": [("breath", 0.5)],
+    "texture": [("breath", 0.5)],
+    "fx": [("orient", 1.0), ("tilt", 0.4)],
+}
+
 SHAPES = {   # attack, decay (s)
     "dip": (0.035, 0.16), "nod": (0.04, 0.2), "jolt": (0.025, 0.14), "shrug": (0.05, 0.25),
     "twist": (0.04, 0.22), "sway": (0.08, 0.35), "tilt": (0.07, 0.4), "flinch": (0.03, 0.45),
     "orient": (0.0, 0.0), "breath": (0.4, 1.2), "freeze": (0.02, 0.5),
+    "hip_pop": (0.0, 0.0), "shimmy": (0.03, 0.18),
 }
 
 
@@ -68,10 +81,13 @@ class Reactions:
     last_time: dict = field(default_factory=dict)
     vel_mean: dict = field(default_factory=dict)
     count: int = 0
+    mode: str = "free"
+    pending_impulses: list = field(default_factory=list)
 
     def trigger(self, t: float, group: str, velocity: float, surprise: float, drives, mods: dict,
                 gaze=None, anticipated: float = 0.0) -> str | None:
-        if group not in POOLS:
+        pools = RUNWAY_POOLS if self.mode == "runway" else POOLS
+        if group not in pools:
             return None
         vm = self.vel_mean.get(group, velocity)
         accent = clamp((velocity - vm) / max(vm, 0.1), 0.0, 1.0)
@@ -85,10 +101,10 @@ class Reactions:
         if not self.rng.chance(p):
             return None
         gain = self.habituation.stimulate(group, surprise)
-        pool = POOLS[group]
+        pool = pools[group]
         weights = [w * self.recency.penalty(t, f"{group}:{k}") for k, w in pool]
         kind = pool[self.rng.weighted_index(weights)][0]
-        if surprise > 0.6 and group in ("fx", "perc", "snare"):
+        if surprise > 0.6 and group in ("fx", "perc", "snare") and self.mode != "runway":
             kind = "flinch"
         amp = clamp(salience * gain * (0.6 + 0.6 * drives.arousal) * resp, 0.0, 1.3)
         # Anticipated hits get a smaller, better-timed response (the body was ready).
@@ -101,6 +117,12 @@ class Reactions:
         if kind == "orient":
             if gaze is not None:
                 gaze.orient(t, group, salience)
+            return kind
+        if kind == "hip_pop":
+            self.pending_impulses.append(("hip_pop", amp))
+            return kind
+        if kind == "dip" and self.mode == "runway":
+            self.pending_impulses.append(("bounce", 0.6 * amp))
             return kind
         self.active.append(Active(kind, t, amp, sign, delay))
         if kind == "flinch" and gaze is not None:
@@ -145,7 +167,13 @@ class Reactions:
                 cmd.head_nod += 0.03 * v
             elif k == "freeze":
                 cmd.tension = max(cmd.tension, 0.5 + 0.5 * v)
-                cmd.speed *= 1.0 - 0.7 * v
+                if self.mode != "runway":
+                    cmd.speed *= 1.0 - 0.7 * v
+            elif k == "shimmy":
+                cmd.twist += 0.06 * v * a.sign * math.cos(30.0 * (t - a.t0))
+        if self.pending_impulses:
+            cmd.impulses.extend(self.pending_impulses)
+            self.pending_impulses = []
         # Anticipatory preparation: a slight pre-load before strongly expected low hits.
         if anticipation and groove > 0.2:
             pre = max(anticipation.get("kick", 0.0), 0.6 * anticipation.get("snare", 0.0))

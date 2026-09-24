@@ -32,6 +32,9 @@ class MotionCommand:
     step_height: float = 1.0        # foot clearance multiplier
     sharpness: float = 0.5          # 0 = soft/lazy easing, 1 = crisp/snappy
     hold_step: bool = False         # hesitation: freeze a swinging foot mid-air
+    step_period: float | None = None  # beat-locked stepping: seconds between footfalls (None = need-driven)
+    step_ref: float | None = None     # an absolute time on the footfall grid (e.g. a beat time)
+    step_offset: float = 0.0          # micro-timing of footfalls (+ = laid back)
     # ------------------------------------------------------------ posture
     crouch: float = 0.0             # 0..1 bend knees / lower the pelvis
     rise: float = 0.0               # 0..1 rise onto the toes / stretch tall

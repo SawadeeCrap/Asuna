@@ -90,6 +90,9 @@ class Pose:
         self.override = [None] * n                           # absolute world deltas (IK results)
         self.root_delta = np.eye(4)                          # delta applied to parentless bones
         self.delta = np.tile(np.eye(4), (n, 1, 1))
+        self._local = np.tile(np.eye(4), (n, 1, 1))
+        self._order = [int(i) for i in sk.order]
+        self._parents = [int(p) for p in sk.parents]
 
     def reset(self) -> None:
         self.local_rot[:] = np.eye(3)
@@ -109,19 +112,20 @@ class Pose:
 
     def solve(self) -> np.ndarray:
         sk = self.sk
-        for i in sk.order:
-            if self.override[i] is not None:
-                self.delta[i] = self.override[i]
+        Q = self.local_rot
+        # Local deltas for all bones at once: rotate about the bone head.
+        local = self._local
+        local[:, :3, :3] = Q
+        local[:, :3, 3] = sk.heads - np.einsum("bij,bj->bi", Q, sk.heads)
+        delta = self.delta
+        for i in self._order:
+            ov = self.override[i]
+            if ov is not None:
+                delta[i] = ov
                 continue
-            p = int(sk.parents[i])
-            parent = self.root_delta if p < 0 else self.delta[p]
-            h = sk.heads[i]
-            Q = self.local_rot[i]
-            local = np.eye(4)
-            local[:3, :3] = Q
-            local[:3, 3] = h - Q @ h
-            self.delta[i] = parent @ local
-        return self.delta
+            p = self._parents[i]
+            np.matmul(self.root_delta if p < 0 else delta[p], local[i], out=delta[i])
+        return delta
 
     def world_matrices(self) -> np.ndarray:
         return np.einsum("bij,bjk->bik", self.delta, self.sk.rest)
