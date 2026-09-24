@@ -80,6 +80,9 @@ class MYRMEX_OT_live_start(bpy.types.Operator):
         s = context.scene.myrmex_live
         arm = s.armature or (context.object if context.object and context.object.type == "ARMATURE" else None)
         if arm is None:
+            # The character prepared by prepare_character.py carries its rig description.
+            arm = next((o for o in bpy.data.objects if o.type == "ARMATURE" and o.get("myrmex_rig")), None)
+        if arm is None:
             self.report({"ERROR"}, "Pick the character's armature first")
             return {"CANCELLED"}
         s.armature = arm

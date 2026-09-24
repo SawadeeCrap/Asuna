@@ -33,7 +33,9 @@ VCV Rack 2 ───MIDI (IAC) / OSC──────────────�
 | Ableton Live 11/12 и/или VCV Rack 2 | источник музыки |
 | BlackHole 2ch (необязательно) | если сет собран из аудиоклипов и нужно «слушать» мастер |
 
-Установка движка (один раз, в Терминале):
+Всё ставится одной командой: `bash tools/mac_setup.sh`. Скрипт создаёт окружение
+Python 3.12, ставит зависимости, подключает аддон Blender и копирует Remote Script
+в библиотеку Ableton. Вручную то же самое:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh           # менеджер Python (или: brew install uv)

@@ -64,8 +64,10 @@ class LiveCinematographer:
             st = SHOTS[k]
             fit = 1.0 if st.energy[0] <= energy <= st.energy[1] else 0.4
             pen = 0.0 if k == self.kind else (0.55 if k in self.recent[-3:] else 1.0)
-            if self.kind and "close" in self.kind and "close" in k:
-                pen *= 0.3
+            if "close" in k:
+                pen *= 0.6                       # live: the walk is the star, close-ups are accents
+                if self.kind and "close" in self.kind:
+                    pen *= 0.3
             names.append(k)
             w.append(base * fit * pen)
         if sum(w) <= 0:
@@ -80,9 +82,12 @@ class LiveCinematographer:
         self.shot_id += 1
         self.shot_start_t = t
         self.shot_start_bar = bar
-        energetic = label in ("drop", "peak", "return")
-        hi = max(self.bars_min, self.bars_max - (2 if energetic else 0))
-        self.shot_len_bars = self.rng.randint(self.bars_min, hi)
+        energetic = label in ("drop", "peak", "return") or energy > 0.7
+        if "close" in self.kind:
+            self.shot_len_bars = self.rng.randint(1, 2)                 # accents, not the whole chorus
+        else:
+            hi = max(self.bars_min, self.bars_max - (2 if energetic else 0))
+            self.shot_len_bars = self.rng.randint(self.bars_min, hi)
         self.pending_cut = False
         self._snap = True
 
