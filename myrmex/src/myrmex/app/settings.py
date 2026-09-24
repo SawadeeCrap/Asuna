@@ -25,6 +25,19 @@ def characters_dir() -> str:
     return d
 
 
+def _user_copy(blend: str) -> str:
+    """Inside Myrmex.app the bundled character is copied to ~/Myrmex once, so edits live outside the app."""
+    import shutil
+    dst = os.path.join(characters_dir(), "humanoid_live.blend")
+    try:
+        if not os.path.exists(dst):
+            shutil.copy2(blend, dst)
+            shutil.copy2(os.path.splitext(blend)[0] + ".rig.json", os.path.splitext(dst)[0] + ".rig.json")
+        return dst
+    except OSError:
+        return blend
+
+
 @dataclass
 class AppSettings:
     # character / blender
@@ -69,6 +82,10 @@ class AppSettings:
             pass
         if not s.record_dir:
             s.record_dir = os.path.join(characters_dir(), "takes")
+        if not os.path.exists(s.character):
+            s.character = DEFAULT_CHARACTER
+        if os.environ.get("MYRMEX_BUNDLE") and os.path.abspath(s.character) == os.path.abspath(DEFAULT_CHARACTER):
+            s.character = _user_copy(DEFAULT_CHARACTER)
         return s
 
     def save(self) -> None:
