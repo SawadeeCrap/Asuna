@@ -216,7 +216,7 @@ def test_recorded_take_keeps_live_camera_and_audio_alignment(biped_plan, tmp_pat
 def test_myrmex_track_knobs_and_choreography_notes(biped_plan):
     rs = _remote_script()
     assert rs.macro_role("Energy", 5) == "energy" and rs.macro_role("Macro 2", 1) == "stride"
-    assert rs.macro_role("Камера", 0) == "camera" and rs.macro_role("Filter", 0) is None
+    assert rs.macro_role("Камера", 0) == "camera" and rs.macro_role("Aggression", 0) == "aggression"
 
     class P:
         min, max, value = 0.0, 127.0, 0.0

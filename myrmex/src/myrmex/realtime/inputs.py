@@ -29,6 +29,7 @@ import numpy as np
 from ..bus.transport import DEFAULT_PORT, LiveEvent, OscInput
 from ..music.timeline import NoteEvent
 from .clock import ClockHub, ClockState
+from .midimap import MidiMapper, MidiMonitor
 
 GROUPS = ("kick", "snare", "hats", "perc", "bass", "melody", "harmony", "texture", "fx")
 
@@ -155,6 +156,8 @@ class InputHub:
         self.score = ScoreFollower()
         self._open: dict[tuple[int, float], NoteEvent] = {}
         self._osc_state: dict[str, float] = {}
+        self.midimap = MidiMapper(self.cfg.mapping.get("midi_bindings", []))
+        self.monitor = MidiMonitor()
         self.stats = {"notes": 0, "osc_packets": 0, "midi_events": 0, "last_note": -1e9, "errors": []}
         if start:
             self.start()
@@ -260,6 +263,27 @@ class InputHub:
             if k == "clock":
                 self.stats["midi_events"] += 1
             return None
+        if k == "note" and d.get("channel"):
+            ch, num, vel = int(d["channel"]), float(d["pitch"]), float(d["velocity"])
+            if self.midimap.learn("note", ch, int(num)):
+                self.monitor.add("note", ch, int(num), vel, "learned")
+                return None
+            acts = self.midimap.note(ch, int(num), vel, True)
+            group_override = None
+            for act, target, v in acts:
+                if act == "trigger":
+                    self.triggers.append((target, t))
+                elif act == "control":
+                    self._set_control(target, v, t)
+                elif act == "group":
+                    group_override = target
+            mapped = ", ".join(tg for _, tg, _ in acts)
+            if acts and group_override is None:
+                self.monitor.add("note", ch, int(num), vel, "→ " + mapped)
+                return None                                   # a command, not music
+            group = group_override or self.group_for_midi(ch, num)
+            self.monitor.add("note", ch, int(num), vel, f"→ {mapped or 'music: ' + group}")
+            d = dict(d, group=group)
         if k == "note":
             ch = int(d.get("channel", 0))
             group = d.get("group") or (self.group_for_midi(ch, d["pitch"]) if ch else "perc")
@@ -271,6 +295,9 @@ class InputHub:
             self.stats["midi_events"] += 1
             return n
         if k == "note_off":
+            for act, target, v in self.midimap.note(int(d.get("channel", 0)), int(float(d["pitch"])), 0.0, False):
+                if act == "control":
+                    self._set_control(target, v, t)
             n = self._open.pop((int(d.get("channel", 0)), float(d["pitch"])), None)
             if n is not None:
                 n.duration = max(0.02, t - n.time)
@@ -287,9 +314,20 @@ class InputHub:
             return NoteEvent(t, 0.1, float(d.get("pitch", 60.0)), float(d["velocity"]), "hit",
                              group=g, sharpness=float(d.get("sharpness", 0.8)))
         if k == "cc":
-            name = self.cfg.mapping["midi_cc"].get(str(d["control"]))
-            if name:
-                self._set_control(name, float(d["value"]), t)
+            ch, num, val = int(d.get("channel", 0)), int(d["control"]), float(d["value"])
+            if self.midimap.learn("cc", ch, num):
+                self.monitor.add("cc", ch, num, val, "learned")
+                return None
+            acts = self.midimap.cc(ch, num, val)
+            for _, target, v in acts:
+                self._set_control(target, v, t)
+            if not acts:                                      # default table (see DEFAULT_CONFIG["midi_cc"])
+                name = self.cfg.mapping["midi_cc"].get(str(num))
+                if name:
+                    self._set_control(name, val, t)
+                self.monitor.add("cc", ch, num, val, f"→ {name} (default)" if name else "unmapped")
+            else:
+                self.monitor.add("cc", ch, num, val, "→ " + ", ".join(f"{tg}={v:.2f}" for _, tg, v in acts))
             return None
         if k in ("cv", "control"):
             self._set_control(str(d["name"]), float(d["value"]), t)

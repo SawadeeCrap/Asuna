@@ -1,0 +1,167 @@
+"""Black Nanomaterial Creature: control input, dynamics, material conservation, morphology, behaviour,
+determinism, protocol, live-session backend, manual camera and MIDI mapping."""
+import math
+
+import numpy as np
+import pytest
+
+from myrmex.bus.transport import LiveEvent
+from myrmex.creature import CreatureConfig, CreatureControlInput, CreatureEngine
+from myrmex.creature.control import ParameterSet
+from myrmex.creature.nodes import NodeSystem
+from myrmex.creature.protocol import decode_creature, encode_creature
+from myrmex.realtime.inputs import InputConfig
+from myrmex.realtime.midimap import MidiBinding, MidiMapper
+from myrmex.realtime.session import LiveConfig, LiveSession
+
+
+def music(t, on=True):
+    beat = t * 2.0
+    kick = 1.0 if on and (beat % 1.0) < 0.04 else 0.0
+    return CreatureControlInput(bass=0.8 * on, high=0.5 * on, energy=0.85 * on, transient=kick, spectral_flux=0.4 * on,
+                                amplitude=0.7 * on, tempo=120, beat=beat, beat_phase=beat % 1, playing=on)
+
+
+def run(e, seconds, on=True, dt=1 / 60):
+    out = []
+    for i in range(int(seconds / dt)):
+        e.set_input(music(e.t, on))
+        out.append(e.update(dt))
+    return out
+
+
+def test_input_is_normalised_and_extremes_are_safe():
+    x = CreatureControlInput(bass=5.0, high=-3, energy=float("nan"), transient=float("inf"), tempo=0, beat=float("nan"))
+    s = x.sanitized()
+    assert s.bass == 1.0 and s.high == 0.0 and s.energy == 0.0 and s.transient == 0.0 and s.tempo == 120.0
+    e = CreatureEngine(CreatureConfig(seed=1))
+    e.set_input(CreatureControlInput(bass=1e9, transient=1e9, energy=-1e9, spectral_flux=1e9))
+    for _ in range(300):
+        st = e.update(1 / 60)
+    assert np.isfinite(st.pos).all() and np.isfinite(st.radius).all()
+    assert e.update(float("nan")).t == st.t                # a bad dt is ignored, not propagated
+
+
+def test_parameters_manual_override_and_back_to_auto():
+    p = ParameterSet()
+    auto = p["aggression"]
+    assert p.set("aggression", 0.9) and p["aggression"] == 0.9
+    p.set("aggression", -1)
+    assert p["aggression"] == auto
+    assert not p.set("not_a_param", 0.5)
+
+
+def test_same_seed_same_performance_other_seed_differs():
+    a, b, c = (CreatureEngine(CreatureConfig(seed=s)) for s in (4, 4, 5))
+    for e in (a, b, c):
+        run(e, 6.0)
+    assert np.array_equal(a.nodes.pos, b.nodes.pos)
+    assert not np.allclose(a.nodes.pos, c.nodes.pos)
+
+
+def test_spring_node_has_inertia_overshoot_and_settles():
+    n = NodeSystem(1)
+    n.freq[:], n.zeta[:], n.radius[:] = 1.5, 0.35, 0.1
+    n.pos[:] = n.target[:] = [0, 0, 1.0]
+    n.target[0, 0] = 1.0                                  # sudden input change
+    xs = []
+    for _ in range(600):
+        n.step(1 / 120, 0.0, 50.0, ground=False)
+        xs.append(n.pos[0, 0])
+    xs = np.array(xs)
+    assert np.max(np.abs(np.diff(xs))) < 0.1               # no teleport (a jump would be 1.0)
+    assert xs.max() > 1.02                                 # overshoot (underdamped)
+    assert abs(xs[-1] - 1.0) < 0.01                        # settles
+
+
+def test_material_is_conserved_and_appendages_take_it_from_the_core():
+    e = CreatureEngine(CreatureConfig(seed=2))
+    run(e, 2.0, on=False)
+    core0 = e.vol["core"]
+    e.trigger_event("APPENDAGE_BURST", "WHIP")
+    e.trigger_event("APPENDAGE_BURST", "TENDRIL")
+    states = run(e, 3.0, on=False)
+    tot = [s.volumes["total"] for s in states]
+    assert max(abs(x - 1.0) for x in tot) < 1e-9
+    assert states[-1].volumes["appendages"] > 0.005 and states[-1].volumes["core"] < core0
+    assert len(e.apps.active) >= 1
+
+
+def test_morphology_transitions_are_continuous():
+    e = CreatureEngine(CreatureConfig(seed=3))
+    e.morph.set_target("AERODYNAMIC", 0.0, 2.0)
+    vs = [e.morph.update(t, 0.0, 0.0).copy() for t in np.arange(0, 2.5, 1 / 60)]
+    steps = np.abs(np.diff(np.array(vs), axis=0)).max()
+    assert steps < 0.05 and abs(vs[-1][1] - 2.4) < 1e-6    # smooth, arrives at the elongated target
+
+
+def test_behaviour_changes_state_with_music_and_is_not_frozen_in_silence():
+    e = CreatureEngine(CreatureConfig(seed=6))
+    quiet = run(e, 10.0, on=False)
+    loud = run(e, 40.0, on=True)
+    assert len({s.behavior for s in loud}) >= 3
+    assert loud[-1].arousal > quiet[-1].arousal
+    # idle is alive: the surface nodes keep moving even in silence
+    d = np.linalg.norm(quiet[-1].pos[e.i_secondary] - quiet[-30].pos[e.i_secondary], axis=1)
+    assert d.max() > 1e-3
+
+
+def test_protocol_roundtrip():
+    e = CreatureEngine(CreatureConfig(seed=1))
+    s = run(e, 1.0)[-1]
+    fr = decode_creature(encode_creature(s, 7, 12.5, 124.0, 16))
+    assert fr.seq == 7 and fr.behavior == s.behavior and fr.flags & 16
+    assert np.allclose(fr.pos, s.pos, atol=1e-5) and np.allclose(fr.radius, s.radius, atol=1e-6)
+    assert decode_creature(b"junk") is None
+
+
+def test_live_session_creature_backend_runs_without_blender_or_ableton(tmp_path):
+    cfg = LiveConfig(backend="creature", clock="internal", link=False, out=["127.0.0.1:9"], latency=0.0,
+                     record=str(tmp_path), inputs=InputConfig(osc_port=0))
+    s = LiveSession(cfg, start_inputs=False, now=0.0)       # nobody listens on port 9: must not fail
+    s.inputs.push(LiveEvent("control", 0.0, {"name": "aggression", "value": 0.95}))
+    for i in range(1, 600):
+        if i % 60 == 0:
+            s.inputs.push(LiveEvent("note", 0.0, {"channel": 1, "pitch": 36.0, "velocity": 1.0}))
+        s.step(i / 120)
+    assert s.creature.engine.params["aggression"] == pytest.approx(0.95)
+    assert s.sink.sent > 50 and s.status()["backend"] == "creature"
+    assert s.save_take() is not None
+
+
+def test_manual_camera_holds_the_chosen_shot():
+    cfg = LiveConfig(backend="creature", clock="internal", bpm=120, link=False, out=[], latency=0.0,
+                     inputs=InputConfig(osc_port=0))
+    s = LiveSession(cfg, start_inputs=False, now=0.0)
+    s.inputs.push(LiveEvent("control", 0.0, {"name": "cam_mode", "value": 1.0}))
+    s.inputs.push(LiveEvent("trigger", 0.0, {"name": "camera:feet_close"}))
+    kinds = set()
+    for i in range(1, 120 * 20):                          # 20 s = 10 bars at 120 BPM
+        s.step(i / 120)
+        if i > 60 and s.camera.kind:
+            kinds.add(s.camera.kind)
+    assert kinds == {"feet_close"}
+
+
+def test_midi_mapping_curves_ranges_modes_and_learn():
+    m = MidiMapper([MidiBinding("cc", 74, 0, "aggression", 0.2, 0.8, "exp", False),
+                    MidiBinding("note", 36, 10, "creature:collapse", mode="trigger"),
+                    MidiBinding("note", 38, 0, "hold", mode="gate")])
+    (a, tgt, v), = m.cc(3, 74, 0.5)
+    assert tgt == "aggression" and v == pytest.approx(0.2 + 0.6 * 0.25)
+    assert m.note(1, 36, 1.0, True) == []                  # wrong channel
+    assert m.note(10, 36, 1.0, True) == [("trigger", "creature:collapse", 1.0)]
+    assert m.note(2, 38, 0.7, False) == [("control", "hold", 0.0)]
+    m.learning = 0
+    assert m.learn("cc", 5, 21) and m.bindings[0].number == 21 and m.bindings[0].channel == 5
+
+
+def test_stress_long_performance_stays_stable():
+    e = CreatureEngine(CreatureConfig(seed=9))
+    for k in range(6):
+        run(e, 10.0, on=k % 2 == 0)
+        e.trigger_event(["COLLAPSE", "RECONSTRUCTION", "APPENDAGE_BURST", "MASS_REBALANCE", "MORPHOLOGY_SHIFT",
+                         "COLLAPSE"][k])
+    st = e.state()
+    assert np.isfinite(st.pos).all() and abs(st.volumes["total"] - 1.0) < 1e-9
+    assert np.abs(st.com[:2]).max() < 3 * e.cfg.stage_radius

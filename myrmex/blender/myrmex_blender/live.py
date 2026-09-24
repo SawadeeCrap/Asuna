@@ -87,6 +87,7 @@ class LiveLink:
                  camera: bool = True, lights: bool = True, floor: bool = True, fast_viewport: bool = True):
         self.arm = arm_obj
         self.fast_viewport = fast_viewport
+        self.creature_view = None
         self._restore: list[tuple] = []
         self.port, self.host = port, host
         self.use_camera, self.use_lights, self.use_floor = camera, lights, floor
@@ -107,11 +108,11 @@ class LiveLink:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
         self.sock.bind((self.host, self.port))
         self.sock.setblocking(False)
-        for pb in self.arm.pose.bones:
+        for pb in (self.arm.pose.bones if self.arm is not None else ()):
             pb.rotation_mode = "QUATERNION"
-        if self.arm.animation_data is not None:
+        if self.arm is not None and self.arm.animation_data is not None:
             self.arm.animation_data.action = None          # baked actions would fight the stream
-        if self.fast_viewport:
+        if self.fast_viewport and self.arm is not None:
             # Corrective Smooth costs tens of ms per frame on 150k vertices; the Armature modifier
             # (preserve volume) alone deforms in a few ms.  Render keeps the smoothing.
             for ob in bpy.data.objects:
@@ -153,6 +154,7 @@ class LiveLink:
         if self.sock is None:
             return False
         newest = None
+        creature = None
         while True:
             try:
                 data, _ = self.sock.recvfrom(65536)
@@ -160,9 +162,13 @@ class LiveLink:
                 break
             except OSError:
                 break
+            if data[:4] == b"MYRC":
+                creature = data
+                self.stats["packets"] += 1
+                continue
             if data[:4] == b"MYRN":
                 nm = decode_names(data)
-                if nm is not None and (self.rig != nm[0] or self.solver is None):
+                if nm is not None and self.arm is not None and (self.rig != nm[0] or self.solver is None):
                     self.rig, self.names = nm[0], nm[1]
                     try:
                         self.solver = BasisSolver(self.arm, self.names)
@@ -178,6 +184,8 @@ class LiveLink:
             if newest is not None:
                 self.stats["dropped"] += 1
             newest = fr
+        if creature is not None:
+            return self._apply_creature(creature)
         if newest is None or self.solver is None or newest.rig != self.rig:
             return False
         self.apply(newest)
@@ -199,6 +207,26 @@ class LiveLink:
         if now - self._fps_t >= 1.0:
             self.stats["fps"] = self._fps_n / (now - self._fps_t)
             self._fps_t, self._fps_n = now, 0
+
+    def _apply_creature(self, data: bytes) -> bool:
+        from myrmex.creature.protocol import decode_creature
+
+        from .creature import CreatureView
+        fr = decode_creature(data)
+        if fr is None:
+            return False
+        if self.creature_view is None:
+            self.creature_view = CreatureView(bpy.context.scene)
+        self.creature_view.apply(fr)
+        if self.use_camera and fr.camera is not None:
+            self._apply_camera(fr.camera)
+        if self.use_lights or self.use_floor:
+            class _F:                                      # the follow code only needs these two
+                subject_pos, heading = fr.com, fr.heading
+            self._follow(_F)
+        self.last = fr
+        self.stats["applied"] += 1
+        return True
 
     def _apply_camera(self, c) -> None:
         sc = bpy.context.scene

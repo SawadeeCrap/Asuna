@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from . import controllers as C
+from . import tabs as T
 from .settings import AppSettings, characters_dir
 
 CLOCKS = [("auto", "Auto (best available)"), ("link", "Ableton Link"), ("osc", "Remote Script (Ableton)"),
@@ -95,6 +96,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._inputs_tab(), "Inputs")
         tabs.addTab(self._character_tab(), "Character")
         tabs.addTab(self._output_tab(), "Camera && Output")
+        tabs.addTab(T.creature_tab(self), "Creature")
+        tabs.addTab(T.midi_tab(self), "MIDI")
         tabs.addTab(self.logbox, "Log")
         self.tabs = tabs
         act = QAction("Quit", self)
@@ -275,6 +278,11 @@ class MainWindow(QMainWindow):
         row.addWidget(self.cmb_char, 1)
         row.addWidget(b)
         form.addRow("Live character (.blend)", row)
+        self.cmb_backend = QComboBox()
+        self.cmb_backend.addItem("Humanoid (rigged character)", "humanoid")
+        self.cmb_backend.addItem("Black Nanomaterial Creature (procedural organism)", "creature")
+        self.cmb_backend.setCurrentIndex(1 if self.s.backend == "creature" else 0)
+        form.addRow("Character type", self.cmb_backend)
         row = QHBoxLayout()
         self.ed_blender = QLineEdit(self.s.blender or (C.find_blender() or ""))
         b = QPushButton("…")
@@ -329,6 +337,7 @@ class MainWindow(QMainWindow):
         self.chk_camera.setChecked(self.s.camera)
         form.addRow(self.chk_camera)
         v.addWidget(box)
+        v.addWidget(T.camera_group(self))
         box = QGroupBox("Pose stream (to Blender / other renderers)")
         form = QFormLayout(box)
         self.spin_pose = QSpinBox()
@@ -399,6 +408,8 @@ class MainWindow(QMainWindow):
         s.record_dir = self.ed_rec.text().strip() or s.record_dir
         s.start_engine_on_launch = self.chk_autostart.isChecked()
         s.style = self.cmb_style.currentText()
+        s.backend = self.cmb_backend.currentData()
+        s.midi_bindings = T.read_bindings(self)
         for k, kb in self.knobs.items():
             setattr(s, k, kb.value())
 
@@ -409,7 +420,7 @@ class MainWindow(QMainWindow):
             if self.chk_hold.isChecked():
                 self.engine.control("hold", 1.0)
         else:
-            self.tabs.setCurrentIndex(4)
+            self.tabs.setCurrentIndex(self.tabs.indexOf(self.logbox))
 
     def stop_engine(self) -> None:
         self.engine.stop()
@@ -432,6 +443,22 @@ class MainWindow(QMainWindow):
     def _knob_changed(self, name: str, value: float | None) -> None:
         setattr(self.s, name, value)
         self.engine.control(name, -1.0 if value is None else value)
+
+    def _creature_knob(self, name: str, value: float | None) -> None:
+        if value is None:
+            self.s.creature_params.pop(name, None)
+        else:
+            self.s.creature_params[name] = value
+        self.engine.control(name, -1.0 if value is None else value)
+
+    def _cam_control(self, name: str, value: float) -> None:
+        self.s.camera_controls[name] = value
+        self.engine.control(name, value)
+
+    def _pick_shot(self, kind: str) -> None:
+        if self.cmb_cam_mode.currentIndex() != 1:
+            self.cmb_cam_mode.setCurrentIndex(1)            # choosing a shot means: manual, hold it
+        self.engine.trigger(f"camera:{kind}")
 
     def _style_changed(self, style: str) -> None:
         self.s.style = style
@@ -512,7 +539,7 @@ class MainWindow(QMainWindow):
             return
         if not self.engine.running:
             self.start_engine()
-        cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port)
+        cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend)
         p = QProcess(self)
         qenv = QProcessEnvironment.systemEnvironment()
         for k, val in env.items():
@@ -547,7 +574,7 @@ class MainWindow(QMainWindow):
         p.start(cmd[0], cmd[1:])
         self.prepare_proc = p
         self.log(f"preparing {os.path.basename(glb)} -> {out}")
-        self.tabs.setCurrentIndex(4)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self.logbox))
 
     def _prepared(self, out: str, code: int) -> None:
         self.btn_prepare.setEnabled(True)
@@ -567,6 +594,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ status
     def _refresh(self) -> None:
+        T.refresh_midi(self)
         st = self.engine.status()
         if not st:
             for k in self.st:

@@ -36,14 +36,16 @@ class EngineController:
         from ..realtime.inputs import InputConfig
         from ..realtime.session import LiveConfig, LiveSession
         s = self.s
-        if not os.path.exists(s.rig_json):
+        creature = s.backend == "creature"
+        if not creature and not os.path.exists(s.rig_json):
             self.log(f"! no rig description next to the character: {s.rig_json}")
             return False
         try:
             inputs = InputConfig.from_file(s.mapping_file or None, osc_port=int(s.osc_port), midi=list(s.midi_ports),
                                            audio=s.audio_device or None)
+            inputs.mapping["midi_bindings"] = list(s.midi_bindings)
             out = [f"127.0.0.1:{int(s.pose_port)}"] + [t.strip() for t in s.extra_targets.split(",") if t.strip()]
-            cfg = LiveConfig(rig=s.rig_json, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
+            cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
                              camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs)
             self.session = LiveSession(cfg)
@@ -52,7 +54,8 @@ class EngineController:
             self.session = None
             self.log(f"! engine failed to start: {type(e).__name__}: {e}")
             return False
-        self.log(f"engine started: {os.path.basename(s.character)} | OSC :{s.osc_port} | poses -> {', '.join(out)}")
+        who = "Black Nanomaterial Creature" if creature else os.path.basename(s.character)
+        self.log(f"engine started: {who} | OSC :{s.osc_port} | -> {', '.join(out)}")
         for e in self.session.status()["errors"]:
             self.log(f"  ! {e}")
         self.push_knobs()
@@ -80,6 +83,10 @@ class EngineController:
 
     def push_knobs(self) -> None:
         s = self.s
+        for k, v in s.creature_params.items():
+            self.control(k, v)
+        for k, v in s.camera_controls.items():
+            self.control(k, v)
         for k in ("energy", "stride", "sway"):
             v = getattr(s, k)
             self.control(k, -1.0 if v is None else v)
@@ -123,8 +130,10 @@ def find_blender(hint: str = "") -> str | None:
     return None
 
 
-def blender_live_command(blender: str, character: str, pose_port: int) -> tuple[list[str], dict]:
-    env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL")
+def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid") -> tuple[list[str], dict]:
+    env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend)
+    if backend == "creature":                  # no .blend: the creature scene is built procedurally
+        return [blender, "--python", AUTOSTART], env
     return [blender, character, "--python", AUTOSTART], env
 
 

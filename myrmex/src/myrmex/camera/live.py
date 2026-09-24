@@ -47,6 +47,10 @@ class LiveCinematographer:
         self.pending_cut = False
         self.forced_kind: str | None = None
         self.state: CameraState | None = None
+        # Manual mode: the chosen shot is held until another one is chosen (no automatic cuts).
+        # The manual adjustments (distance scale, height offset, orbit, lens, smoothing) apply in both modes.
+        self.mode = "auto"
+        self.manual = {"distance": 1.0, "height": 0.0, "orbit": 0.0, "lens": 0.0, "smooth": 0.35}
 
     # ------------------------------------------------------------------ decisions
     def request_cut(self, kind: str | None = None) -> None:
@@ -121,6 +125,9 @@ class LiveCinematographer:
         self._snap = False
         if self.kind is None:
             self._cut(t, bar, label, energy)
+        elif self.mode == "manual":
+            if self.pending_cut:                         # manual choice: cut at once, then hold
+                self._cut(t, bar, label, energy)
         elif new_bar:
             age = bar - self.shot_start_bar
             if self.pending_cut or age >= self.shot_len_bars or (phrase and age >= 1):
@@ -138,6 +145,12 @@ class LiveCinematographer:
         else:
             off = (fr * st.fwd + lr * st.left * self.side) * push * sc + UP * (st.up * sc + 0.06 * self.n2.sample(t))
         ground = S * np.array([1.0, 1.0, 0.0])
+        mn = self.manual
+        co, so = math.cos(mn["orbit"]), math.sin(mn["orbit"])
+        off = np.array([co * off[0] - so * off[1], so * off[0] + co * off[1], off[2]])
+        off[:2] *= mn["distance"]
+        off[2] = off[2] * (0.6 + 0.4 * mn["distance"]) + mn["height"]
+        self.pos_s.halflife = mn["smooth"]
         pos_goal = ground + off
         if st.target == "head":
             tgt_goal = np.asarray(head, float) + lead
@@ -152,7 +165,7 @@ class LiveCinematographer:
         tgt = self.tgt_s.update(dt, tgt_goal)
         focus_pt = np.asarray(head, float) if st.target == "head" else (
             np.asarray(feet, float) if st.target == "feet" else 0.6 * np.asarray(head, float) + 0.4 * tgt)
-        self.state = CameraState(pos.copy(), tgt.copy(), st.lens, float(np.linalg.norm(pos - focus_pt)), st.fstop,
+        self.state = CameraState(pos.copy(), tgt.copy(), self.manual["lens"] or st.lens, float(np.linalg.norm(pos - focus_pt)), st.fstop,
                                  self.shot_id, self.kind)
         return self.state
 

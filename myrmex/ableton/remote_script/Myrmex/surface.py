@@ -107,7 +107,8 @@ def macro_role(name, index):
                 return role
     if n.startswith("macro") and 0 <= index < len(MACRO_ORDER):
         return MACRO_ORDER[index]
-    return None
+    # Any other macro name is passed through (creature parameters: Aggression, Fluidity, ...).
+    return n.replace(" ", "_") if n and n[0].isalpha() else None
 
 
 def macro_value(role, param):

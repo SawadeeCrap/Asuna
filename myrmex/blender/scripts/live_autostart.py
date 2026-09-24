@@ -58,6 +58,18 @@ def go_live():
     _register()
     scene = bpy.context.scene
     s = scene.myrmex_live
+    if os.environ.get("MYRMEX_MODE") == "creature":
+        from myrmex_blender import creature, live, ui
+        creature.setup_creature_scene(scene)
+        s.port = int(os.environ.get("MYRMEX_POSE_PORT", s.port))
+        _viewport_settings(scene)
+        link = live.LiveLink(None, port=s.port)
+        link.start()
+        ui._LINK["link"] = link
+        if not bpy.app.background:
+            bpy.app.timers.register(lambda: (_look_through_camera(), None)[1], first_interval=1.5)
+        print("Myrmex: creature live on port", s.port)
+        return None
     if s.armature is None:
         s.armature = next((o for o in bpy.data.objects if o.type == "ARMATURE" and o.get("myrmex_rig")), None) or \
             next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)

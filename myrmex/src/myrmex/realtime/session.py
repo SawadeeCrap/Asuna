@@ -14,6 +14,7 @@ music comes back, then walks off on the next beat.
 """
 from __future__ import annotations
 
+import math
 import os
 import socket
 import threading
@@ -51,6 +52,8 @@ class LiveConfig:
     camera: bool = True
     auto_hold: bool = True                  # stand and pose when the music stops
     record: str | None = None               # directory for recorded takes
+    backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial Creature)
+    creature: dict = field(default_factory=dict)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
 
@@ -76,6 +79,11 @@ class PoseSink:
             self._tx(data, a)
         self.sent += 1
 
+    def send_raw(self, data: bytes) -> None:
+        for a in self.addrs:
+            self._tx(data, a)
+        self.sent += 1
+
     def _tx(self, data: bytes, addr) -> None:
         try:
             self.sock.sendto(data, addr)
@@ -90,42 +98,56 @@ class LiveSession:
     def __init__(self, cfg: LiveConfig, plan: BipedPlan | None = None, *, start_inputs: bool = True,
                  sink: PoseSink | None = None, now: float | None = None):
         self.cfg = cfg
-        if plan is None:
-            if not cfg.rig:
-                raise ValueError("LiveConfig.rig (rig description JSON) is required")
-            plan = BipedPlan.from_rig(RigDescription.load(cfg.rig))
-        self.plan = plan
-        self.names = list(plan.sk.names)
-        self.rig_id = rig_id(self.names)
-        ecfg = dict(cfg.engine)
-        ecfg.setdefault("mode", "runway")
-        ecfg.setdefault("style", cfg.style)
-        tl = MusicTimeline(source="live")
-        self.core = PerformanceCore(plan, tl, cfg.seed, EngineConfig.from_dict(ecfg))
-        self.motor, self.engine = self.core.motor, self.core.engine
+        self.creature = None
+        if cfg.backend == "creature":
+            from ..creature.backend import CreatureBackend
+            from ..creature.config import CreatureConfig
+            extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
+            self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
+            self.plan, self.names, self.rig_id = None, [], 0
+            self.core = self.motor = self.engine = None
+            height = CreatureBackend.height
+        else:
+            if plan is None:
+                if not cfg.rig:
+                    raise ValueError("LiveConfig.rig (rig description JSON) is required")
+                plan = BipedPlan.from_rig(RigDescription.load(cfg.rig))
+            self.plan = plan
+            self.names = list(plan.sk.names)
+            self.rig_id = rig_id(self.names)
+            ecfg = dict(cfg.engine)
+            ecfg.setdefault("mode", "runway")
+            ecfg.setdefault("style", cfg.style)
+            tl = MusicTimeline(source="live")
+            self.core = PerformanceCore(plan, tl, cfg.seed, EngineConfig.from_dict(ecfg))
+            self.motor, self.engine = self.core.motor, self.core.engine
+            height = plan.height
         now = time.perf_counter() if now is None else now
         self.t0 = now
         self.clock = ClockHub(cfg.clock, cfg.bpm, link=cfg.link, now=now)
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
-        self.camera = LiveCinematographer(plan.height, cfg.seed) if cfg.camera else None
+        self.camera = LiveCinematographer(height, cfg.seed) if cfg.camera else None
         self.sink = sink if sink is not None else (PoseSink(cfg.out, self.names) if cfg.out else None)
         self.dt = 1.0 / cfg.rate
         self.t = 0.0
         self.seq = 0
         self.next_send = 0.0
-        self.recorder = Recorder(self.names, cfg.record_fps) if cfg.record else None
+        self.recorder = Recorder(self.names, cfg.record_fps) if cfg.record and self.creature is None else None
         self.next_rec = 0.0
         self.style_idx = None
         self._hold_notes: list = []
         self.last_state: ClockState | None = None
         self.last_frame: PoseFrame | None = None
         self.hold = True
-        self._pelvis = self.names.index(plan.pelvis) if plan.pelvis in self.names else 0
-        self._head = self.names.index("head") if "head" in self.names else self._pelvis
-        self._feet = [self.names.index(n) for n in self.names if n.startswith("foot_")]
-        sk = plan.sk
-        self._rest_heads = np.asarray(sk.heads, float)
-        self._head_pt = self._rest_heads[self._head] + 0.45 * (np.asarray(sk.tails[self._head]) - self._rest_heads[self._head])
+        if self.creature is None:
+            self._pelvis = self.names.index(plan.pelvis) if plan.pelvis in self.names else 0
+            self._head = self.names.index("head") if "head" in self.names else self._pelvis
+            self._feet = [self.names.index(n) for n in self.names if n.startswith("foot_")]
+            sk = plan.sk
+            self._rest_heads = np.asarray(sk.heads, float)
+            self._head_pt = self._rest_heads[self._head] + 0.45 * (np.asarray(sk.tails[self._head]) - self._rest_heads[self._head])
+        else:
+            self.hold = False
         self.stats = {"ticks": 0, "overruns": 0, "max_tick_ms": 0.0, "mean_tick_ms": 0.0}
         self._thread: threading.Thread | None = None
         self._running = False
@@ -146,6 +168,8 @@ class LiveSession:
             notes = [n for n in notes if n.group != "control"]
         self.last_state = st
         self._apply_controls(now, t)
+        if self.creature is not None:
+            return self._step_creature(now, t, dt, notes, st)
         lvl = self.inputs.controls.get("audio_level")
         res = self.core.tick(t, dt, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar,
                              curves={"audio": lvl} if lvl is not None else None)
@@ -179,6 +203,13 @@ class LiveSession:
     HOLD_NOTE = 72
 
     def _control_notes(self, notes, t: float) -> None:
+        if self.creature is not None:
+            for n in notes:
+                if int(round(n.pitch)) == 64:
+                    self.inputs.triggers.append(("camera", t))
+                else:
+                    self.creature.control_note(n.pitch)
+            return
         for n in notes:
             p = int(round(n.pitch))
             if p == self.HOLD_NOTE:
@@ -186,8 +217,50 @@ class LiveSession:
             elif p in self.CONTROL_NOTES:
                 self.inputs.triggers.append((self.CONTROL_NOTES[p], t))
 
+    def _camera_controls(self, c: dict) -> None:
+        cam = self.camera
+        if cam is None:
+            return
+        cam.mode = "manual" if c.get("cam_mode", 0.0) > 0.5 else "auto"
+        lens = c.get("cam_lens", 0.0)
+        cam.manual.update(distance=0.4 + 2.1 * c.get("cam_distance", 0.2857), height=-1.0 + 3.0 * c.get("cam_height", 1 / 3),
+                          orbit=(c.get("cam_orbit", 0.5) - 0.5) * 2.0 * math.pi, lens=18.0 + 117.0 * lens if lens > 0.01 else 0.0,
+                          smooth=0.05 + 1.5 * c.get("cam_smooth", 0.2))
+
+    def _step_creature(self, now: float, t: float, dt: float, notes, st) -> object:
+        from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
+        cfg = self.cfg
+        s = self.creature.tick(t, dt, notes, st)
+        due = t + 1e-9 >= self.next_rec
+        if due:
+            self.next_rec += 1.0 / cfg.record_fps
+        self.creature.record(due)
+        if t + 1e-9 < self.next_send:
+            return None
+        self.next_send = max(self.next_send + 1.0 / cfg.out_rate, t)
+        cam = None
+        if self.camera is not None:
+            top = s.com + np.array([0.0, 0.0, 0.5])
+            cam = self.camera.update(t, 1.0 / cfg.out_rate, s.com, top, s.com * np.array([1.0, 1.0, 0.0]), s.heading,
+                                     st.beat, st.beats_per_bar, "groove", s.arousal, False)
+        flags = (FLAG_PLAYING if st.playing else 0) | (FLAG_DEBUG if self.creature.debug else 0)
+        self.seq += 1
+        if self.sink is not None:
+            self.sink.send_raw(encode_creature(s, self.seq, st.beat, st.bpm, flags, cam))
+        self.last_frame = s
+        return s
+
     def _apply_controls(self, now: float, t: float) -> None:
         c = self.inputs.controls
+        self._camera_controls(c)
+        if self.creature is not None:
+            self.creature.controls(c)
+            for name, _ in self.inputs.take_triggers():
+                if name.startswith("camera") and self.camera is not None:
+                    self.camera.request_cut(name.split(":", 1)[1] if ":" in name else None)
+                else:
+                    self.creature.trigger(name)
+            return
         rw = self.engine.runway
         self._hold_notes = [n for n in self._hold_notes if n.time + n.duration > t]
         if rw is not None:
@@ -296,6 +369,8 @@ class LiveSession:
         return self.save_take()
 
     def save_take(self) -> str | None:
+        if self.creature is not None:
+            return self.creature.save_take(self.cfg.record) if self.cfg.record else None
         if self.recorder is None or not self.cfg.record or not self.recorder._deltas:
             return None
         os.makedirs(self.cfg.record, exist_ok=True)
@@ -311,8 +386,10 @@ class LiveSession:
         return {
             "t": round(self.t, 2), "clock": st.source if st else None, "bpm": round(st.bpm, 2) if st else None,
             "beat": round(st.beat, 2) if st else None, "playing": st.playing if st else None,
-            "peers": st.peers if st else 0, "hold": self.hold, "section": self.engine.section,
-            "behavior": self.engine.behavior_name, "notes": self.inputs.stats["notes"],
+            "peers": st.peers if st else 0, "hold": self.hold,
+            "section": self.engine.section if self.engine else self.creature.state.morphology,
+            "behavior": self.engine.behavior_name if self.engine else self.creature.state.behavior,
+            "backend": self.cfg.backend, "notes": self.inputs.stats["notes"],
             "osc_packets": self.inputs.stats["osc_packets"], "sent": self.sink.sent if self.sink else 0,
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),
             "max_tick_ms": round(self.stats["max_tick_ms"], 2), "overruns": self.stats["overruns"],
