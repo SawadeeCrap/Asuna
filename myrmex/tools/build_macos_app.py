@@ -242,6 +242,12 @@ def prune_python(py: str) -> None:
     for d in ("share", "include"):
         shutil.rmtree(os.path.join(py, d), ignore_errors=True)
     site = os.path.join(std, "site-packages")
+    for f in os.listdir(site) if os.path.isdir(site) else []:
+        if f == "pip" or (f.startswith("pip-") and f.endswith(".dist-info")):
+            shutil.rmtree(os.path.join(site, f), ignore_errors=True)       # no installs inside the app
+    for d in ("f2py", "typing", "_pyinstaller", "testing", "doc"):
+        shutil.rmtree(os.path.join(site, "numpy", d), ignore_errors=True)
+    shutil.rmtree(os.path.join(site, "numpy", "_core", "include"), ignore_errors=True)
     for root, dirs, _files in os.walk(site):
         for d in list(dirs):
             if d in ("tests", "testing") and "numpy" in root:
@@ -369,7 +375,7 @@ def build(cache: str, out: str, pip: list[str], python312: str | None) -> str:
     zpath = os.path.join(out, "Myrmex-macOS-arm64.zip")
     if os.path.exists(zpath):
         os.remove(zpath)
-    subprocess.run(["zip", "-qry", os.path.basename(zpath), "Myrmex.app"], cwd=out, check=True)
+    subprocess.run(["zip", "-qry9", os.path.basename(zpath), "Myrmex.app"], cwd=out, check=True)
     return zpath
 
 
