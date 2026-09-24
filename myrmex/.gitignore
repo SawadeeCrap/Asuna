@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+/out/
+/renders/
+*.blend1
+*.egg-info/
+.pytest_cache/
