@@ -142,7 +142,9 @@ class LiveSession:
         notes.extend(self.inputs.score_due(st, t))
         self.last_state = st
         self._apply_controls(now, t)
-        res = self.core.tick(t, dt, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar)
+        lvl = self.inputs.controls.get("audio_level")
+        res = self.core.tick(t, dt, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar,
+                             curves={"audio": lvl} if lvl is not None else None)
         fr = None
         if t + 1e-9 >= self.next_send:
             self.next_send += 1.0 / cfg.out_rate

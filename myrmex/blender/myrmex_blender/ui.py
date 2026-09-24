@@ -8,7 +8,6 @@ Live panel - the main workflow:
        * "Inside Blender"   - one click, the engine runs in a background thread here;
   3. press Start, then play Ableton / VCV.
 """
-from __future__ import annotations
 
 import json
 import os

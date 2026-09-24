@@ -15,7 +15,6 @@ monotonic across source switches so the step grid never jumps backwards.
 """
 from __future__ import annotations
 
-import math
 import threading
 import time
 from collections import deque

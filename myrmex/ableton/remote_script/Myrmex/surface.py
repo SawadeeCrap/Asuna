@@ -2,8 +2,8 @@
 
 Sent to 127.0.0.1:9100 (change HOST / PORT below):
 
-    /myrmex/transport   f song_beat  f bpm  i playing  i sig_num  i sig_den     every display tick (~10 Hz)
-                                                                                 + immediately on play/stop
+    /myrmex/transport   f song_beat  f bpm  i playing  i sig_num  i sig_den     as the song position moves
+                                                                                 (<= 50 Hz) + on play/stop/tempo
     /myrmex/score/track s id  s name  s group_hint                               when tracks change
     /myrmex/score/notes s id  b float32[beat, dur, pitch, vel]*  f from  f to   every half second:
                         the notes of every playing MIDI clip in the next WINDOW beats, in song beats
@@ -15,16 +15,21 @@ from __future__ import absolute_import
 
 import socket
 import struct
+import time
 
-try:
-    from _Framework.ControlSurface import ControlSurface
-except ImportError:                                  # pragma: no cover - outside Live
-    ControlSurface = object
+try:                                                 # Live 11 / 12
+    from ableton.v2.control_surface import ControlSurface
+except ImportError:                                  # pragma: no cover - older Live / outside Live
+    try:
+        from _Framework.ControlSurface import ControlSurface
+    except ImportError:
+        ControlSurface = object
 
 HOST = "127.0.0.1"
 PORT = 9100
 WINDOW = 8.0            # beats of notes sent ahead
-SCORE_EVERY = 5         # display ticks between score updates (~0.5 s)
+SCORE_EVERY = 5         # 100 ms ticks between score updates (~0.5 s)
+TRANSPORT_MIN_DT = 0.02 # s: song-time listener rate limit
 
 GROUP_WORDS = (
     ("kick", ("kick", "bd", "bassdrum", "808")),
@@ -81,7 +86,7 @@ def clip_notes(clip):
     """[(start, duration, pitch, velocity)] in clip time, unmuted notes only."""
     out = []
     try:                                              # Live 11+
-        for n in clip.get_notes_extended(0, 128, 0.0, max(clip.length, clip.loop_end) + 1.0):
+        for n in clip.get_notes_extended(0, 128, -8192.0, 16384.0):
             if not getattr(n, "mute", False):
                 out.append((n.start_time, n.duration, n.pitch, n.velocity))
     except AttributeError:                            # Live 10
@@ -120,11 +125,14 @@ class MyrmexSurface(ControlSurface):
         ControlSurface.__init__(self, c_instance)
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setblocking(False)
-        self._tick = 0
+        self._ticks = 0
         self._known = {}
+        self._last_tx = 0.0
         s = self.song()
         s.add_is_playing_listener(self._on_transport)
         s.add_tempo_listener(self._on_transport)
+        s.add_current_song_time_listener(self._on_song_time)
+        self.schedule_message(1, self._tick)          # Live's 100 ms tick (no threads inside Live)
         self.show_message("Myrmex: streaming to %s:%d" % (HOST, PORT))
         self.log_message("Myrmex remote script loaded")
 
@@ -138,7 +146,13 @@ class MyrmexSurface(ControlSurface):
     def _on_transport(self):
         self._send_transport()
 
+    def _on_song_time(self):
+        now = time.time()
+        if now - self._last_tx >= TRANSPORT_MIN_DT:
+            self._send_transport()
+
     def _send_transport(self):
+        self._last_tx = time.time()
         s = self.song()
         self._send("/myrmex/transport", [float(s.current_song_time), float(s.tempo), 1 if s.is_playing else 0,
                                          int(s.signature_numerator), int(s.signature_denominator)])
@@ -181,21 +195,22 @@ class MyrmexSurface(ControlSurface):
             self._send("/myrmex/score/notes", [tid, blob, now, now + WINDOW])
 
     # ------------------------------------------------------------------ Live callbacks
-    def update_display(self):
-        ControlSurface.update_display(self)
-        self._send_transport()
-        self._tick += 1
-        if self._tick % SCORE_EVERY == 0:
-            try:
+    def _tick(self):
+        try:
+            self._send_transport()
+            self._ticks += 1
+            if self._ticks % SCORE_EVERY == 0:
                 self._send_score()
-            except Exception as e:
-                self.log_message("Myrmex score error: %s" % e)
+        except Exception as e:
+            self.log_message("Myrmex error: %s" % e)
+        self.schedule_message(1, self._tick)
 
     def disconnect(self):
         s = self.song()
         try:
             s.remove_is_playing_listener(self._on_transport)
             s.remove_tempo_listener(self._on_transport)
+            s.remove_current_song_time_listener(self._on_song_time)
         except Exception:
             pass
         self._send("/myrmex/transport", [float(s.current_song_time), float(s.tempo), 0, 4, 4])

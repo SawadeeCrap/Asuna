@@ -270,8 +270,16 @@ class InputHub:
                 n.duration = max(0.02, t - n.time)
             return None
         if k == "hit":
+            g = str(d["group"])
+            if g == "kick" and d.get("source") == "audio" and self.clock is not None and \
+                    self.clock.current in ("osc", "link", "midi"):
+                # Audio can't tell a kick from an off-beat bass note; the beat grid can.
+                st = self.clock.sources[self.clock.current].state(ev.t)    # raw source: no side effects
+                ph = st.beat - round(st.beat)
+                if abs(ph) > 0.15:
+                    g = "bass"
             return NoteEvent(t, 0.1, float(d.get("pitch", 60.0)), float(d["velocity"]), "hit",
-                             group=str(d["group"]), sharpness=float(d.get("sharpness", 0.8)))
+                             group=g, sharpness=float(d.get("sharpness", 0.8)))
         if k == "cc":
             name = self.cfg.mapping["midi_cc"].get(str(d["control"]))
             if name:

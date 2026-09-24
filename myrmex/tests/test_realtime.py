@@ -160,3 +160,24 @@ def test_live_session_walks_on_the_beat_holds_in_silence_and_resumes(biped_plan)
     assert len(td) >= 8 and float(np.median(err)) < 0.04
     fr = s.last_frame
     assert fr is not None and fr.camera is not None and np.isfinite(fr.deltas).all()
+
+
+def test_audio_onsets_from_a_rendered_song(tmp_path):
+    import wave
+
+    from myrmex.music import synth, synthetic
+    from myrmex.realtime.audio_in import BandOnsetDetector
+    tl = synthetic.test_a_four_on_floor(bars=6, bpm=124.0)
+    p = synth.render_audio(tl, str(tmp_path / "a.wav"))
+    with wave.open(p) as w:
+        sr, ch, raw = w.getframerate(), w.getnchannels(), w.readframes(w.getnframes())
+    y = np.frombuffer(raw, dtype=np.int16).astype(np.float32).reshape(-1, ch).mean(axis=1) / 32768.0
+    det = BandOnsetDetector(sr=sr)
+    hits = []
+    for i in range(0, len(y), 256):
+        hits += det.process(y[i:i + 256])
+    kicks = np.array(sorted(n.time for n in tl.notes if tl.group_of(n) == "kick"))
+    got = np.array([t for t, g, v in hits if g == "kick"])
+    recall = np.mean([np.min(np.abs(got - k)) < 0.04 for k in kicks])
+    lat = np.median([got[np.argmin(np.abs(got - k))] - k for k in kicks])
+    assert recall > 0.8 and 0.0 <= lat < 0.02
