@@ -9,16 +9,18 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 
 from ..creature.config import PARAMS
 from ..creature.engine import EVENTS
+from ..creature.colony import ColonyEngine
 from ..creature.polyalloy import PolyalloyEngine
 
 POLY_EVENTS = tuple(e for e in PolyalloyEngine.EVENTS if e not in EVENTS)   # obstacle, impulse, pressure, turbulence
+COLONY_EVENTS = tuple(e for e in ColonyEngine.EVENTS if e not in EVENTS + POLY_EVENTS)   # split, merge, wave, hunt, perch
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
-           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS] +
+           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -26,9 +28,10 @@ def creature_tab(win) -> QWidget:
     from .window import Knob
     w = QWidget()
     v = QVBoxLayout(w)
-    v.addWidget(QLabel("Organisms — choose one on the Character tab (Character type): Black Nanomaterial Creature (v1) "
-                       "or Mimetic Polyalloy (v2, flying).\nAuto = the organism decides (behaviour + music). Any knob "
-                       "can also be a MIDI CC (MIDI tab). kick mode / obstacle rate / altitude: Polyalloy only."))
+    v.addWidget(QLabel("Choose the organism on the Character page: Black Nanomaterial (v1), Mimetic Polyalloy (v2, "
+                       "flying) or Polyalloy Colony (v3, flock). Auto = the organism decides from its behaviour and "
+                       "the music; any knob can also be a MIDI CC. kick mode · obstacle rate · altitude: v2 and v3; "
+                       "swarm · armor · mechanism · hunt: v3."))
     box = QGroupBox("Parameters")
     grid = QGridLayout(box)
     win.cknobs = {}
@@ -45,13 +48,15 @@ def creature_tab(win) -> QWidget:
         b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
         row.addWidget(b)
     v.addWidget(box)
-    box = QGroupBox("Physical events (Mimetic Polyalloy) — the kick does one of these by itself (kick mode knob)")
-    row = QHBoxLayout(box)
-    for e in POLY_EVENTS:
-        b = QPushButton(e.title())
-        b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
-        row.addWidget(b)
-    v.addWidget(box)
+    for title, events in (("Physical events (v2, v3) — the kick does one of these by itself (kick mode)", POLY_EVENTS),
+                          ("Colony (v3) — flock, hardening wave, prey, landing", COLONY_EVENTS)):
+        box = QGroupBox(title)
+        row = QHBoxLayout(box)
+        for e in events:
+            b = QPushButton(e.title())
+            b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
+            row.addWidget(b)
+        v.addWidget(box)
     dbg = QCheckBox("Debug: show the internal control network (nodes + links) in Blender")
     dbg.toggled.connect(lambda on: win.engine.control("creature_debug", 1.0 if on else 0.0))
     v.addWidget(dbg)
@@ -70,7 +75,8 @@ def camera_group(win) -> QGroupBox:
     v.addWidget(win.cmb_cam_mode)
     grid = QGridLayout()
     for i, k in enumerate(CAMERA_SHOTS):
-        b = QPushButton(f"{i + 1}  {k.replace('_', ' ')}")
+        b = QPushButton(f"{i + 1}   {k.replace('_', ' ')}")
+        b.setObjectName("shot")
         b.clicked.connect(lambda _=False, kind=k: win._pick_shot(kind))
         grid.addWidget(b, i // 3, i % 3)
         QShortcut(QKeySequence(str(i + 1)), win, activated=lambda kind=k: win._pick_shot(kind))

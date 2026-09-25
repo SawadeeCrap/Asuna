@@ -26,6 +26,18 @@ from mathutils import Matrix, Vector
 from myrmex.realtime.protocol import decode_names, decode_pose
 
 LIVE_CAMERA = "MyrmexLiveCam"
+_ACTIVE: dict = {"link": None}
+
+
+@bpy.app.handlers.persistent
+def _data_reloaded(*_args):
+    """Undo / redo / opening a file re-creates Blender's data: the running link re-finds its objects."""
+    link = _ACTIVE.get("link")
+    if link is not None:
+        link.refresh()
+
+
+_HANDLERS = ("undo_post", "redo_post", "load_post")
 
 
 class BasisSolver:
@@ -86,6 +98,7 @@ class LiveLink:
     def __init__(self, arm_obj: bpy.types.Object, port: int = 9101, host: str = "127.0.0.1",
                  camera: bool = True, lights: bool = True, floor: bool = True, fast_viewport: bool = True):
         self.arm = arm_obj
+        self.arm_name = arm_obj.name if arm_obj is not None else None
         self.fast_viewport = fast_viewport
         self.creature_view = None
         self._restore: list[tuple] = []
@@ -122,11 +135,44 @@ class LiveLink:
                             self._restore.append((ob.name, m.name))
                             m.show_viewport = False
         self.running = True
+        _ACTIVE["link"] = self
+        for h in _HANDLERS:
+            lst = getattr(bpy.app.handlers, h)
+            if _data_reloaded not in lst:
+                lst.append(_data_reloaded)
         if not bpy.app.timers.is_registered(self._timer):
             bpy.app.timers.register(self._timer, first_interval=0.0, persistent=True)
 
+    def refresh(self) -> None:
+        """Drop every cached Blender reference; they are looked up again by name on the next packet."""
+        self.creature_view = None
+        self.solver = None
+        if self.arm_name is not None or self.arm is not None:
+            s = getattr(bpy.context.scene, "myrmex_live", None)
+            arm = bpy.data.objects.get(self.arm_name or "") or (s.armature if s is not None else None) or next(
+                (o for o in bpy.data.objects if o.type == "ARMATURE" and o.get("myrmex_rig")), None)
+            self.arm = arm
+            if arm is not None:
+                self.arm_name = arm.name
+                for pb in arm.pose.bones:
+                    pb.rotation_mode = "QUATERNION"
+                if arm.animation_data is not None:
+                    arm.animation_data.action = None
+                if self.names:
+                    try:
+                        self.solver = BasisSolver(arm, self.names)
+                    except ValueError:
+                        self.solver = None
+        self.stats["error"] = ""
+
     def stop(self) -> None:
         self.running = False
+        if _ACTIVE.get("link") is self:
+            _ACTIVE["link"] = None
+            for h in _HANDLERS:
+                lst = getattr(bpy.app.handlers, h)
+                if _data_reloaded in lst:
+                    lst.remove(_data_reloaded)
         if bpy.app.timers.is_registered(self._timer):
             bpy.app.timers.unregister(self._timer)
         for ob_name, m_name in self._restore:
@@ -144,6 +190,8 @@ class LiveLink:
         try:
             if self.poll():
                 _tag_redraw()
+        except ReferenceError:                 # objects re-created (undo, file load): find them again
+            self.refresh()
         except Exception as e:                 # never kill the timer: report and keep listening
             self.stats["error"] = f"{type(e).__name__}: {e}"
         return 1.0 / 240.0
@@ -217,6 +265,7 @@ class LiveLink:
             return False
         if self.creature_view is None:
             self.creature_view = CreatureView(bpy.context.scene)
+            _clear_take_animation()
         self.creature_view.apply(fr)
         if self.use_camera and fr.camera is not None:
             self._apply_camera(fr.camera)
@@ -265,23 +314,40 @@ class LiveLink:
         if self.use_floor:
             floor = bpy.data.objects.get("MyrmexFloor")
             if floor is not None:
+                if floor.animation_data is not None and floor.animation_data.action is not None:
+                    floor.animation_data.action = None
                 # The floor shader works in world space, so the plane can simply travel along.
                 floor.location = (float(p[0]), float(p[1]), 0.0)
+
+
+def _clear_take_animation() -> None:
+    """An imported take (keyframes, strut cache) would fight the live stream: switch it off."""
+    from .creature import LATTICE, LURE, META, OBSTACLE, PLATES
+    mb = bpy.data.metaballs.get(META)
+    for idb in [mb, mb.materials[0].node_tree if mb is not None and mb.materials and mb.materials[0] else None,
+                bpy.data.objects.get(LURE)] + [o for o in bpy.data.objects if o.name.startswith(OBSTACLE)]:
+        if idb is not None and idb.animation_data is not None and idb.animation_data.action is not None:
+            idb.animation_data.action = None
+    for name in (LATTICE, PLATES):
+        ob = bpy.data.objects.get(name)
+        if ob is not None and "TakeCache" in ob.modifiers:
+            ob.modifiers.remove(ob.modifiers["TakeCache"])
 
 
 # ---------------------------------------------------------------------------- embedded engine
 _EMBEDDED = {"session": None}
 
 
-def start_embedded_engine(rig_json: str, port: int = 9101, osc_port: int = 9100, clock: str = "auto",
+def start_embedded_engine(rig_json: str | None, port: int = 9101, osc_port: int = 9100, clock: str = "auto",
                           midi: list[str] | None = None, bpm: float = 120.0, style: str = "catwalk",
-                          latency: float = 0.06, seed: int = 0, record: str | None = None):
+                          latency: float = 0.06, seed: int = 0, record: str | None = None, backend: str = "humanoid"):
     """Run the realtime engine inside Blender (a background thread) streaming to ``port``."""
     from myrmex.realtime.inputs import InputConfig
     from myrmex.realtime.session import LiveConfig, LiveSession
     stop_embedded_engine()
     cfg = LiveConfig(rig=rig_json, seed=seed, out=[f"127.0.0.1:{port}"], clock=clock, bpm=bpm, style=style,
-                     latency=latency, record=record, inputs=InputConfig(osc_port=osc_port, midi=midi or []))
+                     latency=latency, record=record, backend=backend,
+                     inputs=InputConfig(osc_port=osc_port, midi=midi or []))
     s = LiveSession(cfg)
     s.start()
     _EMBEDDED["session"] = s

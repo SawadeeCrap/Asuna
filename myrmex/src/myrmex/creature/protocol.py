@@ -5,6 +5,7 @@
     pos n*3f, radius n*f, stretch n*3f, kind n*B, anchor n*h, [camera block as in realtime.protocol]
     [FLAG_POLY: <B material> <B fragments> <H links> <H obstacles> <H pad> dispersion n*f,
                 links L*(2H + f strength), obstacles O*4f (x y z radius)]
+    [FLAG_COLONY: <B bodies> <B> <H> <4f prey>, plate n*f, normal n*3f, owner n*B]
 """
 from __future__ import annotations
 
@@ -16,18 +17,21 @@ import numpy as np
 from ..realtime.protocol import _CAM, SHOT_KINDS, CameraState
 from .behavior import STATES
 from .morphology import MORPHS
+from .colony import INTENTS as COLONY_INTENTS
+from .colony import SHAPES as COLONY_SHAPES
 from .polyalloy import ATTRACTORS, INTENTS, MATERIAL
 
 MATERIAL_NAMES = tuple(MATERIAL)
 
 MAGIC = b"MYRC"
 VERSION = 1
-FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY = 1, 4, 16, 32
+FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY = 1, 4, 16, 32, 64
 _POLY = struct.Struct("<BBHHH")
+_COL = struct.Struct("<BBH4f")          # bodies, pad, pad, prey x y z radius
 _LINK = np.dtype([("i", "<u2"), ("j", "<u2"), ("s", "<f4")])
 _HDR = struct.Struct("<4sBBHIddfBBHffff3ff")
-MORPH_NAMES = tuple(MORPHS) + tuple(a for a in ATTRACTORS if a not in MORPHS)
-BEHAVIOR_NAMES = tuple(STATES) + tuple(i for i in INTENTS if i not in STATES)
+MORPH_NAMES = tuple(dict.fromkeys(tuple(MORPHS) + ATTRACTORS + COLONY_SHAPES))
+BEHAVIOR_NAMES = tuple(dict.fromkeys(tuple(STATES) + INTENTS + COLONY_INTENTS))
 
 
 @dataclass
@@ -56,12 +60,18 @@ class CreatureFrame:
     dispersion: np.ndarray | None = None
     links: np.ndarray | None = None          # (L, 3) i, j, strength
     obstacles: np.ndarray | None = None      # (O, 4) x, y, z, radius
+    plate: np.ndarray | None = None          # colony: armour plate size per node
+    nrm: np.ndarray | None = None            # colony: outward direction per node
+    owner: np.ndarray | None = None          # colony: body index per node
+    bodies: int = 1
+    lure: np.ndarray | None = None           # colony: prey x, y, z, radius
 
 
 def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camera: CameraState | None = None) -> bytes:
     n = len(st.pos)
     poly = getattr(st, "links", None) is not None
-    fl = flags | (FLAG_CAMERA if camera is not None else 0) | (FLAG_POLY if poly else 0)
+    colony = poly and getattr(st, "plate", None) is not None
+    fl = flags | (FLAG_CAMERA if camera is not None else 0) | (FLAG_POLY if poly else 0) | (FLAG_COLONY if colony else 0)
     out = [_HDR.pack(MAGIC, VERSION, fl, n, seq & 0xFFFFFFFF, st.t, beat, bpm,
                      BEHAVIOR_NAMES.index(st.behavior) if st.behavior in BEHAVIOR_NAMES else 0,
                      MORPH_NAMES.index(st.morphology) if st.morphology in MORPH_NAMES else 0, 0, st.surface, st.glow,
@@ -84,6 +94,10 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
         la["i"], la["j"], la["s"] = lk[:, 0], lk[:, 1], lk[:, 2]
         out.append(la.tobytes())
         out.append(np.ascontiguousarray(ob, "<f4").tobytes())
+    if colony:
+        out.append(_COL.pack(min(255, int(st.bodies)), 0, 0, *map(float, st.lure)))
+        out += [np.ascontiguousarray(st.plate, "<f4").tobytes(), np.ascontiguousarray(st.nrm, "<f4").tobytes(),
+                np.ascontiguousarray(st.owner, "u1").tobytes()]
     return b"".join(out)
 
 
@@ -127,4 +141,12 @@ def decode_creature(data: bytes) -> CreatureFrame | None:
         except ValueError:
             return fr
         fr.material, fr.fragments = MATERIAL_NAMES[m] if m < len(MATERIAL_NAMES) else "", frag
+        if flags & FLAG_COLONY and len(data) >= off + _COL.size:
+            c = _COL.unpack_from(data, off)
+            off += _COL.size
+            try:
+                fr.plate, fr.nrm, fr.owner = take("<f4", n, (n,)), take("<f4", 3 * n, (n, 3)), take("u1", n)
+            except ValueError:
+                return fr
+            fr.bodies, fr.lure = c[0], np.array(c[3:7])
     return fr

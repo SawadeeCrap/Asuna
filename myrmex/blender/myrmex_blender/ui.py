@@ -67,6 +67,10 @@ class MyrmexLiveSettings(bpy.types.PropertyGroup):
     render_quality: EnumProperty(name="Quality", items=[
         ("eevee_preview", "Draft (EEVEE fast)", ""), ("eevee", "Final (EEVEE)", ""),
         ("cycles", "Cinema (Cycles, slow)", "")], default="eevee")
+    keep_settings: BoolProperty(
+        name="Keep my settings", default=True,
+        description="Myrmex never changes EEVEE, colour management, shadows or samples: live start leaves them "
+                    "alone and Render Video only sets size, frame rate and the output file")
     micro_viewport: BoolProperty(name="Micro-machines in viewport", default=False,
                                  description="Show the micro-machine surface layer in the viewport (always rendered)",
                                  update=lambda self, ctx: _micro_viewport(self.micro_viewport))
@@ -139,6 +143,38 @@ class MYRMEX_OT_import_take(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class MYRMEX_OT_save_look(bpy.types.Operator):
+    bl_idname = "myrmex.save_look"
+    bl_label = "Save Look"
+    bl_description = ("Keep this scene's look (materials, lights, world, colour, render settings) for the next "
+                      "sessions and for take renders")
+
+    def execute(self, context):
+        from . import looks
+        try:
+            path = looks.save_look(context)
+        except Exception as e:
+            self.report({"ERROR"}, f"Save Look failed: {e}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Look saved: {path}")
+        return {"FINISHED"}
+
+
+class MYRMEX_OT_forget_look(bpy.types.Operator):
+    bl_idname = "myrmex.forget_look"
+    bl_label = "Forget Saved Look"
+    bl_description = "Delete the saved look of this creature: the next session starts from the default studio"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        from . import looks
+        kind = looks.look_kind(context.scene)
+        self.report({"INFO"}, f"Saved look removed ({kind})" if looks.forget_look(kind) else "No saved look")
+        return {"FINISHED"}
+
+
 class MYRMEX_OT_render_take(bpy.types.Operator):
     bl_idname = "myrmex.render_take"
     bl_label = "Render Video"
@@ -154,7 +190,7 @@ class MYRMEX_OT_render_take(bpy.types.Operator):
             return {"CANCELLED"}
         w, h = (int(x) for x in s.render_size.split("x"))
         out = os.path.splitext(take)[0] + f"_{w}x{h}.mp4"
-        creature_take.configure_video_output(out, (w, h), s.render_quality)
+        creature_take.configure_video_output(out, (w, h), s.render_quality, keep=s.keep_settings)
         bpy.ops.render.render("INVOKE_DEFAULT", animation=True)
         self.report({"INFO"}, f"Rendering to {out}")
         return {"FINISHED"}
@@ -183,10 +219,16 @@ class MYRMEX_OT_live_start(bpy.types.Operator):
         if arm is None:
             # The character prepared by prepare_character.py carries its rig description.
             arm = next((o for o in bpy.data.objects if o.type == "ARMATURE" and o.get("myrmex_rig")), None)
-        if arm is None:
+        from . import looks
+        kind = looks.look_kind(context.scene)
+        creature = kind in looks.CREATURES
+        if creature:
+            arm = None                                     # creature scenes stream the organism, not a rig
+        elif arm is None:
             self.report({"ERROR"}, "Pick the character's armature first")
             return {"CANCELLED"}
-        s.armature = arm
+        else:
+            s.armature = arm
         _stop_link()
         link = live.LiveLink(arm, port=s.port, camera=s.follow_camera, lights=s.follow_lights, floor=s.follow_floor,
                              fast_viewport=s.fast_viewport)
@@ -197,15 +239,17 @@ class MYRMEX_OT_live_start(bpy.types.Operator):
             return {"CANCELLED"}
         _LINK["link"] = link
         if s.engine_mode == "EMBEDDED":
-            rig = _rig_json_for(s, arm)
-            if not rig:
+            rig = None if creature else _rig_json_for(s, arm)
+            if not rig and not creature:
                 self.report({"ERROR"}, "No rig description: set 'Rig JSON' or re-rig the character")
                 return {"CANCELLED"}
             midi = [s.midi_port] if s.midi_port else []
             try:
                 live.start_embedded_engine(rig, port=s.port, osc_port=s.osc_port, clock=s.clock, midi=midi,
                                            bpm=s.bpm, style=s.style, latency=s.latency_ms / 1000.0,
-                                           record=bpy.path.abspath(s.record_dir) if s.record_dir else None)
+                                           record=bpy.path.abspath(s.record_dir) if s.record_dir else None,
+                                           backend={"nanomaterial": "creature"}.get(kind, kind) if creature
+                                           else "humanoid")
             except Exception as e:
                 self.report({"ERROR"}, f"Engine failed: {e}")
                 return {"CANCELLED"}
@@ -358,13 +402,26 @@ class MYRMEX_PT_live(bpy.types.Panel):
                                    + (f" · {fr.camera.kind}" if fr.camera else ""))
             if st.get("error"):
                 box.label(text=st["error"], icon="ERROR")
+        from . import looks
+        box = L.box()
+        kind = looks.look_kind(context.scene)
+        box.label(text=f"Look · {kind}", icon="SHADING_RENDERED")
+        row = box.row(align=True)
+        row.operator("myrmex.save_look", icon="FILE_TICK")
+        if kind in looks.CREATURES:
+            row.operator("myrmex.forget_look", icon="X", text="")
+            if os.path.exists(looks.look_path(kind)):
+                box.label(text="saved: " + looks.look_path(kind).replace(os.path.expanduser("~"), "~"), icon="CHECKMARK")
+        box.prop(s, "keep_settings")
         box = L.box()
         box.label(text="Takes → video", icon="RENDER_ANIMATION")
         box.prop(s, "take_audio")
         box.operator("myrmex.import_take", icon="IMPORT")
         row = box.row(align=True)
         row.prop(s, "render_size", text="")
-        row.prop(s, "render_quality", text="")
+        sub = row.row(align=True)
+        sub.enabled = not s.keep_settings                  # with "Keep my settings" the scene decides
+        sub.prop(s, "render_quality", text="")
         box.operator("myrmex.render_take", icon="RENDER_ANIMATION")
         if bpy.data.objects.get("PolyMicro") is not None:
             box.prop(s, "micro_viewport")
@@ -381,7 +438,7 @@ class MYRMEX_PT_live(bpy.types.Panel):
 
 CLASSES = (MyrmexLiveSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop, MYRMEX_OT_live_camera_view,
            MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take, MYRMEX_OT_render_take,
-           MYRMEX_PT_live)
+           MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_PT_live)
 
 
 def register():

@@ -7,10 +7,12 @@ One window for everything the live performance needs:
 * Live      - engine start/stop, what the engine hears (clock, tempo, beat, play state,
               section), the character's knobs (style, energy, stride, sway, hold) and
               one-shot moves (poses, gestures, camera cuts);
+* Character - humanoid or an organism, prepare a character from a GLB, your saved Blender look;
+* Creature  - the organisms' knobs and events;   * Camera - director / manual shots;
 * Inputs    - Ableton (Link, Remote Script), MIDI ports, audio input, clock source, latency;
-* Character - which character, prepare a new one from a Hunyuan3D GLB, open it in Blender live;
-* Camera & output - live camera, pose stream, recording takes;
-* Log.
+* MIDI      - monitor + fine mapping;   * Takes - pose stream, recording, take -> video;   * Log.
+
+Sidebar navigation, light / dark theme following macOS (``theme.py``).
 
 Settings are saved on exit and restored on the next launch.
 """
@@ -21,15 +23,16 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
-from PySide6.QtGui import QAction, QFont
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                                QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSlider,
-                               QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+                               QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+                               QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import controllers as C
 from . import tabs as T
+from . import theme
 from .settings import AppSettings, characters_dir
 
 CLOCKS = [("auto", "Auto (best available)"), ("link", "Ableton Link"), ("osc", "Remote Script (Ableton)"),
@@ -49,14 +52,20 @@ class Knob(QWidget):
         self.on_change = on_change
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 100)
         self.slider.setValue(int(round((0.5 if value is None else value) * 100)))
-        self.auto = QCheckBox("Auto")
+        self.auto = QPushButton("Auto")
+        self.auto.setObjectName("pill")
+        self.auto.setCheckable(True)
+        self.auto.setToolTip("Auto: the organism / the music decides")
         self.auto.setChecked(value is None)
         self.slider.setEnabled(value is not None)
         self.val = QLabel()
-        self.val.setMinimumWidth(34)
+        self.val.setFont(theme.mono_font(12))
+        self.val.setFixedWidth(34)
+        self.val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(self.slider, 1)
         lay.addWidget(self.val)
         lay.addWidget(self.auto)
@@ -68,7 +77,7 @@ class Knob(QWidget):
         return None if self.auto.isChecked() else self.slider.value() / 100.0
 
     def _update_label(self):
-        self.val.setText("auto" if self.auto.isChecked() else f"{self.slider.value()}")
+        self.val.setText("–" if self.auto.isChecked() else f"{self.slider.value()}")
 
     def _changed(self, *_):
         self.slider.setEnabled(not self.auto.isChecked())
@@ -80,26 +89,20 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: AppSettings | None = None):
         super().__init__()
         self.s = settings or AppSettings.load()
-        self.setWindowTitle("Myrmex – live character")
-        self.resize(760, 640)
+        self.setWindowTitle("Myrmex")
+        self.resize(1060, 740)
+        self.setMinimumSize(880, 600)
         self.engine = C.EngineController(self.s, self.log)
         self.blender_proc: QProcess | None = None
         self.prepare_proc: QProcess | None = None
         self._last_notes = (0, time.time())
         self._notes_rate = 0.0
-        tabs = QTabWidget()
-        self.setCentralWidget(tabs)
         self.logbox = QPlainTextEdit()
+        self.logbox.setObjectName("log")
         self.logbox.setReadOnly(True)
         self.logbox.setMaximumBlockCount(4000)
-        tabs.addTab(self._live_tab(), "Live")
-        tabs.addTab(self._inputs_tab(), "Inputs")
-        tabs.addTab(self._character_tab(), "Character")
-        tabs.addTab(self._output_tab(), "Camera && Output")
-        tabs.addTab(T.creature_tab(self), "Creature")
-        tabs.addTab(T.midi_tab(self), "MIDI")
-        tabs.addTab(self.logbox, "Log")
-        self.tabs = tabs
+        self.logbox.setFont(theme.mono_font(12))
+        self._build_shell()
         act = QAction("Quit", self)
         act.setShortcut("Ctrl+Q")
         act.triggered.connect(self.close)
@@ -113,49 +116,170 @@ class MainWindow(QMainWindow):
         if self.s.open_blender_on_start:
             QTimer.singleShot(800, self.open_blender)
 
-    # ================================================================== tabs
+    # ================================================================== shell
+    PAGES = (("Live", "What the character hears and does, right now"),
+             ("Character", "Who performs: a rigged character or one of the organisms"),
+             ("Creature", "The organisms' parameters and events"),
+             ("Camera", "Automatic director or your own shots"),
+             ("Inputs", "Ableton, VCV Rack, MIDI, audio and the clock"),
+             ("MIDI", "Every incoming CC and note, and where it goes"),
+             ("Takes", "Record performances and turn them into videos"),
+             ("Log", "Everything the engine and Blender report"))
+
+    def _build_shell(self) -> None:
+        central = QWidget()
+        h = QHBoxLayout(central)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        side = QWidget()
+        side.setObjectName("sidebar")
+        side.setFixedWidth(212)
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(0, 20, 0, 16)
+        sv.setSpacing(2)
+        brand = QLabel("Myrmex")
+        brand.setObjectName("brand")
+        sub = QLabel("live character engine")
+        sub.setObjectName("brandsub")
+        for lab in (brand, sub):
+            lab.setContentsMargins(22, 0, 16, 0)
+            sv.addWidget(lab)
+        sv.addSpacing(16)
+        self.nav = QListWidget()
+        self.nav.setObjectName("nav")
+        self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        sv.addWidget(self.nav, 1)
+        # Engine state, always visible.
+        box = QWidget()
+        bl = QHBoxLayout(box)
+        bl.setContentsMargins(22, 0, 16, 0)
+        bl.setSpacing(8)
+        self.dot = QLabel()
+        self.dot.setFixedSize(8, 8)
+        self.lbl_engine = QLabel("Engine stopped")
+        self.lbl_engine.setObjectName("enginestate")
+        bl.addWidget(self.dot)
+        bl.addWidget(self.lbl_engine, 1)
+        sv.addWidget(box)
+        h.addWidget(side)
+        self.stack = QStackedWidget()
+        h.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+        self.btn_engine = QPushButton("Start engine")
+        self.btn_engine.setObjectName("primary")
+        self.btn_engine.clicked.connect(self.toggle_engine)
+        self.btn_blender = QPushButton("Open in Blender")
+        self.btn_blender.clicked.connect(self.open_blender)
+        builders = {"Live": self._live_tab, "Character": self._character_tab, "Creature": lambda: T.creature_tab(self),
+                    "Camera": self._camera_tab, "Inputs": self._inputs_tab, "MIDI": lambda: T.midi_tab(self),
+                    "Takes": self._output_tab, "Log": lambda: self.logbox}
+        self.page_index = {}
+        for name, subtitle in self.PAGES:
+            actions = [self.btn_blender, self.btn_engine] if name == "Live" else []
+            self.page_index[name] = self.stack.addWidget(self._page(name, subtitle, builders[name](), actions))
+            QListWidgetItem(name, self.nav).setSizeHint(QSize(180, 34))
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.setCurrentRow(0)
+        self._polish()
+
+    def _page(self, title: str, subtitle: str, body: QWidget, actions=()) -> QWidget:
+        page = QWidget()
+        page.setObjectName("page")
+        v = QVBoxLayout(page)
+        v.setContentsMargins(32, 26, 32, 20)
+        v.setSpacing(14)
+        head = QHBoxLayout()
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        t = QLabel(title)
+        t.setObjectName("pagetitle")
+        st = QLabel(subtitle)
+        st.setObjectName("pagesub")
+        col.addWidget(t)
+        col.addWidget(st)
+        head.addLayout(col, 1)
+        for a in actions:
+            head.addWidget(a, 0, Qt.AlignmentFlag.AlignVCenter)
+        v.addLayout(head)
+        if isinstance(body, QPlainTextEdit):
+            v.addWidget(body, 1)
+            return page
+        if body.layout() is not None:
+            body.layout().setContentsMargins(0, 0, 6, 0)
+            body.layout().setSpacing(6)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(body)
+        v.addWidget(scroll, 1)
+        return page
+
+    def _polish(self) -> None:
+        """Consistent forms, wrapped explanations, quiet tables."""
+        for form in self.findChildren(QFormLayout):
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form.setHorizontalSpacing(16)
+            form.setVerticalSpacing(10)
+        for lab in self.findChildren(QLabel):
+            if len(lab.text()) > 70 and lab.objectName() not in ("pagesub", "pagetitle"):
+                lab.setWordWrap(True)
+                lab.setProperty("muted", True)
+                lab.style().unpolish(lab)
+                lab.style().polish(lab)
+        for name in ("tbl_mon", "tbl_map"):
+            tbl = getattr(self, name, None)
+            if tbl is not None:
+                tbl.verticalHeader().setVisible(False)
+                tbl.setShowGrid(False)
+        self._engine_state(False)
+
+    def _goto(self, page: str) -> None:
+        self.nav.setCurrentRow(self.page_index[page])
+
+    def _engine_state(self, running: bool) -> None:
+        self.btn_engine.setText("Stop engine" if running else "Start engine")
+        self.btn_engine.setProperty("running", running)
+        self.btn_engine.style().unpolish(self.btn_engine)
+        self.btn_engine.style().polish(self.btn_engine)
+
+    # ================================================================== pages
     def _live_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        row = QHBoxLayout()
-        self.btn_engine = QPushButton("▶  Start engine")
-        self.btn_engine.setMinimumHeight(40)
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        self.btn_engine.setFont(f)
-        self.btn_engine.clicked.connect(self.toggle_engine)
-        self.btn_blender = QPushButton("Open character in Blender")
-        self.btn_blender.setMinimumHeight(40)
-        self.btn_blender.clicked.connect(self.open_blender)
-        row.addWidget(self.btn_engine, 1)
-        row.addWidget(self.btn_blender, 1)
-        v.addLayout(row)
         # ---- status
         box = QGroupBox("What the character hears")
         g = QGridLayout(box)
+        g.setHorizontalSpacing(18)
+        g.setVerticalSpacing(12)
         self.st = {}
-        items = [("clock", "Clock"), ("bpm", "Tempo"), ("beat", "Bar.Beat"), ("transport", "Transport"),
+        items = [("clock", "Clock"), ("bpm", "Tempo"), ("beat", "Bar . beat"), ("transport", "Transport"),
                  ("state", "Character"), ("section", "Section"), ("behavior", "Doing"), ("camera", "Camera"),
-                 ("notes", "Notes / s"), ("peers", "Link peers"), ("tick", "Engine tick"), ("sent", "Poses sent")]
+                 ("notes", "Notes / s"), ("peers", "Link peers"), ("tick", "Engine tick"), ("sent", "Frames sent")]
         for i, (k, label) in enumerate(items):
-            lab = QLabel(label + ":")
-            lab.setStyleSheet("color: gray")
+            tile = QVBoxLayout()
+            tile.setSpacing(1)
+            lab = QLabel(label)
+            lab.setObjectName("statlabel")
             val = QLabel("–")
+            val.setObjectName("statvalue")
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            g.addWidget(lab, i // 3, (i % 3) * 2)
-            g.addWidget(val, i // 3, (i % 3) * 2 + 1)
+            tile.addWidget(lab)
+            tile.addWidget(val)
+            g.addLayout(tile, i // 4, i % 4)
             self.st[k] = val
         beats = QHBoxLayout()
+        beats.setSpacing(8)
         self.beat_leds = []
         for _ in range(4):
             led = QLabel()
-            led.setFixedSize(28, 12)
-            led.setStyleSheet("background: #444; border-radius: 3px")
+            led.setFixedSize(46, 8)
             beats.addWidget(led)
             self.beat_leds.append(led)
         beats.addStretch(1)
-        g.addLayout(beats, 4, 0, 1, 6)
+        g.addLayout(beats, 3, 0, 1, 4)
+        self._leds_off()
         v.addWidget(box)
         # ---- knobs
         box = QGroupBox("Character (Auto = the music decides)")
@@ -190,6 +314,10 @@ class MainWindow(QMainWindow):
         v.addWidget(box)
         v.addStretch(1)
         return w
+
+    def _leds_off(self) -> None:
+        for led in self.beat_leds:
+            led.setStyleSheet(f"background: {theme.T['border']}; border-radius: 4px")
 
     def _inputs_tab(self) -> QWidget:
         w = QWidget()
@@ -250,7 +378,7 @@ class MainWindow(QMainWindow):
         mp.addWidget(b)
         form.addRow("Mapping", mp)
         self.lbl_dev = QLabel()
-        self.lbl_dev.setStyleSheet("color: gray")
+        self.lbl_dev.setProperty("muted", True)
         form.addRow(self.lbl_dev)
         row = QHBoxLayout()
         b = QPushButton("Refresh devices")
@@ -282,6 +410,7 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Humanoid (rigged character)", "humanoid")
         self.cmb_backend.addItem("Black Nanomaterial Creature (procedural organism)", "creature")
         self.cmb_backend.addItem("Mimetic Polyalloy (flying, self-reconfiguring material)", "polyalloy")
+        self.cmb_backend.addItem("Polyalloy Colony (flock, armour, mechanisms, prey)", "colony")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         row = QHBoxLayout()
@@ -298,6 +427,26 @@ class MainWindow(QMainWindow):
         self.spin_seed.setRange(0, 9999)
         self.spin_seed.setValue(int(self.s.seed))
         form.addRow("Personality seed", self.spin_seed)
+        v.addWidget(box)
+        box = QGroupBox("Your look in Blender")
+        form = QFormLayout(box)
+        form.addRow(QLabel("Tune materials, lights, world and render settings in Blender, then press Save Look in "
+                           "the Myrmex panel (N sidebar). Humanoid: the look is saved in the character's .blend. "
+                           "Organisms: each type keeps its own look; live sessions and take renders open it."))
+        self.chk_keep = QCheckBox("Keep my Blender settings (Myrmex doesn't change EEVEE, colour, shadows, samples)")
+        self.chk_keep.setChecked(self.s.keep_blender_settings)
+        self.chk_keep.toggled.connect(lambda on: self.cmb_rquality.setEnabled(not on))
+        form.addRow(self.chk_keep)
+        row = QHBoxLayout()
+        self.lbl_looks = QLabel()
+        b = QPushButton("Forget saved look")
+        b.setToolTip("Delete the saved look of the selected organism: next time the default studio is built")
+        b.clicked.connect(self._forget_look)
+        row.addWidget(self.lbl_looks, 1)
+        row.addWidget(b)
+        form.addRow("Saved looks", row)
+        self.cmb_backend.currentIndexChanged.connect(lambda *_: self._show_looks())
+        self._show_looks()
         v.addWidget(box)
         box = QGroupBox("New character from a Hunyuan3D GLB")
         form = QFormLayout(box)
@@ -329,7 +478,7 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         return w
 
-    def _output_tab(self) -> QWidget:
+    def _camera_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         box = QGroupBox("Camera")
@@ -339,6 +488,12 @@ class MainWindow(QMainWindow):
         form.addRow(self.chk_camera)
         v.addWidget(box)
         v.addWidget(T.camera_group(self))
+        v.addStretch(1)
+        return w
+
+    def _output_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
         box = QGroupBox("Pose stream (to Blender / other renderers)")
         form = QFormLayout(box)
         self.spin_pose = QSpinBox()
@@ -385,6 +540,8 @@ class MainWindow(QMainWindow):
                            ("Cinema (Cycles, slow)", "cycles")):
             self.cmb_rquality.addItem(label, key)
         self.cmb_rquality.setCurrentIndex(max(0, self.cmb_rquality.findData(self.s.render_quality)))
+        self.cmb_rquality.setEnabled(not self.s.keep_blender_settings)
+        self.cmb_rquality.setToolTip("Used when 'Keep my Blender settings' (Character page) is off")
         row.addWidget(self.cmb_rsize)
         row.addWidget(self.cmb_rquality, 1)
         form.addRow("Video", row)
@@ -438,6 +595,7 @@ class MainWindow(QMainWindow):
         s.style = self.cmb_style.currentText()
         s.backend = self.cmb_backend.currentData()
         s.take_audio = self.ed_song.text().strip()
+        s.keep_blender_settings = self.chk_keep.isChecked()
         s.render_size = self.cmb_rsize.currentText()
         s.render_quality = self.cmb_rquality.currentData()
         s.midi_bindings = T.read_bindings(self)
@@ -447,15 +605,15 @@ class MainWindow(QMainWindow):
     def start_engine(self) -> None:
         self._collect()
         if self.engine.start():
-            self.btn_engine.setText("■  Stop engine")
+            self._engine_state(True)
             if self.chk_hold.isChecked():
                 self.engine.control("hold", 1.0)
         else:
-            self.tabs.setCurrentIndex(self.tabs.indexOf(self.logbox))
+            self._goto("Log")
 
     def stop_engine(self) -> None:
         self.engine.stop()
-        self.btn_engine.setText("▶  Start engine")
+        self._engine_state(False)
 
     def toggle_engine(self) -> None:
         if self.engine.running:
@@ -502,6 +660,23 @@ class MainWindow(QMainWindow):
     def _save_take(self) -> None:
         path = self.engine.save_take()
         self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
+
+    def _show_looks(self) -> None:
+        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony"}
+        parts = [f"{label} {'✓' if C.look_file(b) else '–'}" for b, label in names.items()]
+        self.lbl_looks.setText("   ".join(parts))
+
+    def _forget_look(self) -> None:
+        b = self.cmb_backend.currentData()
+        path = C.look_file(b)
+        if not path:
+            self.log("no saved look for this character type" if b in C.CREATURE_BACKENDS else
+                     "the humanoid look lives in the character's .blend")
+            return
+        if QMessageBox.question(self, "Myrmex", f"Delete the saved look?\n{path}") == QMessageBox.StandardButton.Yes:
+            os.remove(path)
+            self.log(f"saved look removed: {path}")
+            self._show_looks()
 
     def _install_rs(self) -> None:
         try:
@@ -570,7 +745,10 @@ class MainWindow(QMainWindow):
             return
         if not self.engine.running:
             self.start_engine()
-        cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend)
+        cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend,
+                                          self.s.keep_blender_settings)
+        if C.look_file(self.s.backend):
+            self.log(f"using your saved look: {C.look_file(self.s.backend)}")
         p = QProcess(self)
         qenv = QProcessEnvironment.systemEnvironment()
         for k, val in env.items():
@@ -597,7 +775,7 @@ class MainWindow(QMainWindow):
         if not take:
             return
         cmd = C.take_command(blender, take, self.s.character, self.s.take_audio, render, self.s.render_size,
-                             self.s.render_quality)
+                             self.s.render_quality, self.s.keep_blender_settings)
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         p.readyReadStandardOutput.connect(lambda: self._pipe(p, "render", ("Myrmex", "rror")) if render
@@ -631,7 +809,7 @@ class MainWindow(QMainWindow):
         p.start(cmd[0], cmd[1:])
         self.prepare_proc = p
         self.log(f"preparing {os.path.basename(glb)} -> {out}")
-        self.tabs.setCurrentIndex(self.tabs.indexOf(self.logbox))
+        self._goto("Log")
 
     def _prepared(self, out: str, code: int) -> None:
         self.btn_prepare.setEnabled(True)
@@ -653,12 +831,16 @@ class MainWindow(QMainWindow):
     def _refresh(self) -> None:
         T.refresh_midi(self)
         st = self.engine.status()
+        tok = theme.T
         if not st:
             for k in self.st:
                 self.st[k].setText("–")
-            for led in self.beat_leds:
-                led.setStyleSheet("background: #444; border-radius: 3px")
+            self._leds_off()
+            self.dot.setStyleSheet(f"background: {tok['text3']}; border-radius: 4px")
+            self.lbl_engine.setText("Engine stopped")
             return
+        self.dot.setStyleSheet(f"background: {tok['ok'] if not st['errors'] else tok['warn']}; border-radius: 4px")
+        self.lbl_engine.setText(f"Running · {st['bpm']:.1f} BPM" if st["bpm"] else "Running")
         now = time.time()
         n0, t0 = self._last_notes
         if now - t0 >= 1.0:
@@ -685,8 +867,9 @@ class MainWindow(QMainWindow):
         frac = beat - math.floor(beat)
         for i, led in enumerate(self.beat_leds):
             on = i == inbar % 4 and st["playing"]
-            col = ("#ff5a36" if i == 0 else "#36c3ff") if on and frac < 0.35 else ("#666" if on else "#333")
-            led.setStyleSheet(f"background: {col}; border-radius: 3px")
+            col = (tok["accent"] if i == 0 else tok["text"]) if on and frac < 0.35 else \
+                (tok["text3"] if on else tok["border"])
+            led.setStyleSheet(f"background: {col}; border-radius: 4px")
 
     def closeEvent(self, ev) -> None:
         self._collect()
@@ -702,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("Myrmex")
     app.setApplicationDisplayName("Myrmex")
+    theme.follow_system(app)
     w = MainWindow()
     w.show()
     return app.exec()

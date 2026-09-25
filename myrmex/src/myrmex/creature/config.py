@@ -6,14 +6,18 @@ from dataclasses import dataclass, field
 # Macro parameters (0..1).  Each can be automatic (behaviour decides) or overridden live.
 PARAMS = ("aggression", "arousal", "expansion", "contraction", "fluidity", "rigidity", "asymmetry",
           "tendril_activity", "instability", "surface_activity", "mass_shift", "reactivity", "noise",
-          "coherence", "mutation", "speed", "density", "kick_mode", "obstacle_rate", "altitude")
+          "coherence", "mutation", "speed", "density", "kick_mode", "obstacle_rate", "altitude",
+          "swarm", "armor", "mechanism", "hunt")
 
 DEFAULT_PARAMS = {"aggression": 0.3, "arousal": 0.3, "expansion": 0.5, "contraction": 0.3, "fluidity": 0.6,
                   "rigidity": 0.4, "asymmetry": 0.4, "tendril_activity": 0.4, "instability": 0.25,
                   "surface_activity": 0.4, "mass_shift": 0.3, "reactivity": 0.6, "noise": 0.3, "coherence": 0.6,
                   "mutation": 0.3, "speed": 0.4, "density": 0.5,
                   # Mimetic Polyalloy (v2) only: kick -> A impulse / B obstacle / C pressure / E turbulence / mix
-                  "kick_mode": 0.9, "obstacle_rate": 0.3, "altitude": 0.5}
+                  "kick_mode": 0.9, "obstacle_rate": 0.3, "altitude": 0.5,
+                  # Polyalloy Colony (v3) only: flock splitting, armour plates / hardening waves,
+                  # articulated mechanisms (wings, rotors, tendrils, legs), prey hunting
+                  "swarm": 0.5, "armor": 0.5, "mechanism": 0.6, "hunt": 0.4}
 
 
 @dataclass

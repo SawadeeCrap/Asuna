@@ -18,6 +18,8 @@ META = "CreatureBody"
 DEBUG = "CreatureDebug"
 MAT = "MyrmexNanomaterial"
 POLY_MAT = "MyrmexPolyalloy"
+PLATES = "ColonyPlates"
+LURE = "ColonyPrey"
 LATTICE = "PolyLattice"
 MICRO = "PolyMicro"
 OBSTACLE = "PolyObstacle"
@@ -247,10 +249,12 @@ class CreatureView:
         if coll.name not in self.scene.collection.children:
             self.scene.collection.children.link(coll)
         self.coll = coll
-        mb = bpy.data.metaballs.get(META) or bpy.data.metaballs.new(META)
-        mb.resolution = resolution                       # viewport polygonisation (speed)
-        mb.render_resolution = 0.02
-        mb.threshold = 0.6
+        mb = bpy.data.metaballs.get(META)
+        if mb is None:                                   # a saved look keeps its own settings
+            mb = bpy.data.metaballs.new(META)
+            mb.resolution = resolution                   # viewport polygonisation (speed)
+            mb.render_resolution = 0.02
+            mb.threshold = 0.6
         self.obj = bpy.data.objects.get(META) or bpy.data.objects.new(META, mb)
         if self.obj.name not in coll.objects:
             coll.objects.link(self.obj)
@@ -261,16 +265,17 @@ class CreatureView:
         self.t0 = None
         self.poly = False
         self.lattice = self.micro = None
+        self.plates = self.lure = None
         self.obstacles: list = []
 
     def make_polyalloy(self, n_links: int, n_obstacles: int = 4) -> None:
         """Second organism: polyalloy skin, internal strut lattice, obstacles, micro-machine layer."""
         self.poly = True
         pm = nanomaterial(POLY_MAT, poly=True)
-        if self.mb.materials:
-            self.mb.materials[0] = pm
-        else:
+        if not self.mb.materials:
             self.mb.materials.append(pm)
+        elif self.mb.materials[0] is None or self.mb.materials[0].name == MAT:   # keep a material you chose
+            self.mb.materials[0] = pm
         ob = bpy.data.objects.get(LATTICE)
         if ob is None or len(ob.data.vertices) != 2 * n_links:
             me = bpy.data.meshes.new(LATTICE)
@@ -341,6 +346,72 @@ class CreatureView:
         ob.data.update()
         self.debug_obj = ob
 
+    def make_colony(self, n_nodes: int) -> None:
+        """Third organism: armour plates (hexagons that rise where the material hardens) and the prey."""
+        ob = bpy.data.objects.get(PLATES)
+        if ob is None or len(ob.data.vertices) != 7 * n_nodes:
+            me = bpy.data.meshes.new(PLATES)
+            faces = [(7 * i, 7 * i + 1 + j, 7 * i + 1 + (j + 1) % 6) for i in range(n_nodes) for j in range(6)]
+            me.from_pydata([(0.0, 0.0, 0.0)] * (7 * n_nodes), [], faces)
+            me.materials.append(_simple_material("MyrmexArmor", (0.028, 0.028, 0.032), 1.0, 0.28, 0.5))
+            if ob is None:
+                ob = bpy.data.objects.new(PLATES, me)
+                self.coll.objects.link(ob)
+            else:
+                ob.data = me
+        self.plates = ob
+        lure = bpy.data.objects.get(LURE)
+        if lure is None:
+            import bmesh
+            me = bpy.data.meshes.new(LURE)
+            bm = bmesh.new()
+            bmesh.ops.create_icosphere(bm, subdivisions=3, radius=1.0)
+            bm.to_mesh(me)
+            bm.free()
+            for poly in me.polygons:
+                poly.use_smooth = True
+            mat = _simple_material("MyrmexPrey", (0.02, 0.02, 0.022), 0.0, 0.06, 1.0)
+            b = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+            if "Emission Color" in b.inputs:                  # a faint warm core: something alive to hunt
+                b.inputs["Emission Color"].default_value = (1.0, 0.36, 0.12, 1.0)
+                b.inputs["Emission Strength"].default_value = 0.6
+            me.materials.append(mat)
+            lure = bpy.data.objects.new(LURE, me)
+            self.coll.objects.link(lure)
+        lure.scale = (0.0, 0.0, 0.0)
+        self.lure = lure
+
+    @staticmethod
+    def plate_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np.ndarray,
+                     scale: float = 0.075) -> np.ndarray:
+        """Hexagonal plates on the surface, facing out; size 0 collapses a plate to a point."""
+        n = len(pos)
+        nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+        up = np.where(np.abs(nr[:, 2:3]) > 0.9, np.array([[1.0, 0.0, 0.0]]), np.array([[0.0, 0.0, 1.0]]))
+        e1 = np.cross(nr, up)
+        e1 /= np.maximum(np.linalg.norm(e1, axis=1, keepdims=True), 1e-6)
+        e2 = np.cross(nr, e1)
+        c = pos + nr * (0.92 * radius)[:, None]
+        h = (np.clip(plate, 0, 1) * scale)[:, None]
+        out = np.empty((n, 7, 3))
+        out[:, 0] = c
+        for j in range(6):
+            a = math.pi / 3 * j
+            out[:, 1 + j] = c + (math.cos(a) * e1 + math.sin(a) * e2) * h
+        return out.reshape(-1, 3)
+
+    def _apply_colony(self, fr) -> None:
+        n = len(fr.pos)
+        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != 7 * n:
+            self.make_colony(n)
+        pts = self.plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
+        me = self.plates.data
+        me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+        me.update()
+        lx, ly, lz, lr = (float(v) for v in fr.lure)
+        self.lure.location = (lx, ly, lz)
+        self.lure.scale = (lr, lr, lr)
+
     @staticmethod
     def strut_points(pos: np.ndarray, links: np.ndarray, n_links: int) -> np.ndarray:
         """Segment endpoints for every link slot; weak links retract into their midpoint (invisible)."""
@@ -379,6 +450,8 @@ class CreatureView:
         self._ensure(n)
         if getattr(fr, "links", None) is not None:
             self._apply_poly(fr)
+        if getattr(fr, "plate", None) is not None:
+            self._apply_colony(fr)
         els = self.mb.elements
         for i, e in enumerate(els):
             r = float(fr.radius[i])
@@ -406,13 +479,17 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
                          keep_look: bool = False) -> CreatureView:
     """Build (or reuse) the creature scene.  ``keep_look`` keeps an existing studio / materials as they are."""
     scene = scene or bpy.context.scene
-    for name in ("Cube", "Light", "Camera"):                  # Blender's default startup objects
-        ob = bpy.data.objects.get(name)
-        if ob is not None:
-            bpy.data.objects.remove(ob, do_unlink=True)
+    if not (keep_look and bpy.data.filepath):
+        for name in ("Cube", "Light", "Camera"):              # Blender's default startup objects
+            ob = bpy.data.objects.get(name)
+            if ob is not None:
+                bpy.data.objects.remove(ob, do_unlink=True)
+    scene["myrmex_variant"] = variant
     view = CreatureView(scene)
-    if variant == "polyalloy":
-        view.make_polyalloy(480, 4)
+    if variant in ("polyalloy", "colony"):
+        view.make_polyalloy(640 if variant == "colony" else 480, 4)
+    if variant == "colony":
+        view.make_colony(128)
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)
     return view

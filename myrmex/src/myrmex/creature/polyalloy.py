@@ -226,7 +226,8 @@ class PolyalloyEngine:
         loc = np.zeros((self.n, 3))
         for a, wa in zip(ATTRACTORS, w):
             if wa > 0.01:
-                loc += wa * attractor_shape(a, self.U, s, elong)
+                shp = attractor_shape(a, self.U, s, elong)
+                loc += wa * (shp - shp.mean(0))            # thrust places the body, not the shape
         asym = pr["asymmetry"]
         loc[:, 1] *= 1.0 + 0.35 * asym * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + 1.0)
         return loc @ R.T

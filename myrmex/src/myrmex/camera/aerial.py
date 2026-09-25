@@ -41,7 +41,12 @@ BY_INTENT = {"CRUISE": {"follow": 3, "track": 2, "lock": 1.5, "observe": 1},
              "EXPLORE": {"observe": 2, "track": 2, "orbit": 1},
              "DISPLAY": {"approach": 2.5, "orbit": 2, "retreat": 1.5},
              "REFORM": {"recovery": 3, "observe": 1},
-             "EVADE": {"impact": 2, "lock": 1}}
+             "EVADE": {"impact": 2, "lock": 1},
+             "HUNT": {"follow": 3, "lock": 2, "track": 2},
+             "ENVELOP": {"approach": 3, "orbit": 2},
+             "PERCH": {"track": 2, "orbit": 2, "approach": 1},
+             "FORMATION": {"observe": 2, "retreat": 2, "follow": 1},
+             "MERGE": {"observe": 3, "orbit": 1}}
 
 
 class AerialCinematographer:
@@ -66,6 +71,7 @@ class AerialCinematographer:
         self.manual = {"distance": 1.0, "height": 0.0, "orbit": 0.0, "lens": 0.0, "smooth": 0.35}
         self.recent: list[str] = []
         self.last_impact_cut = -1e9
+        self.last_suggest = -1e9
 
     def request_cut(self, kind: str | None = None) -> None:
         self.pending_cut = True
@@ -81,6 +87,12 @@ class AerialCinematographer:
                 and self.rng.chance(0.45)):
             self.last_impact_cut = t
             self.pending_cut, self.forced_kind = True, "impact"
+
+    def suggest(self, kind: str, t: float) -> None:
+        """A story moment (the flock splits, prey is caught, it lands): reframe, not too often."""
+        if self.mode == "auto" and kind in MODES and t - self.last_suggest > 8.0:
+            self.last_suggest = t
+            self.pending_cut, self.forced_kind = True, kind
 
     def _choose(self, intent: str) -> str:
         if self.forced_kind:

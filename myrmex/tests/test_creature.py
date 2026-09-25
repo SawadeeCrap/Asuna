@@ -245,3 +245,66 @@ def test_creature_take_roundtrip(tmp_path):
     take.d["song_beat"] = 8.0 + take.d["t"] * 2.0
     take.d["playing"] = np.ones(take.n)
     assert abs(take.audio_offset() - 4.0) < 0.1
+
+
+# ---------------------------------------------------------------------------- Polyalloy Colony (v3)
+def _colony_run(seed=3, seconds=40.0, dt=1 / 60, events=()):
+    from myrmex.creature.colony import ColonyConfig, ColonyEngine
+    e = ColonyEngine(ColonyConfig(seed=seed))
+    e.set_parameter("swarm", 0.8)
+    e.set_parameter("hunt", 0.9)
+    out = []
+    for i in range(int(seconds / dt)):
+        t = i * dt
+        beat = t * 2
+        energy = 0.9 if t < 20 else 0.15                      # a drop, then a breakdown
+        kick = 1.0 if (beat % 1.0) < dt * 2.5 and energy > 0.5 else 0.0
+        for at, name in events:
+            if i == int(at / dt):
+                e.trigger_event(name)
+        e.set_input(CreatureControlInput(bass=0.6, high=0.3, energy=energy, transient=kick, spectral_flux=0.3,
+                                         amplitude=0.7, tempo=120, beat=beat, playing=True))
+        out.append(e.update(dt))
+    return e, out
+
+
+def test_colony_splits_merges_hardens_and_stays_finite():
+    e, states = _colony_run()
+    assert all(np.isfinite(s.pos).all() for s in states[::30])
+    assert abs(states[-1].volumes["total"] - 1.0) < 1e-9          # finite material
+    bodies = [s.bodies for s in states]
+    assert max(bodies) >= 2                                        # the drop splits it into a flock
+    assert bodies[-1] == 1                                         # the breakdown brings it back together
+    assert max(float(s.plate.max()) for s in states) > 0.3         # armour rises (hardening waves / hits)
+    assert "WAVE" in {n for _, n, _ in e.events} or max(float(s.plate.max()) for s in states) > 0.5
+    alts = np.array([s.com[2] for s in states[120:]])
+    assert 0.5 < alts.min() and alts.max() < 12.0
+
+
+def test_colony_hunts_and_perches():
+    e, states = _colony_run(seed=2, seconds=40, events=((1.0, "HUNT"), (28.0, "PERCH")))
+    names = [s.behavior for s in states]
+    assert "HUNT" in names and "PERCH" in names
+    assert any(s.lure[3] > 0 for s in states)
+
+
+def test_colony_protocol_roundtrip():
+    from myrmex.creature.protocol import decode_creature, encode_creature
+    _, states = _colony_run(seconds=1.5)
+    s = states[-1]
+    fr = decode_creature(encode_creature(s, 1, 0.0, 120.0, 1))
+    assert fr.bodies == s.bodies and np.allclose(fr.plate, s.plate, atol=1e-6)
+    assert np.allclose(fr.nrm, s.nrm, atol=1e-5) and np.array_equal(fr.owner, s.owner) and fr.lure.shape == (4,)
+    assert fr.links is not None and fr.behavior == s.behavior
+
+
+def test_take_command_uses_saved_look(tmp_path, monkeypatch):
+    from myrmex.app import controllers as C
+    monkeypatch.setattr(C, "looks_dir", lambda: str(tmp_path))
+    take = "/x/colony_take_1.npz"
+    assert "--keep-settings" in C.take_command("B", take) and str(tmp_path) not in " ".join(C.take_command("B", take))
+    (tmp_path / "colony.blend").write_bytes(b"")
+    cmd = C.take_command("B", take, render=True)
+    assert cmd[:3] == ["B", "-b", str(tmp_path / "colony.blend")]
+    live, env = C.blender_live_command("B", "/c.blend", 9101, "colony", keep_settings=False)
+    assert live[1] == str(tmp_path / "colony.blend") and env["MYRMEX_KEEP_SETTINGS"] == "0"

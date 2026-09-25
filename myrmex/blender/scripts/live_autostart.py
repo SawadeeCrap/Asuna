@@ -58,11 +58,16 @@ def go_live():
     _register()
     scene = bpy.context.scene
     s = scene.myrmex_live
-    if os.environ.get("MYRMEX_MODE") in ("creature", "polyalloy"):
+    if "MYRMEX_KEEP_SETTINGS" in os.environ:
+        s.keep_settings = os.environ["MYRMEX_KEEP_SETTINGS"] == "1"
+    if os.environ.get("MYRMEX_MODE") in ("creature", "polyalloy", "colony"):
         from myrmex_blender import creature, live, ui
-        creature.setup_creature_scene(scene, "polyalloy" if os.environ["MYRMEX_MODE"] == "polyalloy" else "nanomaterial")
+        # A saved look (opened by the app) is used as it is; otherwise the default studio is built.
+        variant = {"creature": "nanomaterial"}.get(os.environ["MYRMEX_MODE"], os.environ["MYRMEX_MODE"])
+        creature.setup_creature_scene(scene, variant, keep_look=bool(bpy.data.filepath))
         s.port = int(os.environ.get("MYRMEX_POSE_PORT", s.port))
-        _viewport_settings(scene)
+        if not s.keep_settings:
+            _viewport_settings(scene)
         link = live.LiveLink(None, port=s.port)
         link.start()
         ui._LINK["link"] = link
@@ -75,7 +80,8 @@ def go_live():
             next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
     s.engine_mode = os.environ.get("MYRMEX_ENGINE_MODE", "EXTERNAL")
     s.port = int(os.environ.get("MYRMEX_POSE_PORT", s.port))
-    _viewport_settings(scene)
+    if not s.keep_settings:
+        _viewport_settings(scene)
     from myrmex_blender import ui
     wm = bpy.context.window_manager
     win = wm.windows[0] if wm is not None and len(wm.windows) else None

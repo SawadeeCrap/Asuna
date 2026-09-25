@@ -19,6 +19,21 @@ REMOTE_SCRIPTS_DIR = os.path.expanduser("~/Music/Ableton/User Library/Remote Scr
 AUTOSTART = os.path.join(REPO, "blender", "scripts", "live_autostart.py")
 PREPARE = os.path.join(REPO, "blender", "scripts", "prepare_character.py")
 OPEN_TAKE = os.path.join(REPO, "blender", "scripts", "open_take.py")
+CREATURE_BACKENDS = ("creature", "polyalloy", "colony")        # organisms: no .blend, the scene is built
+
+
+def variant_of(backend: str) -> str:
+    return {"creature": "nanomaterial"}.get(backend, backend)
+
+
+def looks_dir() -> str:
+    return os.path.join(characters_dir(), "looks")
+
+
+def look_file(backend_or_variant: str) -> str:
+    """The organism's saved look (Blender > Myrmex > Save Look), if there is one."""
+    p = os.path.join(looks_dir(), variant_of(backend_or_variant) + ".blend")
+    return p if os.path.exists(p) else ""
 
 
 class EngineController:
@@ -37,7 +52,7 @@ class EngineController:
         from ..realtime.inputs import InputConfig
         from ..realtime.session import LiveConfig, LiveSession
         s = self.s
-        creature = s.backend in ("creature", "polyalloy")
+        creature = s.backend in CREATURE_BACKENDS
         if not creature and not os.path.exists(s.rig_json):
             self.log(f"! no rig description next to the character: {s.rig_json}")
             return False
@@ -55,7 +70,8 @@ class EngineController:
             self.session = None
             self.log(f"! engine failed to start: {type(e).__name__}: {e}")
             return False
-        who = {"creature": "Black Nanomaterial Creature", "polyalloy": "Mimetic Polyalloy"}.get(s.backend) \
+        who = {"creature": "Black Nanomaterial Creature", "polyalloy": "Mimetic Polyalloy",
+               "colony": "Polyalloy Colony"}.get(s.backend) \
             or os.path.basename(s.character)
         self.log(f"engine started: {who} | OSC :{s.osc_port} | -> {', '.join(out)}")
         for e in self.session.status()["errors"]:
@@ -132,19 +148,34 @@ def find_blender(hint: str = "") -> str | None:
     return None
 
 
-def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid") -> tuple[list[str], dict]:
-    env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend)
-    if backend in ("creature", "polyalloy"):   # no .blend: the creature scene is built procedurally
-        return [blender, "--python", AUTOSTART], env
+def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid",
+                         keep_settings: bool = True) -> tuple[list[str], dict]:
+    env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend,
+               MYRMEX_KEEP_SETTINGS="1" if keep_settings else "0", MYRMEX_LOOKS=looks_dir())
+    if backend in CREATURE_BACKENDS:           # the saved look, or a scene built from scratch
+        look = look_file(backend)
+        return [blender] + ([look] if look else []) + ["--python", AUTOSTART], env
     return [blender, character, "--python", AUTOSTART], env
 
 
+def take_variant(take: str) -> str | None:
+    base = os.path.basename(take)
+    for prefix, variant in (("colony_take", "colony"), ("polyalloy_take", "polyalloy"),
+                            ("nanomaterial_take", "nanomaterial"), ("creature_take", "nanomaterial")):
+        if base.startswith(prefix):
+            return variant
+    return None
+
+
 def take_command(blender: str, take: str, character: str = "", audio: str = "", render: bool = False,
-                 size: str = "1920x1080", quality: str = "eevee") -> list[str]:
-    """Open (or render, headless) a recorded take in Blender."""
-    creature = os.path.basename(take).startswith(("nanomaterial_take", "polyalloy_take", "creature_take"))
-    cmd = [blender] + (["-b"] if render else []) + ([] if creature or not character else [character])
+                 size: str = "1920x1080", quality: str = "eevee", keep_settings: bool = True) -> list[str]:
+    """Open (or render, headless) a recorded take in Blender - in your saved look when there is one."""
+    variant = take_variant(take)
+    scene = (look_file(variant) if variant else character) or ""
+    cmd = [blender] + (["-b"] if render else []) + ([scene] if scene else [])
     cmd += ["--python", OPEN_TAKE, "--", "--take", take, "--size", size, "--quality", quality]
+    if keep_settings:
+        cmd.append("--keep-settings")
     if audio:
         cmd += ["--audio", audio]
     if render:

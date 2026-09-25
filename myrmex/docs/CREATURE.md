@@ -95,7 +95,41 @@ temporarily become robot-like structures.  Procedural (no learning); only the vi
 Control notes (Myrmex track / control channel): 60 morphology shift, 62 blades, 65 collapse (disperse),
 67 reconstruction, 69 rebalance, 71 obstacle, 72 impulse, 74 pressure, 76 turbulence; 64 = camera cut.
 
-# Takes → video (both organisms, and the humanoid)
+# Polyalloy Colony (backend `colony`, creature v3)
+
+The same finite polyalloy, 128 nodes, now able to act as several bodies and to build moving machinery.
+
+* **Flock**: on a drop (energy high for a while, knob *swarm*) the material splits into 2-4 autonomous
+  bodies - each a complete smaller shape sized by its share of the material - that fly in formation,
+  scout, flank, attack prey from several sides, or part around an obstacle and close behind it.  On a
+  breakdown they fly back and fuse (their elastic networks re-form into one).
+* **Per-node material field**: every node has its own cohesion / stiffness / damping / dispersion; it relaxes
+  to its body's state, diffuses along the network and hardens where it is hit.  Back-beat hits (snares) send
+  **hardening waves** through the body: hexagonal **armour plates** rise in a travelling band and sink back
+  (knob *armor*); struts show only where the material is locally hard.  The network is plastic: it slowly
+  accepts the shape it is held in (morphological inertia).
+* **Mechanisms** (knob *mechanism*): wings flap with the beat, blade rotors and rings spin with the energy,
+  six tendrils carry travelling waves, the spindle pumps, a crown of spikes pulses on kicks, and when it
+  perches it walks on six legs in a tripod gait locked to the beat.
+* **Prey** (knob *hunt*): a small dark lure with a faint warm core flies around; the colony hunts it, closes
+  around it in a shell, carries it for two bars and lets it burst out.
+* The aerial camera follows the story: retreats when the flock splits, pushes in on the catch, tracks the
+  walk on the ground, observes the merge.
+
+Control notes (in addition to v2): 77 split · 79 merge · 81 hardening wave · 83 hunt · 84 perch.
+
+# Your look in Blender (saved between sessions)
+
+Tune materials, lights, world, colour management and render settings, then *Myrmex panel → Save Look*.
+Humanoid: saved in the character's .blend (next to its rig.json).  Organisms: `~/Myrmex/looks/<type>.blend`
+- the app opens it for live sessions and for take renders instead of building the default studio
+(*Character → Your look in Blender* shows which looks exist, *Forget saved look* deletes one).
+**Keep my Blender settings** (on by default): Myrmex no longer changes EEVEE / colour / shadows / samples,
+neither when going live nor in *Render Video* (which then only sets size, frame rate and the output file).
+Ctrl+Z, redo or opening another file while live no longer stops the stream: the link finds its objects
+again by itself; *Start Live* also works in organism scenes (no armature needed).
+
+# Takes → video (all organisms, and the humanoid)
 
 1. *Camera & Output* → tick **Record**, play your set, stop the engine (or *Save take now*).
    A take stores the body every frame, the live camera and the song position.
@@ -106,4 +140,4 @@ Control notes (Myrmex track / control channel): 60 morphology shift, 62 blades, 
    (or F12 / Render Animation).  Or **Render last take → .mp4** renders in the background (H.264 + AAC,
    next to the take; sizes 1920×1080, 1080×1920 for reels, square, 4K).
 4. In Blender: *Myrmex* panel → *Takes → video* → **Import Take** works for any take
-   (`nanomaterial_take_*`, `polyalloy_take_*`, humanoid `take_*` with the character's .blend open).
+   (`nanomaterial_take_*`, `polyalloy_take_*`, `colony_take_*`, humanoid `take_*` with the character's .blend open).

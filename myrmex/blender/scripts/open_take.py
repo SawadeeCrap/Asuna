@@ -30,6 +30,7 @@ def main():
     ap.add_argument("--quality", default="eevee")
     ap.add_argument("--out", default="")
     ap.add_argument("--no-camera", action="store_true")
+    ap.add_argument("--keep-settings", action="store_true", help="render with the look's own settings")
     a = ap.parse_args(argv)
     if not hasattr(bpy.types.Scene, "myrmex_live"):
         import myrmex_blender
@@ -38,13 +39,14 @@ def main():
     s = bpy.context.scene.myrmex_live
     s.take_audio = a.audio
     s.render_size = a.size if a.size in {i.identifier for i in s.bl_rna.properties["render_size"].enum_items} else "1920x1080"
-    s.render_quality = a.quality
+    s.render_quality = a.quality if a.quality != "look" else s.render_quality
+    s.keep_settings = a.keep_settings or a.quality == "look"
     msg = ui.import_any_take(bpy.context, a.take, a.audio or None, not a.no_camera)
     print("Myrmex:", msg, flush=True)
     w, h = (int(x) for x in a.size.split("x"))
     out = a.out or os.path.splitext(os.path.abspath(os.path.expanduser(a.take)))[0] + f"_{w}x{h}.mp4"
     if a.render:
-        creature_take.configure_video_output(out, (w, h), a.quality)
+        creature_take.configure_video_output(out, (w, h), s.render_quality, keep=s.keep_settings)
         sc = bpy.context.scene
         total = sc.frame_end - sc.frame_start + 1
 

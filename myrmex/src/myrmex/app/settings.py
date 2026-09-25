@@ -67,7 +67,8 @@ class AppSettings:
     record: bool = False
     record_dir: str = ""
     start_engine_on_launch: bool = True
-    backend: str = "humanoid"               # humanoid | creature | polyalloy
+    backend: str = "humanoid"               # humanoid | creature | polyalloy | colony
+    keep_blender_settings: bool = True      # Myrmex leaves EEVEE / colour / shadows / samples alone
     take_audio: str = ""                    # song for take renders
     render_size: str = "1920x1080"
     render_quality: str = "eevee"

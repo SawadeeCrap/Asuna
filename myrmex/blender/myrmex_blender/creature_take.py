@@ -130,7 +130,7 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     # Lights and floor follow the organism (and rise with it when it flies).
     com = take.resampled("com", fps) if "com" in take.d else pos.mean(1)
     heading = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]] if "heading" in take.d else np.zeros(m)
-    lift = np.maximum(0.0, com[:, 2] - 1.2) if take.variant == "polyalloy" else np.zeros(m)
+    lift = np.maximum(0.0, com[:, 2] - 1.2) if take.variant in ("polyalloy", "colony") else np.zeros(m)
     rig, floor = bpy.data.objects.get("MyrmexLightRig"), bpy.data.objects.get("MyrmexFloor")
     if rig is not None:
         _clear_anim(rig)
@@ -139,8 +139,8 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     if floor is not None:
         _clear_anim(floor)
         keys += key_channels(floor, "MyrmexTakeFloor", [("location", 0, com[:, 0]), ("location", 1, com[:, 1])], frames)
-    # Mimetic Polyalloy: strut lattice (PC2 cache) and obstacles.
-    if take.variant == "polyalloy" and "links" in take.d:
+    # Mimetic Polyalloy / Colony: strut lattice (PC2 cache) and obstacles.
+    if take.variant in ("polyalloy", "colony") and "links" in take.d:
         links = take.resampled("links", fps).astype(float)
         n_links = max(1, int((links[:, :, 0] >= 0).sum(1).max()))
         if len(view.lattice.data.vertices) != 2 * n_links:        # only the slots this take uses (smaller cache)
@@ -161,6 +161,21 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
             r = obs[:, k, 3]
             keys += key_channels(o, f"MyrmexTakeObstacle{k}", [("location", a, obs[:, k, a]) for a in range(3)] +
                                  [("scale", a, r) for a in range(3)], frames, tol=1e-3)
+    # Colony: armour plates (PC2 cache) and the prey.
+    if take.variant == "colony" and "plate" in take.d:
+        plate, nrm = take.resampled("plate", fps), take.resampled("nrm", fps)
+        view.make_colony(n)
+        pts = np.stack([CreatureView.plate_points(pos[k], nrm[k], plate[k], radius[k]) for k in range(m)])
+        pc2 = os.path.splitext(path)[0] + "_plates.pc2"
+        write_pc2(pc2, pts)
+        pl = view.plates
+        mc = pl.modifiers.get("TakeCache") or pl.modifiers.new("TakeCache", "MESH_CACHE")
+        mc.cache_format, mc.filepath, mc.time_mode, mc.play_mode = "PC2", pc2, "FRAME", "SCENE"
+        mc.frame_start = float(frame_start)
+        lure = take.resampled("lure", fps)
+        _clear_anim(view.lure)
+        keys += key_channels(view.lure, "MyrmexTakePrey", [("location", a, lure[:, a]) for a in range(3)] +
+                             [("scale", a, lure[:, 3]) for a in range(3)], frames, tol=1e-3)
     # Camera and markers.
     cams = []
     if use_camera:
@@ -180,11 +195,20 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
 
 
 def configure_video_output(path: str, resolution=(1920, 1080), preset: str = "eevee", samples: int | None = None,
-                           motion_blur: bool = False) -> str:
-    """Render straight to an .mp4 (H.264 + AAC) with the scene's sound strips."""
+                           motion_blur: bool = False, keep: bool = False) -> str:
+    """Render straight to an .mp4 (H.264 + AAC) with the scene's sound strips.
+
+    ``keep``: the scene's own engine / samples / colour / shadows stay as they are (a saved look);
+    only the size, the frame rate and the output are set.
+    """
     sc = bpy.context.scene
-    cinema.configure_render(preset, resolution, sc.render.fps, motion_blur, samples)
     r = sc.render
+    if keep:
+        r.resolution_x, r.resolution_y = int(resolution[0]), int(resolution[1])
+        r.resolution_percentage = 100
+        r.pixel_aspect_x = r.pixel_aspect_y = 1.0
+    else:
+        cinema.configure_render(preset, resolution, sc.render.fps, motion_blur, samples)
     r.use_lock_interface = True
     ims = r.image_settings
     if hasattr(ims, "media_type"):
