@@ -28,6 +28,7 @@ import numpy as np
 from ..util.rng import RngStreams, stable_hash64
 from .config import DEFAULT_PARAMS
 from .control import CreatureControlInput, ParameterSet
+from .puppet import GloveControl, GloveDriver
 from .skeleton import Skeleton
 
 ATTRACTORS = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD",
@@ -236,6 +237,7 @@ class PolyalloyEngine:
         self.ev_rng = self.rs.stream("poly-events")
         self.params = ParameterSet(cfg.params)
         self.inp = CreatureControlInput()
+        self.glove = GloveDriver()                     # a hand (Hand Glove) holding the body
         n = self.n = cfg.nodes
         r = self.rs.stream("poly-shape")
         self.U = np.array([[r.random(), r.random(), r.random()] for _ in range(n)])   # material coordinates
@@ -273,6 +275,7 @@ class PolyalloyEngine:
         self.skel = Skeleton(cfg.max_links)
         self._state_t = 0.0
         self.strike_target = None
+        self.sculpt: tuple | None = None
 
     # ------------------------------------------------------------------ API (same as CreatureEngine)
     def set_input(self, inp: CreatureControlInput) -> None:
@@ -280,6 +283,11 @@ class PolyalloyEngine:
 
     def set_parameter(self, name: str, value) -> bool:
         return self.params.set(name, value)
+
+    def set_glove(self, ctrl: GloveControl | None, shapes: tuple | None = None) -> None:
+        """Direct control by a hand: rotation, fingers, position (see creature/puppet.py)."""
+        self.glove.set(ctrl)
+        self.sculpt = tuple(x for x in (shapes or ()) if x in ATTRACTORS) or None
 
     def trigger_event(self, name: str, arg=None) -> bool:
         if name.upper() not in self.EVENTS:
@@ -310,6 +318,7 @@ class PolyalloyEngine:
                 loc += wa * (shp - shp.mean(0))            # thrust places the body, not the shape
         asym = pr["asymmetry"]
         loc[:, 1] *= 1.0 + 0.35 * asym * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + 1.0)
+        loc = self.glove.local(loc)                    # fingers / scale of a hand, if one is holding it
         return loc @ R.T
 
     def _log(self, name, arg=None):
@@ -495,7 +504,23 @@ class PolyalloyEngine:
         while self._pending:
             self._apply_event(*self._pending.pop(0))
         # Morphological inertia: latent and material state move with time constants, never jump.
+        gc = self.glove.ctrl
+        if gc.active:                                  # the hand: sculpting, material, energy
+            if gc.finger_mode == "morph" and self.sculpt:
+                self.z_goal = np.zeros(len(ATTRACTORS))
+                for shp, ex in zip(self.sculpt, gc.fingers):
+                    self.z_goal[ATTRACTORS.index(shp)] = max(self.z_goal[ATTRACTORS.index(shp)], 0.4 + 2.4 * ex)
+            if gc.material is not None:
+                a, b = ("ELASTIC", "HIGH_STIFFNESS") if gc.material >= 0 else ("ELASTIC", "FLUID")
+                f = abs(gc.material)
+                self.mat_goal = (1 - f) * np.array(MATERIAL[a]) + f * np.array(MATERIAL[b])
+                if self.BONY and gc.material > 0.5:
+                    self.oss = max(self.oss, gc.material)
+            if gc.energy is not None:
+                self.arousal = max(self.arousal, gc.energy)
         tau_m = 0.8 + 3.0 * pr["rigidity"] * (1.2 - pr["fluidity"])
+        if gc.active and gc.finger_mode == "morph":
+            tau_m = 0.25                               # the form follows the fingers at once
         noise = self.nrng.standard_normal(len(ATTRACTORS)) * pr["mutation"] * 0.6
         self.z += (self.z_goal - self.z) * min(1.0, dt / tau_m) + noise * math.sqrt(dt)
         self.mat += (self.mat_goal - self.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"]))
@@ -506,7 +531,7 @@ class PolyalloyEngine:
         if inp.transient > 0.5:
             self.oss = min(1.0, self.oss + 0.4 * dt * pr["aggression"])
         coh, stiff, damp, rep, brk, disp = self.mat
-        coh *= 0.5 + pr["coherence"]
+        coh *= (0.5 + pr["coherence"]) * (1.0 + 0.8 * gc.grip if gc.active else 1.0)
         stiff *= 0.4 + 1.2 * pr["rigidity"]
         disp = min(1.0, disp + 0.3 * pr["fluidity"] * pr["noise"])
         # Flight: desired velocity (cruise along a wandering heading, altitude band), distributed thrust.
@@ -517,12 +542,14 @@ class PolyalloyEngine:
         self.wander *= math.exp(-dt * 0.3)
         home = -self.P[:2]
         dist = float(np.linalg.norm(home))
-        want = self.heading + 0.5 * self.wander * dt * 3
+        want = self.heading + 0.5 * self.wander * dt * 3 + (gc.offset[0] * 1.6 * dt if gc.active else 0.0)
         if dist > 0.7 * cfg.stage_radius:
             want_home = math.atan2(home[1], home[0])
             want += ((want_home - self.heading + math.pi) % (2 * math.pi) - math.pi) * min(1.0, dt * 1.2)
         lo, hi = cfg.altitude
         alt_goal = lo + (hi - lo) * pr["altitude"]
+        if gc.active:
+            alt_goal = float(np.clip(alt_goal + 2.2 * gc.offset[1], 0.8, 12.0))
         vz = np.clip((alt_goal - self.P[2]) * 0.8 + 0.3 * math.sin(0.4 * self.t), -1.5, 1.5)
         v_des = np.array([math.cos(want) * cruise, math.sin(want) * cruise, vz])
         if self.intent == "STRIKE":
@@ -543,6 +570,10 @@ class PolyalloyEngine:
         self.heading += dt * self.yaw_rate
         self.pitch += (math.atan2(vcom[2], max(sp, 0.5)) * 0.6 - self.pitch) * min(1.0, dt * 2.0)
         R = self._R()
+        # The hand turns the body: every node rigidly with it, and the shape targets too (no lag).
+        dR = self.glove.begin(dt)
+        self.glove.rigid(self.x, self.v, self.P, R @ dR @ R.T)
+        R = R @ self.glove.G
         # Targets from the blended attractors + bass pressure + breathing.
         w = self._weights()
         pressure = 0.25 * inp.bass * (0.5 + pr["expansion"]) + 0.03 * math.sin(2 * math.pi * inp.beat / 4.0)

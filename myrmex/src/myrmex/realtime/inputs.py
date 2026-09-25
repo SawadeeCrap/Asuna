@@ -158,6 +158,9 @@ class InputHub:
         self._osc_state: dict[str, float] = {}
         self.midimap = MidiMapper(self.cfg.mapping.get("midi_bindings", []))
         self.monitor = MidiMonitor()
+        from .glove import GloveDecoder
+        self.glove = GloveDecoder(self.cfg.mapping.get("glove_profile"))    # Hand Glove, read in parallel
+        self.glove_owns = False                    # True while a glove link drives the creature directly
         self.stats = {"notes": 0, "osc_packets": 0, "midi_events": 0, "last_note": -1e9, "errors": []}
         if start:
             self.start()
@@ -313,8 +316,16 @@ class InputHub:
                     g = "bass"
             return NoteEvent(t, 0.1, float(d.get("pitch", 60.0)), float(d["velocity"]), "hit",
                              group=g, sharpness=float(d.get("sharpness", 0.8)))
+        if k == "pb":
+            ch = int(d.get("channel", 0))
+            self.glove.feed_pb(ch, float(d["value"]), ev.t)
+            self.monitor.add("pb", ch, 0, float(d["value"]), "→ glove" if self.glove.owns_pb(ch) else "pitch bend")
+            return None
         if k == "cc":
             ch, num, val = int(d.get("channel", 0)), int(d["control"]), float(d["value"])
+            self.glove.feed_cc(ch, num, int(d.get("raw", round(val * 127))), ev.t)
+            if self.glove_owns and self.glove.owns(ch, num):     # the glove moves the body, not parameters
+                return None
             if self.midimap.learn("cc", ch, num):
                 self.monitor.add("cc", ch, num, val, "learned")
                 return None
@@ -337,6 +348,8 @@ class InputHub:
             return None
         if k == "osc":
             addr, v = d["address"], float(d["value"])
+            if self.glove.feed_osc(addr, v, ev.t):
+                return None
             target = self.cfg.mapping["osc"].get(addr)
             if target in GROUPS:
                 prev = self._osc_state.get(addr, 0.0)

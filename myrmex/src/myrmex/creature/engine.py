@@ -18,6 +18,7 @@ from .config import PARAMS, CreatureConfig
 from .control import CreatureControlInput, ParameterSet
 from .material import MassField
 from .morphology import ARCHETYPES, AppendageSystem, Morphology
+from .puppet import GloveControl, GloveDriver
 from .nodes import APPENDAGE, CORE, PRIMARY, SECONDARY, NodeSystem
 
 log = logging.getLogger("myrmex.creature")
@@ -109,10 +110,16 @@ class CreatureEngine:
         nodes.pos[self.i_primary] += self.dir_p * 0.2 * mc.size
         nodes.pos[self.i_secondary] += self.sec_dir * 0.25 * mc.size
         nodes.target[:] = nodes.pos
+        self.glove = GloveDriver()                         # a hand (Hand Glove) holding the creature
+        self.finger_of = {int(n): i % 5 for i, n in enumerate(self.i_primary)}   # primary node -> finger
         self.surface = 0.2
         self.glow = 0.0
 
     # ------------------------------------------------------------------ API
+    def set_glove(self, ctrl: GloveControl | None, shapes: tuple | None = None) -> None:
+        """A hand holding the creature: yaw / tilt of the body, fingers = limbs, height, steering, size."""
+        self.glove.set(ctrl)
+
     def set_input(self, inp: CreatureControlInput) -> None:
         self.inp = inp.sanitized()
 
@@ -226,6 +233,10 @@ class CreatureEngine:
         nd.freq[self.i_primary] = ph.primary[0] * rig * (1.0 - 0.25 * asym * self.side_bias)
         nd.zeta[self.i_primary] = ph.primary[1]
         nd.freq[self.i_secondary], nd.zeta[self.i_secondary] = ph.secondary[0] * rig, ph.secondary[1]
+        gc = self.glove.ctrl
+        if gc.active:                                      # held: the body follows the hand more tightly
+            nd.freq[self.i_primary] *= 1.0 + 0.6 * gc.grip
+            nd.freq[self.i_secondary] *= 1.0 + 0.6 * gc.grip
         # 6. locomotion: the core pursues a wandering goal; body yaw follows velocity with inertia
         goal, speed = self.beh.locomotion_goal(dt, nd.pos[0], pr)
         vxy = nd.vel[0, :2]
@@ -235,9 +246,17 @@ class CreatureEngine:
             self.yaw_v += dt * (4.0 * dy - 2.5 * self.yaw_v)
         self.heading += dt * self.yaw_v
         R = _rot_z(self.heading)
+        if gc.active:                                      # the hand steers the goal sideways
+            goal = np.asarray(goal, float).copy()
+            goal[:2] += R[:2, 1] * gc.offset[0] * 1.5 * mc.size
+        dR = self.glove.begin(dt)
+        self.glove.rigid(nd.pos, nd.vel, nd.pos[0].copy(), R @ dR @ R.T, slice(1, None))
+        R = R @ self.glove.G
         size = mc.size
         breathe = 0.04 * math.sin(2 * math.pi * (inp.beat / 4.0 if inp.playing else 0.18 * t)) * au.tempo_oscillation
         body_h = size * (0.18 + 0.42 * lift) * (1 - 0.3 * max(0.0, -self.pressure))
+        if gc.active:                                      # raise the hand: it rears up; lower it: it crouches
+            body_h = max(0.08 * size, body_h + 0.35 * size * gc.offset[1])
         gait = inp.beat * 0.5 if inp.playing else t * speed
         nd.target[0] = np.array([goal[0], goal[1], body_h]) + nd.ext[0] * 0
         # 7. primary masses: spread / elongation / flattening in the body frame, lean from acceleration
@@ -246,6 +265,11 @@ class CreatureEngine:
         self.lean += (np.clip(acc[:2] * 0.02, -0.4, 0.4) - self.lean) * min(1.0, dt * 3.0)
         scale = np.array([elong, 1.0 / max(elong, 0.3) ** 0.5, flat]) * size * 0.32 * spread * (1 + self.pressure + breathe)
         local = self.dir_p * scale
+        if gc.active:                                      # fingers = the primary masses (and their limbs)
+            if gc.finger_mode == "limbs":
+                ext = np.array([gc.fingers[self.finger_of[int(n)]] for n in self.i_primary])
+                local = local * (0.55 + 0.9 * ext * min(1.0, gc.amount) + 0.45 * (1 - min(1.0, gc.amount)))[:, None]
+            local = local * gc.scale
         local[:, 0] += lean_m * 0.3 * size * local[:, 2]
         noise_amp = (pr["noise"] * 0.6 + mnoise * 0.4 + self.beh.profile("noise") * 0.3) * 0.06 * size
         ph_i = np.arange(len(self.dir_p)) * 1.7
@@ -284,6 +308,10 @@ class CreatureEngine:
                 nd.gravity_w[ids] = 0.0
                 continue
             L = a.spec("length") * a.scale * size * a.growth
+            gc = self.glove.ctrl
+            fext = gc.fingers[self.finger_of.get(int(a.origin), 0)] if gc.active and gc.finger_mode == "limbs" else None
+            if fext is not None:                           # an extended finger stretches its limb
+                L *= 0.45 + 1.1 * fext
             seg = L / K
             f = a.spec("freq") * (0.7 + 0.6 * pr["rigidity"]) * (1.2 - 0.4 * pr["fluidity"])
             nd.freq[ids], nd.zeta[ids] = f, a.spec("zeta")
@@ -297,6 +325,8 @@ class CreatureEngine:
             for i, idx in enumerate(ids):
                 u = (i + 1) / K
                 ang = a.spec("curl") * u * 1.5 + wave * math.sin(2.2 * t - 3.0 * u + a.phase) * u
+                if fext is not None:                       # a bent finger curls it
+                    ang += (1.0 - fext) * 1.4 * u
                 d = d0 * math.cos(ang) + perp * math.sin(ang)
                 d[2] += vib * math.sin(40 * t + i) - 0.15 * a.spec("gravity") * u
                 d = d / max(np.linalg.norm(d), 1e-6)

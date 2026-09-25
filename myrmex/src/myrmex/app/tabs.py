@@ -230,3 +230,179 @@ def refresh_midi(win) -> None:
             t.setItem(0, col, QTableWidgetItem(str(x)))
     while t.rowCount() > 200:
         t.removeRow(t.rowCount() - 1)
+
+
+# ============================================================================ Hand Glove
+GLOVE_PRESETS = [("puppet", "Puppet", "The body turns with your hand, fingers are its limbs; raise / lower = height, "
+                                       "left / right = steering, towards the screen = bigger and closer."),
+                 ("sculpt", "Sculpt", "The hand turns the form in place; each finger blends in one of five forms."),
+                 ("conductor", "Conductor", "Twist to spin it, tilt to melt or harden it, open fingers = energy; "
+                                            "the hand steers and lifts."),
+                 ("camera", "Camera", "The organism stays free; your hand orbits, raises and zooms the camera."),
+                 ("off", "Off", "The glove's MIDI goes to the parameters (MIDI page) as before.")]
+
+
+def glove_tab(win) -> QWidget:
+    from PySide6.QtWidgets import QProgressBar
+    from ..realtime.glove import PARAMS
+    g = win.s.glove
+    w = QWidget()
+    v = QVBoxLayout(w)
+    box = QGroupBox("Hand Glove")
+    lay = QVBoxLayout(box)
+    win.lbl_glove = QLabel("waiting for the glove …")
+    lay.addWidget(win.lbl_glove)
+    grid = QGridLayout()
+    win.glove_bars = {}
+    for i, p in enumerate(PARAMS):
+        bar = QProgressBar()
+        bar.setRange(0, 1000)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(8)
+        grid.addWidget(QLabel(p), i % 6, (i // 6) * 2)
+        grid.addWidget(bar, i % 6, (i // 6) * 2 + 1)
+        win.glove_bars[p] = bar
+    lay.addLayout(grid)
+    win.lbl_glove_ev = QLabel("")
+    win.lbl_glove_ev.setProperty("muted", True)
+    lay.addWidget(win.lbl_glove_ev)
+    v.addWidget(box)
+
+    box = QGroupBox("Synchronisation")
+    form = QFormLayout(box)
+    win.cmb_glove = QComboBox()
+    for key, label, _ in GLOVE_PRESETS:
+        win.cmb_glove.addItem(label, key)
+    win.cmb_glove.setCurrentIndex(max(0, win.cmb_glove.findData(g.get("preset", "puppet"))))
+    desc = QLabel()
+    desc.setWordWrap(True)
+    desc.setProperty("muted", True)
+
+    def preset_changed(*_):
+        key = win.cmb_glove.currentData()
+        desc.setText(next(d for k, _, d in GLOVE_PRESETS if k == key))
+        _glove_set(win, "preset", key)
+    win.cmb_glove.currentIndexChanged.connect(preset_changed)
+    desc.setText(next(d for k, _, d in GLOVE_PRESETS if k == win.cmb_glove.currentData()))
+    form.addRow("Preset", win.cmb_glove)
+    form.addRow("", desc)
+    for key, label, default in (("intensity", "Intensity", 1.0), ("smoothing", "Smoothing (0 = raw, fastest)", 0.45),
+                                ("sensitivity", "Gesture sensitivity", 0.5)):
+        sl = QSlider(Qt.Orientation.Horizontal)
+        top = 1500 if key == "intensity" else 1000
+        sl.setRange(0, top)
+        sl.setValue(int(1000 * g.get(key, default)))
+        sl.valueChanged.connect(lambda val, k=key: _glove_set(win, k, val / 1000.0))
+        form.addRow(label, sl)
+    chk = QCheckBox("Gestures trigger events")
+    chk.setToolTip("flick = strike / impulse · fist = harden · spread = burst · push = strike · pinch = split / merge")
+    chk.setChecked(g.get("gestures", True))
+    chk.toggled.connect(lambda on: _glove_set(win, "gestures", on))
+    form.addRow(chk)
+    chk = QCheckBox("Invert fingers (if an open hand makes the organism close)")
+    chk.setChecked(g.get("invert_fingers", False))
+    chk.toggled.connect(lambda on: _glove_set(win, "invert_fingers", on))
+    form.addRow(chk)
+    b = QPushButton("Calibrate neutral pose")
+    b.setToolTip("Hold your hand relaxed, palm down, then click: this pose becomes 'straight'")
+    b.clicked.connect(lambda: _glove_calibrate(win))
+    form.addRow(b)
+    v.addWidget(box)
+
+    box = QGroupBox("Link (which MIDI controls are the glove)")
+    lay = QVBoxLayout(box)
+    lay.addWidget(QLabel("Myrmex reads the glove's MIDI port in parallel with your other programs. Auto-detect "
+                         "takes the controls that stream, in the glove's order (thumb … z). If that is wrong: "
+                         "click Learn on a row, then press MAP on the same row in Hand Glove within 1.5 s. "
+                         "OSC works too: /glove/thumb … /glove/z (0..1 or 0..16383) to the OSC port."))
+    row = QHBoxLayout()
+    b = QPushButton("Auto-detect")
+    b.clicked.connect(lambda: _glove_autodetect(win))
+    row.addWidget(b)
+    row.addStretch(1)
+    lay.addLayout(row)
+    win.tbl_glove = QTableWidget(len(PARAMS), 3)
+    win.tbl_glove.setHorizontalHeaderLabels(["glove", "MIDI / OSC source", ""])
+    win.tbl_glove.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+    win.tbl_glove.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    win.tbl_glove.setMinimumHeight(380)
+    win.tbl_glove.verticalHeader().setVisible(False)
+    win.tbl_glove.setShowGrid(False)
+    for i, p in enumerate(PARAMS):
+        win.tbl_glove.setItem(i, 0, QTableWidgetItem(p))
+        win.tbl_glove.setItem(i, 1, QTableWidgetItem(_source_label(g.get("profile", {}).get(p, ""))))
+        b = QPushButton("Learn")
+        b.clicked.connect(lambda _=False, name=p: _glove_learn(win, name))
+        win.tbl_glove.setCellWidget(i, 2, b)
+    lay.addWidget(win.tbl_glove)
+    v.addWidget(box)
+    v.addStretch(1)
+    return w
+
+
+def _source_label(key: str) -> str:
+    if not key:
+        return "—"
+    p = key.split(":")
+    if p[0] == "cc14":
+        return f"CC {p[2]} + {int(p[2]) + 32} (14-bit) · ch {p[1]}"
+    if p[0] == "cc":
+        return f"CC {p[2]} · ch {p[1]}"
+    if p[0] == "pb":
+        return f"pitch bend · ch {p[1]}"
+    return f"OSC /glove/{p[1]}"
+
+
+def _glove_set(win, key: str, value) -> None:
+    win.s.glove[key] = value
+    win.engine.glove_config(**{key: value})
+
+
+def _glove_calibrate(win) -> None:
+    neutral = win.engine.glove_calibrate()
+    if neutral:
+        win.s.glove["neutral"] = neutral
+        win.log("glove calibrated: this pose is neutral now")
+    else:
+        win.log("glove: nothing to calibrate (engine stopped or no glove data)")
+
+
+def _glove_autodetect(win) -> None:
+    prof = win.engine.glove_autodetect()
+    if prof:
+        win.s.glove["profile"] = prof
+        win.log(f"glove: {len(prof)} controls linked (auto-detect)")
+    else:
+        win.log("glove: no streaming controls found - is the glove sending, and its MIDI port enabled on Inputs?")
+
+
+def _glove_learn(win, param: str) -> None:
+    win.engine.glove_learn(param)
+    win.log(f"glove: press MAP on '{param}' in Hand Glove now …")
+
+
+def refresh_glove(win) -> None:
+    if not hasattr(win, "lbl_glove"):
+        return
+    snap = win.engine.glove_snapshot()
+    if snap is None:
+        win.lbl_glove.setText("start the engine to link the glove")
+        return
+    if snap.get("profile"):
+        win.s.glove["profile"] = snap["profile"]
+    state = "connected" if snap["present"] else "no glove data"
+    if snap.get("learning"):
+        state = f"listening for '{snap['learning']}' — press MAP in Hand Glove"
+    win.lbl_glove.setText(f"{state} · {snap['rate']:.0f} msg/s · preset {snap['preset']} · "
+                          f"turn {snap['angles'][0]:.0f}° / {snap['angles'][1]:.0f}° / {snap['angles'][2]:.0f}°")
+    for p, bar in win.glove_bars.items():
+        val = snap["values"].get(p)
+        bar.setValue(int(1000 * val) if val is not None else 0)
+    ev = snap.get("events") or [f"{g}" for g in snap.get("gestures", [])]
+    win.lbl_glove_ev.setText(("gestures: " + " · ".join(ev)) if ev else "gestures: —")
+    for i in range(win.tbl_glove.rowCount()):
+        p = win.tbl_glove.item(i, 0).text()
+        item = win.tbl_glove.item(i, 1)
+        txt = _source_label(snap["profile"].get(p, ""))
+        if item.text() != txt:
+            item.setText(txt)

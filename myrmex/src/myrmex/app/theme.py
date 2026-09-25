@@ -108,6 +108,8 @@ QScrollBar::handle { background: %(border2)s; border-radius: 3px; min-height: 28
 QScrollBar::handle:hover { background: %(text3)s; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+QProgressBar { background: %(border)s; border: none; border-radius: 4px; }
+QProgressBar::chunk { background: %(accent)s; border-radius: 4px; }
 QToolTip { background: %(card)s; color: %(text)s; border: 1px solid %(border2)s; border-radius: 6px; padding: 6px 8px; }
 """
 

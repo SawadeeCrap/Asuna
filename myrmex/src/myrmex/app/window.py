@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
              ("Character", "Who performs: a rigged character or one of the organisms"),
              ("Creature", "The organisms' parameters and events"),
              ("Camera", "Automatic director or your own shots"),
+             ("Glove", "Hand Glove: the organism moves with your hand"),
              ("Inputs", "Ableton, VCV Rack, MIDI, audio and the clock"),
              ("MIDI", "Every incoming CC and note, and where it goes"),
              ("Takes", "Record performances and turn them into videos"),
@@ -172,7 +173,8 @@ class MainWindow(QMainWindow):
         self.btn_blender = QPushButton("Open in Blender")
         self.btn_blender.clicked.connect(self.open_blender)
         builders = {"Live": self._live_tab, "Character": self._character_tab, "Creature": lambda: T.creature_tab(self),
-                    "Camera": self._camera_tab, "Inputs": self._inputs_tab, "MIDI": lambda: T.midi_tab(self),
+                    "Camera": self._camera_tab, "Glove": lambda: T.glove_tab(self), "Inputs": self._inputs_tab,
+                    "MIDI": lambda: T.midi_tab(self),
                     "Takes": self._output_tab, "Log": lambda: self.logbox}
         self.page_index = {}
         for name, subtitle in self.PAGES:
@@ -210,6 +212,7 @@ class MainWindow(QMainWindow):
             body.layout().setSpacing(6)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(body)
         v.addWidget(scroll, 1)
@@ -600,6 +603,9 @@ class MainWindow(QMainWindow):
         s.backend = self.cmb_backend.currentData()
         s.take_audio = self.ed_song.text().strip()
         s.keep_blender_settings = self.chk_keep.isChecked()
+        snap = self.engine.glove_snapshot() if self.engine.running else None
+        if snap and snap.get("profile"):                     # keep the glove link for the next session
+            s.glove["profile"] = snap["profile"]
         s.render_size = self.cmb_rsize.currentText()
         s.render_quality = self.cmb_rquality.currentData()
         s.midi_bindings = T.read_bindings(self)
@@ -835,6 +841,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ status
     def _refresh(self) -> None:
         T.refresh_midi(self)
+        if self.stack.currentIndex() == self.page_index.get("Glove"):
+            T.refresh_glove(self)
         st = self.engine.status()
         tok = theme.T
         if not st:

@@ -57,13 +57,17 @@ class EngineController:
             self.log(f"! no rig description next to the character: {s.rig_json}")
             return False
         try:
-            inputs = InputConfig.from_file(s.mapping_file or None, osc_port=int(s.osc_port), midi=list(s.midi_ports),
+            ports = list(s.midi_ports)
+            if (s.glove or {}).get("preset", "puppet") != "off":      # the Hand Glove joins by itself
+                ports += [p for p in midi_inputs()[0] if any(w in p.lower() for w in ("glove", "hand")) and p not in ports]
+            inputs = InputConfig.from_file(s.mapping_file or None, osc_port=int(s.osc_port), midi=ports,
                                            audio=s.audio_device or None)
             inputs.mapping["midi_bindings"] = list(s.midi_bindings)
             out = [f"127.0.0.1:{int(s.pose_port)}"] + [t.strip() for t in s.extra_targets.split(",") if t.strip()]
             cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
-                             camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs)
+                             camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs,
+                             glove=dict(s.glove or {}))
             self.session = LiveSession(cfg)
             self.session.start()
         except Exception as e:
@@ -114,6 +118,30 @@ class EngineController:
     def set_latency(self, ms: float) -> None:
         if self.session is not None:
             self.session.cfg.latency = ms / 1000.0
+
+    # ------------------------------------------------------------------ Hand Glove
+    def glove_config(self, **kw) -> None:
+        if self.session is not None:
+            self.session.glove.configure(**kw)
+
+    def glove_calibrate(self) -> dict:
+        return self.session.glove.state.calibrate() if self.session is not None else {}
+
+    def glove_learn(self, param: str) -> None:
+        if self.session is not None:
+            self.session.inputs.glove.learn_param(param, time.perf_counter())
+
+    def glove_autodetect(self) -> dict:
+        return self.session.inputs.glove.autodetect(time.perf_counter()) if self.session is not None else {}
+
+    def glove_snapshot(self) -> dict | None:
+        if self.session is None:
+            return None
+        dec = self.session.inputs.glove
+        dec.poll_learn(time.perf_counter())
+        snap = self.session.glove.snapshot(dec, time.perf_counter())
+        snap["events"] = [f"{g} → {e.lower()}" for _, g, e in self.session.glove.last_events[-4:]]
+        return snap
 
     def save_take(self) -> str | None:
         return self.session.save_take() if self.session is not None else None

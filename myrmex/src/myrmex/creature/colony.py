@@ -30,6 +30,7 @@ from ..util.rng import RngStreams, stable_hash64
 from .config import DEFAULT_PARAMS
 from .control import CreatureControlInput, ParameterSet
 from .polyalloy import AGGRESSIVE, MATERIAL, Obstacle, PolyalloyState, _knn_edges, attractor_shape
+from .puppet import GloveControl, GloveDriver
 from .skeleton import Skeleton
 
 SHAPES = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN", "LEGS",
@@ -250,6 +251,8 @@ class ColonyEngine:
         self.response_hist: list[str] = []
         self.events: list[tuple[float, str, object]] = []
         self._pending: list[tuple[str, object]] = []
+        self.glove = GloveDriver()                     # a hand (Hand Glove) holding the bodies
+        self.sculpt: tuple | None = None
         self.skel = Skeleton(cfg.max_links)
         self._state_t = 0.0
         self.hn = np.array([(k * 0.7548776662) % 1.0 for k in range(n)])
@@ -260,6 +263,11 @@ class ColonyEngine:
 
     def set_parameter(self, name: str, value) -> bool:
         return self.params.set(name, value)
+
+    def set_glove(self, ctrl: GloveControl | None, shapes: tuple | None = None) -> None:
+        """Direct control by a hand: every flying body turns with it, fingers shape it (creature/puppet.py)."""
+        self.glove.set(ctrl)
+        self.sculpt = tuple(x for x in (shapes or ()) if x in SHAPES) or None
 
     def trigger_event(self, name: str, arg=None) -> bool:
         if name.upper() not in self.EVENTS:
@@ -703,6 +711,9 @@ class ColonyEngine:
         base = cfg.cruise * (0.4 + 1.2 * pr["speed"]) * (0.6 + self.arousal)
         lo, hi = cfg.altitude
         alt_goal = lo + (hi - lo) * pr["altitude"]
+        gc = self.glove.ctrl
+        if gc.active:
+            alt_goal = float(np.clip(alt_goal + 2.2 * gc.offset[1], 0.8, 12.0))
         b.wander = b.wander * math.exp(-dt * 0.3) + self.nrng.standard_normal() * math.sqrt(dt) * (0.4 + pr["noise"])
         v_des = self._v_des(k, b, lead, dt, pr, sb, base, alt_goal)
         if b.intent != "PERCH":
@@ -751,7 +762,7 @@ class ColonyEngine:
             v_des = aim / max(float(np.linalg.norm(aim)), 1e-6) * cfg.size * 7.0
         else:
             cruise = base * self.PLAN[b.intent][2]
-            want = b.heading + 1.5 * b.wander * dt
+            want = b.heading + 1.5 * b.wander * dt + (self.glove.ctrl.offset[0] * 1.6 * dt if self.glove.ctrl.active else 0.0)
             home = -b.P[:2]
             if float(np.linalg.norm(home)) > 0.7 * cfg.stage_radius:
                 wh = math.atan2(home[1], home[0])
@@ -768,7 +779,7 @@ class ColonyEngine:
         s = sb * (0.75 + 0.5 * pr["expansion"] - 0.3 * pr["contraction"])
         elong = 0.8 + 0.6 * pr["density"]
         w = b.weights()
-        R = b.R()
+        R = b.R() @ self.glove.G                        # the hand's turn, in the body's frame
         U = self.U[idx]
         loc = np.zeros((len(idx), 3))
         extra = np.zeros((len(idx), 3))
@@ -789,6 +800,7 @@ class ColonyEngine:
                 shp -= shp.mean(0)
             loc += wa * shp
         loc[:, 1] *= 1.0 + 0.35 * pr["asymmetry"] * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + k)
+        loc = self.glove.local(loc)
         pressure = 0.25 * self.inp.bass * (0.5 + pr["expansion"]) + 0.03 * math.sin(2 * math.pi * self.inp.beat / 4.0)
         return b.P + (loc @ R.T) * (1.0 + pressure) + extra
 
@@ -849,6 +861,29 @@ class ColonyEngine:
         vcom = np.empty_like(x)
         goal = np.empty((n, 6))
         tau_m = 0.8 + 3.0 * pr["rigidity"] * (1.2 - pr["fluidity"])
+        # The hand: turn every flying body with it (rigidly, no lag), sculpt / material / energy.
+        gc = self.glove.ctrl
+        dR = self.glove.begin(dt)
+        for k in self._alive():
+            b = self.bodies[k]
+            Rb = b.R()                                  # world turn = the hand's turn seen in the body frame
+            self.glove.rigid(x, v, b.P, Rb @ dR @ Rb.T, np.nonzero(self.own == k)[0])
+        if gc.active:
+            if gc.finger_mode == "morph" and self.sculpt:
+                tau_m = 0.25
+                for k in self._alive():
+                    zg = np.zeros(len(SHAPES))
+                    for shp, ex in zip(self.sculpt, gc.fingers):
+                        zg[SHAPES.index(shp)] = max(zg[SHAPES.index(shp)], 0.4 + 2.4 * ex)
+                    if self.bodies[k].intent not in ("ENVELOP", "PERCH"):
+                        self.bodies[k].z_goal = zg
+            if gc.material is not None:
+                a_, b_ = ("ELASTIC", "HIGH_STIFFNESS") if gc.material >= 0 else ("ELASTIC", "FLUID")
+                f = abs(gc.material)
+                for k in self._alive():
+                    self.bodies[k].mat_goal = (1 - f) * np.array(MATERIAL[a_]) + f * np.array(MATERIAL[b_])
+            if gc.energy is not None:
+                self.arousal = max(self.arousal, gc.energy)
         for k in self._physics_bodies():
             idx = np.nonzero(self.own == k)[0]
             if len(idx) == 0:
@@ -891,7 +926,7 @@ class ColonyEngine:
             if front < np.nanmax(np.where(np.isfinite(dist), dist, 0.0)) + 3.0:
                 live.append((dist, t0, speed))
         self.waves = live
-        coh = m[:, 0] * (0.5 + pr["coherence"])
+        coh = m[:, 0] * (0.5 + pr["coherence"]) * (1.0 + 0.8 * gc.grip if gc.active else 1.0)
         stiff = m[:, 1] * (0.4 + 1.2 * pr["rigidity"])
         damp = m[:, 2]
         rep = m[:, 3]

@@ -51,6 +51,7 @@ class LiveCinematographer:
         # The manual adjustments (distance scale, height offset, orbit, lens, smoothing) apply in both modes.
         self.mode = "auto"
         self.manual = {"distance": 1.0, "height": 0.0, "orbit": 0.0, "lens": 0.0, "smooth": 0.35}
+        self.extra = {"distance": 1.0, "height": 0.0, "orbit": 0.0}     # a hand on top (Hand Glove)
 
     # ------------------------------------------------------------------ decisions
     def request_cut(self, kind: str | None = None) -> None:
@@ -146,10 +147,11 @@ class LiveCinematographer:
             off = (fr * st.fwd + lr * st.left * self.side) * push * sc + UP * (st.up * sc + 0.06 * self.n2.sample(t))
         ground = S * np.array([1.0, 1.0, 0.0])
         mn = self.manual
-        co, so = math.cos(mn["orbit"]), math.sin(mn["orbit"])
+        ex = self.extra
+        co, so = math.cos(mn["orbit"] + ex["orbit"]), math.sin(mn["orbit"] + ex["orbit"])
         off = np.array([co * off[0] - so * off[1], so * off[0] + co * off[1], off[2]])
-        off[:2] *= mn["distance"]
-        off[2] = off[2] * (0.6 + 0.4 * mn["distance"]) + mn["height"]
+        off[:2] *= mn["distance"] * ex["distance"]
+        off[2] = off[2] * (0.6 + 0.4 * mn["distance"] * ex["distance"]) + mn["height"] + ex["height"]
         self.pos_s.halflife = mn["smooth"]
         pos_goal = ground + off
         if st.target == "head":

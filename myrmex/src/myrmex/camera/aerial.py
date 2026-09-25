@@ -69,6 +69,7 @@ class AerialCinematographer:
         self.state: CameraState | None = None
         self.mode = "auto"
         self.manual = {"distance": 1.0, "height": 0.0, "orbit": 0.0, "lens": 0.0, "smooth": 0.35}
+        self.extra = {"distance": 1.0, "height": 0.0, "orbit": 0.0}     # a hand on top (Hand Glove)
         self.recent: list[str] = []
         self.last_impact_cut = -1e9
         self.last_suggest = -1e9
@@ -155,8 +156,8 @@ class AerialCinematographer:
         if self.kind == "orbit":
             ang = 0.35 * (t - self.shot_start_t) + self.shot_id
         ang = ang * self.side + 0.15 * self.n3.sample(t)
-        mn = self.manual
-        ang += mn["orbit"]
+        mn, ex = self.manual, self.extra
+        ang += mn["orbit"] + ex["orbit"]
         F = self.fwd
         L = np.cross(UP, F)
         back = -(math.cos(ang) * F + math.sin(ang) * L)
@@ -164,7 +165,7 @@ class AerialCinematographer:
             back = math.cos(ang) * F + math.sin(ang) * L
         lead = self.subj_v * (0.35 if self.kind in ("follow", "lock", "track") else 0.15)
         S = com + lead
-        off = back * dist * scale * mn["distance"] + UP * (up * scale + mn["height"])
+        off = back * dist * scale * mn["distance"] * ex["distance"] + UP * (up * scale + mn["height"] + ex["height"])
         pos_goal = S + off
         pos_goal[2] = max(0.3, pos_goal[2])
         tgt_goal = S.copy()

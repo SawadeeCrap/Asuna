@@ -54,6 +54,7 @@ class LiveConfig:
     record: str | None = None               # directory for recorded takes
     backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial) | polyalloy (Mimetic Polyalloy)
     creature: dict = field(default_factory=dict)
+    glove: dict = field(default_factory=dict)       # Hand Glove link (preset, intensity, profile, ...)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
 
@@ -154,6 +155,10 @@ class LiveSession:
         self.t0 = now
         self.clock = ClockHub(cfg.clock, cfg.bpm, link=cfg.link, now=now)
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
+        from .glove import GloveLink
+        self.glove = GloveLink(cfg.glove)
+        if cfg.glove.get("profile"):
+            self.inputs.glove.profile = dict(cfg.glove["profile"])
         if cfg.camera and cfg.backend in FLYING:
             from ..camera.aerial import AerialCinematographer
             self.camera = AerialCinematographer(self.creature.engine.cfg.size, cfg.seed)
@@ -264,6 +269,22 @@ class LiveSession:
     def _step_creature(self, now: float, t: float, dt: float, notes, st) -> object:
         from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
         cfg = self.cfg
+        # The hand first: the organism is moved by it in this very tick.
+        ctrl, gestures, cam_mod = self.glove.tick(self.inputs.glove, now, dt, self.creature.variant)
+        self.inputs.glove_owns = ctrl.active or self.glove.cfg["preset"] == "camera"
+        self.creature.engine.set_glove(ctrl, self.glove.sculpt_shapes(self.creature.variant))
+        for g, names in gestures:
+            if names == ("camera",):
+                if self.camera is not None:
+                    self.camera.request_cut(None)
+                continue
+            for name in names:
+                if self.creature.trigger(name):
+                    self.glove.last_events.append((t, g, name))
+                    self.glove.last_events = self.glove.last_events[-8:]
+                    break
+        if self.camera is not None:
+            self.camera.extra = cam_mod
         s = self.creature.tick(t, dt, notes, st)
         aerial = self.creature.variant in FLYING
         if aerial and self.camera is not None:
@@ -437,6 +458,8 @@ class LiveSession:
             "section": self.engine.section if self.engine else self.creature.state.morphology,
             "behavior": self.engine.behavior_name if self.engine else self.creature.state.behavior,
             "backend": self.cfg.backend, "notes": self.inputs.stats["notes"],
+            "glove": {"present": self.glove.state.present, "rate": round(self.inputs.glove.rate, 1),
+                      "preset": self.glove.cfg["preset"]},
             "osc_packets": self.inputs.stats["osc_packets"], "sent": self.sink.sent if self.sink else 0,
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),
             "max_tick_ms": round(self.stats["max_tick_ms"], 2), "overruns": self.stats["overruns"],

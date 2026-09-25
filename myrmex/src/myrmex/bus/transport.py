@@ -171,7 +171,10 @@ class MidiInput:
             self.q.put(LiveEvent("clock", now, {"tick": self.ticks, "ppqn": 24, "songpos": True}))
         elif t == "control_change":
             self.q.put(LiveEvent("cc", now, {"control": msg.control, "channel": msg.channel + 1,
-                                             "value": msg.value / 127.0}))
+                                             "value": msg.value / 127.0, "raw": msg.value, "port": self.name}))
+        elif t == "pitchwheel":                        # 14-bit controllers (e.g. the Hand Glove)
+            self.q.put(LiveEvent("pb", now, {"channel": msg.channel + 1, "value": (msg.pitch + 8192) / 16383.0,
+                                             "port": self.name}))
 
     def close(self) -> None:
         try:
