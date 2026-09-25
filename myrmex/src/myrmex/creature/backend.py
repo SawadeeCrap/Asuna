@@ -21,6 +21,7 @@ from .engine import EVENTS, CreatureEngine
 from .colony import ColonyConfig, ColonyEngine
 from .hive import HiveConfig, HiveEngine
 from .cyber import VARIANTS as CYBER
+from .mimetic import VARIANTS as MIMETIC
 from .osseous import VARIANTS as OSSEOUS
 from .polyalloy import PolyalloyConfig, PolyalloyEngine
 
@@ -36,7 +37,10 @@ CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 
                  # Osseous line (v5-v7): lunge, ossify, quill volley
                  89: "STRIKE", 91: "OSSIFY", 93: "QUILLS",
                  # Cyber Hive (v8): light scan, digital glitch
-                 95: "SCAN", 96: "GLITCH"}
+                 95: "SCAN", 96: "GLITCH",
+                 # Mimetic line (v9-v13): surge, dash, scatter / gather, slash, reconfigure, pounce
+                 98: "SURGE", 100: "DASH", 101: "SCATTER", 103: "GATHER", 105: "SLASH", 107: "RECONFIGURE",
+                 108: "POUNCE"}
 
 
 CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
@@ -49,7 +53,8 @@ class CreatureBackend:
                  variant: str = "nanomaterial"):
         self.variant = variant
         kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine,
-                **{k: v[0] for k, v in OSSEOUS.items()}, **{k: v[0] for k, v in CYBER.items()}}.get(variant, CreatureEngine)
+                **{k: v[0] for k, v in OSSEOUS.items()}, **{k: v[0] for k, v in CYBER.items()},
+                **{k: v[0] for k, v in MIMETIC.items()}}.get(variant, CreatureEngine)
         self.engine = kind(cfg)
         self.events = getattr(kind, "EVENTS", EVENTS)
         self.fx = FeatureExtractor(MusicTimeline(source="live"))

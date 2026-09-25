@@ -30,10 +30,20 @@ RAILS = "CyberRails"            # Cyber Hive (v8): hexagonal rails with light li
 PANELS = "CyberPanels"          # Cyber Hive (v8): hex panels with a light ring
 CYBER_MAT = "MyrmexCyberWhite"
 CYBER_GREEN = (0.55, 1.0, 0.3, 1.0)   # light acid green (linear), soft: low strength, never glaring
+TENDONS = "MimeticTendons"      # Mimetic line (v9-v13): glossy tendons along the skeleton
+FINS = "MimeticFins"            # ... filaments / shards / flakes / blades / claws that follow the motion
+TERRAIN = "CrawlerTerrain"      # the Crawler's rough ground
+LIQUID_MAT = "MyrmexLiquidBlack"
+DEEP_RED = (0.5, 0.012, 0.006, 1.0)     # very dark red internal glints, never dominant
+MIMETIC = {"swarm": (3, "hive"), "spear": (4, "colony"), "cloud": (5, "hive"), "blade": (6, "colony"),
+           "crawler": (7, "colony")}
 
 
 def variant_style(variant: str) -> tuple[int, str]:
-    """-> (look: 0 classic · 1 osseous · 2 cyber, base organism: nanomaterial / polyalloy / colony / hive)."""
+    """-> (look: 0 classic · 1 osseous · 2 cyber · 3-7 mimetic, base organism: nanomaterial / polyalloy / colony /
+    hive)."""
+    if variant in MIMETIC:
+        return MIMETIC[variant]
     if variant.startswith("cyber"):
         return 2, variant.replace("cyber_", "") or "hive"
     if variant.startswith("osseous"):
@@ -724,6 +734,306 @@ def set_cyber_shading(fr_t: float, glow: float, arousal: float, scan: float, com
                 nd["MyrmexC" + a].outputs[0].default_value = float(com[k])
 
 
+# ---------------------------------------------------------------------------- Mimetic line (v9-v13)
+def liquid_material(fin: bool = False) -> bpy.types.Material:
+    """Glossy black liquid metal: mirror-dark, coated, fine ripples; very dark red internal glints."""
+    name = "MyrmexLiquidFin" if fin else LIQUID_MAT
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    b = _principled(mat, Base_Color=(0.006, 0.006, 0.007, 1.0), Metallic=0.92, Roughness=0.1, Coat_Weight=0.85,
+                    Coat_Roughness=0.03, Specular_IOR_Level=0.7, Anisotropic=0.25)
+    nt = mat.node_tree
+    tm, _act, glow = _value(nt, "MyrmexTime"), _value(nt, "MyrmexActivity"), _value(nt, "MyrmexGlow")
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    nz = nt.nodes.new("ShaderNodeTexNoise")
+    nz.noise_dimensions = "4D"
+    nz.inputs["Scale"].default_value = 9.0
+    nz.inputs["Detail"].default_value = 5.0
+    nt.links.new(tc.outputs["Object"], nz.inputs["Vector"])
+    nt.links.new(_math(nt, "MULTIPLY", tm.outputs[0], 0.3), nz.inputs["W"])
+    rr = nt.nodes.new("ShaderNodeMapRange")
+    rr.inputs["To Min"].default_value, rr.inputs["To Max"].default_value = 0.05, 0.18
+    nt.links.new(nz.outputs["Fac"], rr.inputs["Value"])
+    nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
+    rip = nt.nodes.new("ShaderNodeTexNoise")                     # liquid ripples
+    rip.inputs["Scale"].default_value = 60.0
+    rip.inputs["Detail"].default_value = 2.0
+    nt.links.new(tc.outputs["Object"], rip.inputs["Vector"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.12
+    bump.inputs["Distance"].default_value = 0.004
+    nt.links.new(rip.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    if fin:                                                        # some fins carry a red edge
+        red = _math(nt, "MULTIPLY", _attr(nt, "glint"), _math(nt, "MULTIPLY_ADD", glow.outputs[0], 0.2, 0.5))
+    else:                                                          # scattered internal sparks, a slow gate
+        vor = nt.nodes.new("ShaderNodeTexVoronoi")
+        vor.inputs["Scale"].default_value = 18.0
+        nt.links.new(tc.outputs["Object"], vor.inputs["Vector"])
+        dots = nt.nodes.new("ShaderNodeMapRange")
+        dots.inputs["From Min"].default_value, dots.inputs["From Max"].default_value = 0.0, 0.07
+        dots.inputs["To Min"].default_value, dots.inputs["To Max"].default_value = 1.0, 0.0
+        nt.links.new(vor.outputs["Distance"], dots.inputs["Value"])
+        gate = nt.nodes.new("ShaderNodeMapRange")
+        gate.inputs["From Min"].default_value, gate.inputs["From Max"].default_value = 0.58, 0.66
+        nt.links.new(nz.outputs["Fac"], gate.inputs["Value"])
+        red = _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", dots.outputs["Result"], gate.outputs["Result"]),
+                    _math(nt, "MULTIPLY_ADD", glow.outputs[0], 0.25, 0.6))
+    if "Emission Color" in b.inputs:
+        b.inputs["Emission Color"].default_value = DEEP_RED
+        nt.links.new(_math(nt, "MULTIPLY", red, 2.2), b.inputs["Emission Strength"])
+    return mat
+
+
+def set_liquid_shading(t: float, glow: float) -> None:
+    fm = bpy.data.materials.get("MyrmexLiquidFin")
+    if fm is not None and fm.node_tree is not None and "MyrmexTime" in fm.node_tree.nodes:
+        fm.node_tree.nodes["MyrmexTime"].outputs[0].default_value = float(t) * 0.2
+        fm.node_tree.nodes["MyrmexGlow"].outputs[0].default_value = 4.0 * float(glow)
+
+
+def tube_faces(K: int, rings: int, cols: int, per: int) -> list[tuple]:
+    """Closed tubes (``rings`` x ``cols`` + two cap centres per slot)."""
+    faces = []
+    for k in range(K):
+        b = k * per
+        for r in range(rings - 1):
+            for q in range(cols):
+                faces.append((b + r * cols + q, b + r * cols + (q + 1) % cols, b + (r + 1) * cols + (q + 1) % cols,
+                              b + (r + 1) * cols + q))
+        for q in range(cols):
+            faces.append((b + rings * cols, b + (q + 1) % cols, b + q))
+            faces.append((b + rings * cols + 1, b + (rings - 1) * cols + q, b + (rings - 1) * cols + (q + 1) % cols))
+    return faces
+
+
+_TEN_S = np.array([0.0, 0.12, 0.3, 0.5, 0.7, 0.88, 1.0])
+_TEN_MUL = np.array([0.35, 0.8, 1.0, 0.95, 0.8, 0.5, 0.15])
+_TEN_C = 8
+_TEN_V = len(_TEN_S) * _TEN_C + 2
+TENDON_THICK = {3: 0.8, 4: 1.0, 5: 0.7, 6: 0.9, 7: 1.7}
+
+
+def tendon_points(pos: np.ndarray, links: np.ndarray, up: np.ndarray, t: float, arousal: float = 0.5,
+                  thick: float = 1.0) -> np.ndarray:
+    """Smooth tapered strands along the skeleton, gently bending (liquid, not bone).  Empty slots collapse."""
+    K = len(links)
+    R, C = len(_TEN_S), _TEN_C
+    ok = links[:, 0] >= 0
+    i = np.where(ok, links[:, 0], 0).astype(int)
+    j = np.where(ok, links[:, 1], 0).astype(int)
+    st = np.where(ok, np.clip(links[:, 2], 0.0, 1.0), 0.0)
+    A, B = pos[i], pos[j]
+    d = B - A
+    L = np.linalg.norm(d, axis=1)
+    X = d / np.maximum(L, 1e-6)[:, None]
+    uh = up[i] + up[j]
+    uh = uh - (uh * X).sum(1, keepdims=True) * X
+    alt = np.cross(X, np.array([0.0, 0.0, 1.0]))
+    alt[np.linalg.norm(alt, axis=1) < 1e-5] = (0.0, 1.0, 0.0)
+    bad = np.linalg.norm(uh, axis=1) < 1e-5
+    uh[bad] = alt[bad]
+    Z = uh / np.maximum(np.linalg.norm(uh, axis=1, keepdims=True), 1e-6)
+    Y = np.cross(Z, X)
+    A2, L2 = A + d * 0.04, L * 0.92
+    ph = (np.arange(K) * 0.6180339887) % 1.0 * 2 * np.pi
+    w = 0.6 + 1.0 * float(arousal)
+    bend = 0.07 * np.sin(w * t + ph)
+    wig = 0.04 * np.cos(1.3 * w * t + 2 * ph)
+    S = _TEN_S
+    center = A2[:, None, :] + X[:, None, :] * (S[None, :] * L2[:, None])[..., None] + \
+        Z[:, None, :] * (bend[:, None] * L2[:, None] * np.sin(np.pi * S)[None, :])[..., None] + \
+        Y[:, None, :] * (wig[:, None] * L2[:, None] * np.sin(2 * np.pi * S)[None, :])[..., None]
+    r0 = st * thick * (0.014 + 0.02 * np.minimum(1.0, L / 0.45))
+    rad = r0[:, None] * _TEN_MUL[None, :]
+    a = 2 * np.pi * np.arange(C) / C
+    offs = (Y[:, None, None, :] * np.cos(a)[None, None, :, None] + Z[:, None, None, :] * np.sin(a)[None, None, :, None]) * \
+        rad[:, :, None, None]
+    out = np.empty((K, _TEN_V, 3))
+    out[:, :R * C] = (center[:, :, None, :] + offs).reshape(K, R * C, 3)
+    out[:, R * C] = A2
+    out[:, R * C + 1] = A2 + X * L2[:, None]
+    hide = (~ok) | (st < 0.02) | (L < 1e-4)
+    if hide.any():
+        out[hide] = pos.mean(0)
+    return out.reshape(-1, 3)
+
+
+_FIN_N = 5                                      # points along a fin
+_FIN_V = 2 * _FIN_N
+_FIN_TAUS = {3: (0.0, 0.035, 0.08, 0.15, 0.24), 6: (0.0, 0.05, 0.12, 0.2, 0.3)}     # trail samples (s)
+
+
+def fin_faces(n: int) -> list[tuple]:
+    return [(b + 2 * k, b + 2 * k + 1, b + 2 * k + 3, b + 2 * k + 2) for b in range(0, _FIN_V * n, _FIN_V)
+            for k in range(_FIN_N - 1)]
+
+
+def trail(hist: list, taus) -> np.ndarray:
+    """(t, pos) history, newest first -> positions at the given ages (n, len(taus), 3)."""
+    t0 = hist[0][0]
+    ts = np.array([h[0] for h in hist])
+    return np.stack([hist[int(np.argmin(np.abs(t0 - tau - ts)))][1] for tau in taus], 1)
+
+
+def fin_points(style: int, hist: list, nrm: np.ndarray, com, heading: float, t: float) -> np.ndarray:
+    """One fin per node: swarm filaments / spear shards / cloud flakes / blade trails / crawler claws + spikes."""
+    pos = np.asarray(hist[0][1], float)
+    n = len(pos)
+    k = np.arange(n)
+    h1, h2 = (k * 0.6180339887) % 1.0, (k * 0.4142135624 + 0.3) % 1.0
+    nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+    fwd = np.array([math.cos(heading), math.sin(heading), 0.0])
+    sN = np.linspace(0.0, 1.0, _FIN_N)
+    if style in _FIN_TAUS:                                        # trails of the motion itself
+        spine = trail(hist, _FIN_TAUS[style])
+        off = spine - spine[:, :1]
+        ln = np.linalg.norm(off[:, -1], axis=1)
+        top = {3: 1.7, 6: 1.1}[style] * (0.7 + 0.6 * h2)            # long streaks, never longer than this
+        spine = spine[:, :1] + off * np.minimum(1.0, top / np.maximum(ln, 1e-6))[:, None, None]
+        d = spine[:, -1] - spine[:, 0]
+        dn = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-6)
+        if style == 3:
+            wdir = np.cross(dn, nr)
+            width = 0.004 + 0.012 * h1
+        else:
+            wdir = nr - (nr * dn).sum(1, keepdims=True) * dn
+            width = 0.03 + 0.07 * h1
+        prof = np.array([1.0, 0.85, 0.6, 0.35, 0.02])
+    elif style == 4:                                              # straight shards swept back, tilted out
+        L = (0.12 + 0.42 * h1)
+        spine = pos[:, None] + (-fwd[None, :] * L[:, None])[:, None, :] * sN[None, :, None] + \
+            (nr * 0.3 * L[:, None])[:, None, :] * (sN ** 2)[None, :, None]
+        wdir = nr - (nr @ fwd)[:, None] * fwd[None, :]
+        width = 0.02 + 0.04 * h2
+        prof = np.array([1.0, 0.8, 0.55, 0.3, 0.02])
+    elif style == 5:                                              # tumbling flakes
+        a, b = 2 * np.pi * (h1 + 0.07 * t), 2 * np.pi * (h2 + 0.05 * t)
+        dirs = np.stack([np.cos(a) * np.cos(b), np.sin(a) * np.cos(b), np.sin(b)], 1)
+        L = 0.06 + 0.12 * h2
+        spine = pos[:, None] + (dirs * L[:, None])[:, None, :] * (sN - 0.5)[None, :, None]
+        wdir = np.cross(dirs, nr + np.array([0.0, 0.0, 0.3]))
+        width = 0.03 + 0.05 * h1
+        prof = np.array([0.3, 0.9, 1.0, 0.8, 0.2])
+    else:                                                         # crawler: claws on the feet, spikes on the back
+        from myrmex.creature.mimetic import terrain_height
+        hz = pos[:, 2] - terrain_height(pos[:, 0], pos[:, 1])
+        c = np.asarray(com, float)
+        feet = hz < 0.2
+        dorsal = ~feet & ((pos[:, 2] - c[2]) > 0.12) & (h1 < 0.6)
+        claw = pos[:, None] + (fwd * 0.16)[None, None, :] * sN[None, :, None] + \
+            np.array([0.0, 0.0, -0.12])[None, None, :] * (sN ** 2)[None, :, None]
+        spike = pos[:, None] + (np.array([0.0, 0.0, 0.2]) - fwd * 0.1)[None, None, :] * sN[None, :, None] * \
+            (0.6 + 0.8 * h2)[:, None, None]
+        spine = np.where(feet[:, None, None], claw, np.where(dorsal[:, None, None], spike, pos[:, None].repeat(_FIN_N, 1)))
+        wdir = np.cross(np.broadcast_to(fwd, (n, 3)), np.array([0.0, 0.0, 1.0]))
+        width = np.where(feet, 0.028, np.where(dorsal, 0.02, 0.0))
+        prof = np.array([1.0, 0.8, 0.55, 0.3, 0.02])
+    wdir = wdir / np.maximum(np.linalg.norm(wdir, axis=1, keepdims=True), 1e-6)
+    half = (wdir * np.asarray(width)[:, None])[:, None, :] * prof[None, :, None]
+    out = np.empty((n, _FIN_N, 2, 3))
+    out[:, :, 0] = spine + half
+    out[:, :, 1] = spine - half
+    return out.reshape(-1, 3)
+
+
+def fin_glints(n: int) -> np.ndarray:
+    """Which fins carry a red edge (about one in eight)."""
+    k = np.arange(n)
+    return np.repeat((((k * 0.7548776662) % 1.0) > 0.875).astype(np.float32), _FIN_V)
+
+
+def flakes_nodes() -> bpy.types.NodeTree:
+    """The Mimetic swarm particles: glossy black shards, a few with a red glint."""
+    ng = bpy.data.node_groups.get("MyrmexLiquidFlakes")
+    if ng is not None:
+        return ng
+    ng = bpy.data.node_groups.new("MyrmexLiquidFlakes", "GeometryNodeTree")
+    ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gi, go = _node(ng, "NodeGroupInput", (-600, 0)), _node(ng, "NodeGroupOutput", (500, 0))
+    ico = _node(ng, "GeometryNodeMeshIcoSphere", (-800, -250))
+    ico.inputs["Radius"].default_value = 0.012
+    ico.inputs["Subdivisions"].default_value = 1
+    tr = _node(ng, "GeometryNodeTransform", (-600, -250))
+    tr.inputs["Scale"].default_value = (2.4, 0.7, 0.18)            # a thin shard
+    ng.links.new(ico.outputs["Mesh"], tr.inputs["Geometry"])
+    sm = _node(ng, "GeometryNodeSetMaterial", (-350, -250))
+    sm.inputs["Material"].default_value = _mote_red_material()
+    ng.links.new(tr.outputs["Geometry"], sm.inputs["Geometry"])
+    rot = _node(ng, "FunctionNodeRandomValue", (-350, -450))
+    rot.data_type = "FLOAT_VECTOR"
+    rot.inputs["Max"].default_value = (6.2832, 6.2832, 6.2832)
+    size = _node(ng, "FunctionNodeRandomValue", (-350, -650))
+    size.data_type = "FLOAT"
+    size.inputs["Min"].default_value = 0.5
+    size.inputs["Max"].default_value = 1.8
+    iop = _node(ng, "GeometryNodeInstanceOnPoints", (100, 0))
+    ng.links.new(gi.outputs[0], iop.inputs["Points"])
+    ng.links.new(sm.outputs["Geometry"], iop.inputs["Instance"])
+    ng.links.new(rot.outputs["Value"], iop.inputs["Rotation"])
+    ng.links.new(size.outputs["Value"], iop.inputs["Scale"])
+    ng.links.new(iop.outputs["Instances"], go.inputs[0])
+    return ng
+
+
+def _mote_red_material() -> bpy.types.Material:
+    mat = bpy.data.materials.get("MyrmexLiquidMote")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MyrmexLiquidMote")
+    b = _principled(mat, Base_Color=(0.006, 0.006, 0.007, 1.0), Metallic=0.9, Roughness=0.08, Coat_Weight=0.6)
+    nt = mat.node_tree
+    oi = nt.nodes.new("ShaderNodeObjectInfo")
+    if "Emission Color" in b.inputs:
+        b.inputs["Emission Color"].default_value = DEEP_RED
+        nt.links.new(_math(nt, "MULTIPLY", _math(nt, "GREATER_THAN", oi.outputs["Random"], 0.92), 2.5),
+                     b.inputs["Emission Strength"])
+    return mat
+
+
+def crawler_terrain(on: bool, coll) -> None:
+    """The Crawler walks on rough ground (the same heights as the engine); others keep the flat floor."""
+    floor = bpy.data.objects.get("MyrmexFloor")
+    if not on:
+        _drop(TERRAIN)
+        if floor is not None:
+            floor.hide_viewport = floor.hide_render = False
+        return
+    if floor is not None:
+        floor.hide_viewport = floor.hide_render = True
+    if bpy.data.objects.get(TERRAIN) is not None:
+        return
+    from myrmex.creature.mimetic import terrain_height
+    N, half = 241, 40.0
+    xs = np.linspace(-half, half, N)
+    X, Y = np.meshgrid(xs, xs)
+    Z = terrain_height(X, Y)
+    idx = np.arange(N * N).reshape(N, N)
+    quads = np.stack([idx[:-1, :-1], idx[:-1, 1:], idx[1:, 1:], idx[1:, :-1]], -1).reshape(-1, 4)
+    me = bpy.data.meshes.new(TERRAIN)
+    me.from_pydata(np.stack([X, Y, Z], -1).reshape(-1, 3).tolist(), [], quads.tolist())
+    for poly in me.polygons:
+        poly.use_smooth = True
+    mat = bpy.data.materials.get("MyrmexTerrain")
+    if mat is None:
+        mat = bpy.data.materials.new("MyrmexTerrain")
+        b = _principled(mat, Base_Color=(0.011, 0.011, 0.012, 1.0), Metallic=0.2, Roughness=0.45)
+        nt = mat.node_tree
+        nz = nt.nodes.new("ShaderNodeTexNoise")
+        nz.inputs["Scale"].default_value = 3.0
+        nz.inputs["Detail"].default_value = 8.0
+        bump = nt.nodes.new("ShaderNodeBump")
+        bump.inputs["Strength"].default_value = 0.4
+        nt.links.new(nz.outputs["Fac"], bump.inputs["Height"])
+        nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    me.materials.append(mat)
+    ob = bpy.data.objects.new(TERRAIN, me)
+    coll.objects.link(ob)
+
+
 def _replace_mesh_object(name: str, verts: int, faces: list, material, coll) -> bpy.types.Object:
     ob = bpy.data.objects.get(name)
     if ob is not None and len(ob.data.vertices) == verts:
@@ -858,12 +1168,23 @@ class CreatureView:
         """Polyalloy family: skin, frame (struts, or bone links for the Osseous line), obstacles, micro-machines."""
         self.style = style
         self.poly = True
-        pm = cyber_body_material() if style == 2 else nanomaterial(POLY_MAT, poly=True)
+        pm = cyber_body_material() if style == 2 else liquid_material() if style >= 3 else \
+            nanomaterial(POLY_MAT, poly=True)
         if not self.mb.materials:
             self.mb.materials.append(pm)
-        elif self.mb.materials[0] is None or self.mb.materials[0].name in (MAT, POLY_MAT, CYBER_MAT):
+        elif self.mb.materials[0] is None or self.mb.materials[0].name in (MAT, POLY_MAT, CYBER_MAT, LIQUID_MAT):
             self.mb.materials[0] = pm                      # (keep a material you chose yourself)
-        if style == 2:                                     # Cyber: hexagonal rails with light lines
+        if style < 3:
+            _drop(TENDONS)
+            _drop(FINS)
+        crawler_terrain(style == 7, self.coll)
+        if style >= 3:                                     # Mimetic line: glossy tendons (+ fins, per frame)
+            _drop(LATTICE)
+            _drop(BONES)
+            _drop(RAILS)
+            self.lattice = _replace_mesh_object(TENDONS, n_links * _TEN_V, tube_faces(n_links, len(_TEN_S), _TEN_C,
+                                                                                      _TEN_V), liquid_material(), self.coll)
+        elif style == 2:                                   # Cyber: hexagonal rails with light lines
             _drop(LATTICE)
             _drop(BONES)
             faces, mats = rail_faces(n_links)
@@ -923,6 +1244,34 @@ class CreatureView:
             o.scale = (0.0, 0.0, 0.0)
             self.obstacles.append(o)
 
+    def _fins(self, n: int) -> bpy.types.Object:
+        ob = bpy.data.objects.get(FINS)
+        if ob is not None and len(ob.data.vertices) == _FIN_V * n:
+            return ob
+        me = bpy.data.meshes.new(FINS)
+        me.from_pydata([(0.0, 0.0, 0.0)] * (_FIN_V * n), [], fin_faces(n))
+        for poly in me.polygons:
+            poly.use_smooth = True
+        me.materials.append(liquid_material(fin=True))
+        me.attributes.new("glint", "FLOAT", "POINT").data.foreach_set("value", fin_glints(n))
+        if ob is None:
+            ob = bpy.data.objects.new(FINS, me)
+            self.coll.objects.link(ob)
+        else:
+            ob.data = me
+        return ob
+
+    def _push_hist(self, fr) -> None:
+        """Recent positions (newest first, ~0.5 s): the fins trail the motion."""
+        h = getattr(self, "hist", None)
+        t, pos = float(fr.t), np.asarray(fr.pos, float)
+        if h is None or not h or len(h[0][1]) != len(pos) or t < h[0][0]:
+            h = []
+        h.insert(0, (t, pos.copy()))
+        while len(h) > 2 and t - h[-1][0] > 0.5:
+            h.pop()
+        self.hist = h[:96]
+
     def _ensure(self, n: int) -> None:
         els = self.mb.elements
         while len(els) < n:
@@ -957,7 +1306,11 @@ class CreatureView:
     def make_colony(self, n_nodes: int, style: int = 0) -> None:
         """Colony family: armour (hexagonal plates, or bony scutes for the Osseous line) and the prey."""
         faces = [(7 * i, 7 * i + 1 + j, 7 * i + 1 + (j + 1) % 6) for i in range(n_nodes) for j in range(6)]
-        if style == 2:                                     # Cyber: hex panels with a light ring
+        if style >= 3:                                     # Mimetic: no armour, the fins do it
+            for name in (PLATES, SCUTES, PANELS):
+                _drop(name)
+            self.plates = None
+        elif style == 2:                                   # Cyber: hex panels with a light ring
             _drop(PLATES)
             _drop(SCUTES)
             pf, pm = panel_faces(n_nodes)
@@ -1006,8 +1359,9 @@ class CreatureView:
             else:
                 ob.data = me
         mod = ob.modifiers.get("Swarm") or ob.modifiers.new("Swarm", "NODES")
-        want = swarm_nodes(cyber=style == 2)
-        if mod.node_group is None or mod.node_group.name in ("MyrmexNanoSwarm", "MyrmexCyberSwarm"):
+        want = flakes_nodes() if style in (3, 5) else swarm_nodes(cyber=style == 2)
+        if mod.node_group is None or mod.node_group.name in ("MyrmexNanoSwarm", "MyrmexCyberSwarm",
+                                                             "MyrmexLiquidFlakes"):
             mod.node_group = want                          # (keep a node group you chose yourself)
         self.swarm = ob
 
@@ -1023,10 +1377,15 @@ class CreatureView:
         n = len(fr.pos)
         style = int(getattr(fr, "style", 0))
         per = _PANEL_V if style == 2 else 7
-        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != per * n or \
+        if style >= 3:
+            if getattr(self, "armour_style", -1) != style:
+                self.make_colony(n, style)
+        elif getattr(self, "plates", None) is None or len(self.plates.data.vertices) != per * n or \
                 getattr(self, "armour_style", -1) != style:
             self.make_colony(n, style)
-        if style == 2:
+        if style >= 3:
+            pass
+        elif style == 2:
             pts = panel_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading))
             set_cyber_mesh(self.plates, pts, _flow(pts, fr.com, float(fr.heading)),
                            panel_light(getattr(fr, "light", None), n))
@@ -1042,12 +1401,21 @@ class CreatureView:
 
     def _apply_poly(self, fr) -> None:
         style = int(getattr(fr, "style", 0))
-        per = {1: _BONE_V, 2: _RAIL_V}.get(style, 2)
+        per = {1: _BONE_V, 2: _RAIL_V}.get(style, _TEN_V if style >= 3 else 2)
         if self.lattice is None or getattr(self, "style", -1) != style or \
                 len(self.lattice.data.vertices) != per * len(fr.links):
             self.make_polyalloy(len(fr.links), max(4, len(fr.obstacles)), style)
         up = fr.nrm if getattr(fr, "nrm", None) is not None else fr.pos - fr.pos.mean(0)
-        if style == 2:
+        if style >= 3:
+            pts = tendon_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal), TENDON_THICK.get(style, 1.0))
+            me = self.lattice.data
+            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            me.update()
+            fins = self._fins(len(fr.pos))
+            fp = fin_points(style, self.hist, up, fr.com, float(fr.heading), float(fr.t))
+            fins.data.vertices.foreach_set("co", fp.astype(np.float32).ravel())
+            fins.data.update()
+        elif style == 2:
             pts = rail_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal))
             set_cyber_mesh(self.lattice, pts, _flow(pts, fr.com, float(fr.heading)),
                            rail_light(fr.links, getattr(fr, "light", None)))
@@ -1067,6 +1435,7 @@ class CreatureView:
     def apply(self, fr) -> None:
         n = len(fr.pos)
         self._ensure(n)
+        self._push_hist(fr)
         if getattr(fr, "links", None) is not None:
             self._apply_poly(fr)
         if getattr(fr, "plate", None) is not None:
@@ -1093,6 +1462,8 @@ class CreatureView:
                 nt.nodes["MyrmexActivity"].outputs[0].default_value = 0.2 + 0.8 * float(fr.surface)
             if "MyrmexGlow" in nt.nodes:
                 nt.nodes["MyrmexGlow"].outputs[0].default_value = 4.0 * float(fr.glow)
+        if int(getattr(fr, "style", 0)) >= 3:
+            set_liquid_shading(float(fr.t), float(fr.glow))
         if int(getattr(fr, "style", 0)) == 2:
             set_cyber_shading(float(fr.t), float(fr.glow), float(fr.arousal), float(getattr(fr, "scan", float("nan"))),
                               fr.com, float(fr.heading), self.mb.materials[0] if self.mb.materials else None)
@@ -1120,4 +1491,6 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
         view.make_hive(1536, style)
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)
+    if base in ("polyalloy", "colony", "hive"):
+        crawler_terrain(style == 7, view.coll)             # (the studio floor comes back for the others)
     return view

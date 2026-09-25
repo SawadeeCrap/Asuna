@@ -538,3 +538,81 @@ def test_cyber_hive_protocol_session_and_take(tmp_path):
     assert take.variant == "cyber_hive" and take.d["light"].shape[1] == 128 and "scan" in take.d
     from myrmex.app import controllers as C
     assert C.take_variant(take.path) == "cyber_hive" and "cyber_hive" in C.CREATURE_BACKENDS
+
+
+# ---------------------------------------------------------------------------- Mimetic line (v9-v13)
+def _signature(variant, seconds=6.0):
+    """Hold the organism's own form with a sculpting hand; -> (form, principal spreads, state, engine)."""
+    from myrmex.creature.backend import CreatureBackend
+    from myrmex.creature.puppet import GloveControl
+    from myrmex.realtime.glove import SCULPT_SHAPES
+    e = CreatureBackend(None, False, variant).engine
+    e.set_glove(GloveControl(active=True, fingers=np.array([1.0, 0, 0, 0, 0]), finger_mode="morph", grip=0.0),
+                SCULPT_SHAPES[variant])
+    states = _run(e, seconds, energy=0.5)
+    s = states[-1]
+    X = s.pos[e.own == 0] - s.pos[e.own == 0].mean(0)
+    ev = np.sqrt(np.sort(np.linalg.eigvalsh(np.cov(X.T)))[::-1])
+    return s.morphology, ev, states, e
+
+
+def test_mimetic_line_has_five_different_silhouettes():
+    forms = {}
+    for v in ("swarm", "spear", "cloud", "blade", "crawler"):
+        form, ev, states, e = _signature(v)
+        forms[v] = (form, ev)
+        assert all(np.isfinite(st.pos).all() for st in states)
+        assert states[-1].style == {"swarm": 3, "spear": 4, "cloud": 5, "blade": 6, "crawler": 7}[v]
+        assert abs(e.mass.sum() - 1.0) < 1e-9 and len(states[-1].pos) == e.cfg.nodes      # finite material
+    assert [forms[v][0] for v in forms] == ["STREAM", "LANCE", "SHARDS", "SWEEP", "CRAWL"]
+    el = {v: forms[v][1][0] / forms[v][1][2] for v in forms}
+    assert el["spear"] > 5 and el["swarm"] > 4 and el["cloud"] < 2.5                     # needle / streams / cloud
+    flat = {v: forms[v][1][2] / forms[v][1][1] for v in forms}
+    assert flat["blade"] < 0.55 and flat["blade"] < 0.7 * flat["cloud"]                  # a flat fan of blades
+    assert forms["crawler"][1][1] > 0.5                                                # wide: legs to both sides
+
+
+def test_mimetic_events_and_the_crawler_on_rough_ground():
+    from myrmex.creature.mimetic import VARIANTS, terrain_height
+    for v, evs in (("swarm", ("SURGE",)), ("spear", ("DASH",)), ("cloud", ("SCATTER", "GATHER")), ("blade", ("SLASH",)),
+                   ("crawler", ("RECONFIGURE", "POUNCE"))):
+        e = VARIANTS[v][0]()
+        _run(e, 1.0, events=[(0.3 + 0.2 * i, name) for i, name in enumerate(evs)])
+        assert set(evs) <= {n for _, n, _ in e.events}, v
+    c = VARIANTS["crawler"][0]()
+    legs = c.legs
+    assert c.trigger_event("RECONFIGURE")
+    _run(c, 0.1)
+    assert c.legs != legs and c.legs in (4, 6, 8)                                         # regrown with other legs
+    states = _run(c, 10)
+    for st in states[120:]:
+        gz = terrain_height(st.pos[:, 0], st.pos[:, 1])
+        assert (st.pos[:, 2] - gz).min() > 0.0                                            # nothing sinks in
+    s = states[-1]
+    contacts = [int((st.pos[:, 2] - terrain_height(st.pos[:, 0], st.pos[:, 1]) < 0.15).sum()) for st in states[-60:]]
+    assert max(contacts) >= 5 and min(contacts) >= 1                                       # feet on the ground
+    assert 0.3 < float(c.bodies[0].P[2] - terrain_height(*c.bodies[0].P[:2])) < 2.0
+    fr = decode_creature(encode_creature(s, 1, 0.0, 120.0))
+    assert fr.style == 7 and fr.morphology == s.morphology
+
+
+def test_mimetic_session_and_take(tmp_path):
+    from myrmex.app import controllers as C
+    from myrmex.creature.take import CreatureTake
+
+    class Sink:
+        def send_raw(self, b):
+            pass
+
+        def close(self):
+            pass
+    ses = LiveSession(LiveConfig(backend="swarm", clock="internal", record=str(tmp_path), out=[]), start_inputs=False,
+                      sink=Sink(), now=0.0)
+    now = 0.0
+    for _ in range(240):
+        now += 1 / 120
+        ses.step(now)
+    assert ses.creature.trigger("SURGE")
+    take = CreatureTake(ses.save_take())
+    assert take.variant == "swarm" and take.particles(30) is not None and C.take_variant(take.path) == "swarm"
+    assert {"swarm", "spear", "cloud", "blade", "crawler"} <= set(C.CREATURE_BACKENDS)

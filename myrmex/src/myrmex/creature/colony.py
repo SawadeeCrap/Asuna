@@ -30,6 +30,7 @@ from ..util.rng import RngStreams, stable_hash64
 from .config import DEFAULT_PARAMS
 from .control import CreatureControlInput, ParameterSet
 from .polyalloy import AGGRESSIVE, MATERIAL, Obstacle, PolyalloyState, _knn_edges, attractor_shape
+from .mimetic_shapes import MIMETIC_SHAPES, mimetic_shape
 from .puppet import GloveControl, GloveDriver
 from .skeleton import Skeleton
 
@@ -37,7 +38,9 @@ SHAPES = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CL
           "ENVELOP", "SPINE", "CLAW", "MANDIBLE", "SCYTHE", "THORN", "CARAPACE")
 FREE_SHAPES = tuple(x for x in SHAPES if x not in ("LEGS", "ENVELOP"))
 CYBER_SHAPES = ("HALO", "ARRAY", "PRISM")          # v8 Cyber Hive: machine forms (quantized, robotic mechanisms)
-ALL_SHAPES = SHAPES + CYBER_SHAPES
+CYBER_SET = SHAPES + CYBER_SHAPES
+MIMETIC_SET = SHAPES + MIMETIC_SHAPES               # v9-v13 Mimetic line
+ALL_SHAPES = SHAPES + CYBER_SHAPES + MIMETIC_SHAPES     # every form name (the stream's morphology index)
 CLASSIC_FREE = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN")
 INTENTS = ("CRUISE", "HOVER", "EXPLORE", "DISPLAY", "EVADE", "REFORM", "HUNT", "ENVELOP", "PERCH", "FORMATION",
            "MERGE", "PATROL", "STRUCTURE", "STRIKE")
@@ -171,6 +174,8 @@ def shape3(name: str, U: np.ndarray, s: float, elong: float, ph: dict, ground: f
         return attractor_shape(name, U, s, elong, pulse=ph["pulse"])
     if name in CYBER_SHAPES:
         return cyber_shape(name, U, s, elong, ph)
+    if name in MIMETIC_SHAPES:
+        return mimetic_shape(name, U, s, elong, ph, ground)
     return attractor_shape(name if name in ("CORE", "SHIELD", "LATTICE", "CLOUD", "CARAPACE") else "CORE", U, s,
                            elong)
 
@@ -269,6 +274,8 @@ class ColonyEngine:
     PLAN = PLAN
     VOCAB = CLASSIC_FREE
     SHAPE_SET = SHAPES           # the forms in the latent space (the Cyber Hive adds its machine forms)
+    SPLIT_ENERGY = 0.78          # music energy above which the colony splits into a flock
+    SWARM_BIAS = 0.0             # the organism's own taste for flocking (added to the swarm knob)
 
     def __init__(self, cfg: ColonyConfig | None = None):
         self.cfg = cfg = cfg or ColonyConfig()
@@ -350,6 +357,24 @@ class ColonyEngine:
 
     def _post_targets(self, T: np.ndarray, dt: float) -> np.ndarray:
         return T
+
+    # ground: flat by default (the Mimetic Crawler walks on terrain)
+    def _ground_at(self, P: np.ndarray) -> float:
+        return 0.0
+
+    def _floor(self, x: np.ndarray):
+        return 0.05
+
+    def _min_alt(self, b: Body) -> float:
+        return 1.0
+
+    def _target_gain(self, T: np.ndarray):
+        """How firmly each node follows its target (the Crawler's planted feet grip harder)."""
+        return 1.0
+
+    def _shape_ph(self, k: int, b: Body, R: np.ndarray, ph: dict) -> dict:
+        """Per-body mechanism values for the forms (subclasses add their own)."""
+        return ph
 
     def _oss_extra(self) -> np.ndarray | float:
         return 0.0
@@ -617,16 +642,17 @@ class ColonyEngine:
         alive = self._alive()
         lead = self.bodies[0]
         # Drops split the colony into a flock, breakdowns bring it back together.
-        self.hi_t = self.hi_t + dt if inp.energy > 0.78 else 0.0
+        self.hi_t = self.hi_t + dt if inp.energy > self.SPLIT_ENERGY else 0.0
+        flock = min(1.0, pr["swarm"] + self.SWARM_BIAS)
         self.lo_t = self.lo_t + dt if inp.energy < 0.3 else 0.0
         hand = self.glove.ctrl.flock if self.glove.ctrl.active else 0      # a shepherd's hand decides instead
         if len(alive) == 1:
-            if (pr["swarm"] > 0.2 and self.hi_t > 1.5 and self.t - self.last_split > 14.0 and not hand and
+            if (flock > 0.2 and self.hi_t > 1.5 and self.t - self.last_split > 14.0 and not hand and
                     lead.intent not in ("ENVELOP", "PERCH", "EVADE")):
-                self._split(2 + int(pr["swarm"] * 2.99))
+                self._split(2 + int(flock * 2.99))
         else:
             self.split_t += dt
-            if (self.lo_t > 2.5 or self.split_t > 16.0 + 12.0 * pr["swarm"]) and not hand and \
+            if (self.lo_t > 2.5 or self.split_t > 16.0 + 12.0 * flock) and not hand and \
                     any(self.bodies[k].intent not in ("MERGE",) for k in alive[1:]):
                 self._start_merge()
         # Prey.
@@ -779,7 +805,7 @@ class ColonyEngine:
                 (k == 0 or b.intent != "FORMATION"):
             v_des = self.glove.flight(v_des, b.P, base)       # a leash / throttle, if a hand holds one
         if b.intent != "PERCH":
-            v_des[2] += max(0.0, 1.0 - b.P[2]) * 2.0
+            v_des[2] += max(0.0, self._min_alt(b) - b.P[2]) * 2.0
         a_des = (v_des - b.vel) / 0.8 + np.array([0.0, 0.0, G])
         I = float(((xb - b.P) ** 2).sum(1).mean()) / max(sb * sb, 1e-6)
         sp = float(np.linalg.norm(b.vel[:2]))
@@ -847,6 +873,7 @@ class ColonyEngine:
         elong = 0.8 + 0.6 * pr["density"]
         w = b.weights()
         R = b.R() @ self.glove.G                        # the hand's turn, in the body's frame
+        ph = self._shape_ph(k, b, R, ph)
         U = self.U[idx]
         loc = np.zeros((len(idx), 3))
         extra = np.zeros((len(idx), 3))
@@ -862,7 +889,7 @@ class ColonyEngine:
                 shell = np.stack([np.sin(pz) * np.cos(th), np.sin(pz) * np.sin(th), np.cos(pz)], 1) * rr[:, None]
                 extra += wa * (self.lure["pos"] - b.P + shell)
                 continue
-            shp = shape3(a, U, s, elong, ph, -b.P[2])
+            shp = shape3(a, U, s, elong, ph, self._ground_at(b.P) - b.P[2])
             if a != "LEGS":                                     # thrust places the body, not the shape
                 shp -= shp.mean(0)
             loc += wa * shp
@@ -1015,7 +1042,8 @@ class ColonyEngine:
             disp = np.maximum(disp, gc.scatter)
         local = self.local
         f_t = (2 * np.pi * (0.5 + 1.2 * stiff)) ** 2 * 0.25
-        acc = (coh * (1.0 - local) * f_t)[:, None] * (T - x) - (1.5 + 3.0 * damp)[:, None] * (v - vcom)
+        acc = (coh * (1.0 - local) * f_t * self._target_gain(T))[:, None] * (T - x) - \
+            (1.5 + 3.0 * damp)[:, None] * (v - vcom)
         acc += a_des - np.array([0.0, 0.0, G])
         if gc.active and np.any(np.abs(gc.wind) > 1e-4):    # the hand's wind streams every flying body
             for k in self._alive():
@@ -1098,8 +1126,9 @@ class ColonyEngine:
         if fast.any():
             v[fast] *= (30.0 / spd[fast])[:, None]
         x += v * dt
-        low = x[:, 2] < 0.05
-        x[low, 2] = 0.05
+        fl = np.broadcast_to(self._floor(x), (n,))
+        low = x[:, 2] < fl
+        x[low, 2] = fl[low]
         v[low, 2] = np.abs(v[low, 2]) * 0.2
         v[low, :2] *= 0.85                                   # feet grip the floor
         if (coh.mean() > 0.7 and self.t - self.last_rebuild > 0.6 and len(self.alive) and

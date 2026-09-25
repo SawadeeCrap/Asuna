@@ -21,7 +21,7 @@ AUTOSTART = os.path.join(REPO, "blender", "scripts", "live_autostart.py")
 PREPARE = os.path.join(REPO, "blender", "scripts", "prepare_character.py")
 OPEN_TAKE = os.path.join(REPO, "blender", "scripts", "open_take.py")
 CREATURE_BACKENDS = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive",
-                     "cyber_hive")        # organisms: no .blend, the scene is built
+                     "cyber_hive", "swarm", "spear", "cloud", "blade", "crawler")        # organisms: no .blend, the scene is built
 
 
 def variant_of(backend: str) -> str:
@@ -113,7 +113,8 @@ class EngineController:
         who = {"creature": "Black Nanomaterial Creature", "polyalloy": "Mimetic Polyalloy",
                "colony": "Polyalloy Colony", "hive": "Polyalloy Hive", "osseous": "Osseous Polyalloy",
                "osseous_colony": "Osseous Colony", "osseous_hive": "Osseous Hive",
-               "cyber_hive": "Cyber Hive"}.get(s.backend) \
+               "cyber_hive": "Cyber Hive", "swarm": "Mimetic Swarm", "spear": "Mimetic Spear",
+               "cloud": "Mimetic Cloud", "blade": "Mimetic Blade", "crawler": "Mimetic Crawler"}.get(s.backend) \
             or os.path.basename(s.character)
         self.log(f"engine started: {who} | OSC :{s.osc_port} | -> {', '.join(out)}")
         for e in self.session.status()["errors"]:
@@ -226,7 +227,8 @@ def blender_live_command(blender: str, character: str, pose_port: int, backend: 
 
 def take_variant(take: str) -> str | None:
     base = os.path.basename(take)
-    for prefix, variant in (("cyber_hive_take", "cyber_hive"),
+    for prefix, variant in (("cyber_hive_take", "cyber_hive"), ("swarm_take", "swarm"), ("spear_take", "spear"),
+                            ("cloud_take", "cloud"), ("blade_take", "blade"), ("crawler_take", "crawler"),
                             ("osseous_hive_take", "osseous_hive"), ("osseous_colony_take", "osseous_colony"),
                             ("osseous_take", "osseous"), ("hive_take", "hive"), ("colony_take", "colony"),
                             ("polyalloy_take", "polyalloy"),

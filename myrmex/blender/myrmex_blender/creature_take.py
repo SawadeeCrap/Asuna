@@ -158,6 +158,8 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     # Polyalloy family: bone links + scutes are rebuilt per frame from the recorded skeleton (take player).
     if base in ("polyalloy", "colony", "hive") and "links" in take.d:
         view.make_polyalloy(len(take.d["links"][0]), len(view.obstacles) or 4, style)
+        if style >= 3:                                        # Mimetic line: the fins trail the recorded motion
+            view._fins(n)
         obs = take.resampled("obstacles", fps)
         for k, o in enumerate(view.obstacles):
             _clear_anim(o)

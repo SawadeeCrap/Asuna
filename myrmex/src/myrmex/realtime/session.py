@@ -104,7 +104,8 @@ class PoseSink:
         self.sock.close()
 
 
-CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive")
+CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive",
+             "swarm", "spear", "cloud", "blade", "crawler")
 FLYING = CREATURES[1:]
 
 
@@ -133,6 +134,10 @@ class LiveSession:
             elif cfg.backend == "cyber_hive":                    # v8: white nanomaterial, light lines
                 from ..creature.cyber import VARIANTS as CYBER
                 self.creature = CreatureBackend(CYBER[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                                                variant=cfg.backend)
+            elif cfg.backend in ("swarm", "spear", "cloud", "blade", "crawler"):     # v9-v13: the Mimetic line
+                from ..creature.mimetic import VARIANTS as MIMETIC
+                self.creature = CreatureBackend(MIMETIC[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
                                                 variant=cfg.backend)
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
@@ -299,7 +304,7 @@ class LiveSession:
         aerial = self.creature.variant in FLYING
         if aerial and self.camera is not None:
             for _, name, _a in self.creature.fresh:
-                if name in ("IMPULSE", "PRESSURE", "TURBULENCE"):
+                if name in ("IMPULSE", "PRESSURE", "TURBULENCE", "SURGE", "DASH", "SLASH", "POUNCE"):
                     self.camera.impact(0.5, t)
                 elif name in ("RESPONSE", "COLLAPSE", "HIT", "QUILLS"):
                     self.camera.impact(1.0, t, reframe=True)

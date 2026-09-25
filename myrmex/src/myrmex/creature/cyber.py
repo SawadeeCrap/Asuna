@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .colony import ALL_SHAPES, CYBER_SHAPES, FREE_SHAPES
+from .colony import CYBER_SET, CYBER_SHAPES, FREE_SHAPES
 from .hive import HiveConfig, HiveState
 from .osseous import OsseousHiveEngine
 
@@ -61,7 +61,7 @@ class CyberHiveEngine(OsseousHiveEngine):
     STYLE = 2
     PLAN = PLAN_CYBER
     VOCAB = CYBER_VOCAB
-    SHAPE_SET = ALL_SHAPES
+    SHAPE_SET = CYBER_SET
     EVENTS = OsseousHiveEngine.EVENTS + ("SCAN", "GLITCH")
 
     def __init__(self, cfg: HiveConfig | None = None):

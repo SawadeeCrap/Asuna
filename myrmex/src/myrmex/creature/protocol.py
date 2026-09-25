@@ -63,7 +63,7 @@ class CreatureFrame:
     camera: CameraState | None = None
     material: str = ""
     fragments: int = 1
-    style: int = 0                           # 0 classic (struts, plates) · 1 osseous (bone links, scutes) · 2 cyber
+    style: int = 0                           # 0 classic · 1 osseous · 2 cyber · 3-7 mimetic (swarm .. crawler)
     dispersion: np.ndarray | None = None
     links: np.ndarray | None = None          # (L, 3) i, j, strength
     obstacles: np.ndarray | None = None      # (O, 4) x, y, z, radius

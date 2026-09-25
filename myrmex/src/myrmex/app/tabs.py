@@ -18,6 +18,7 @@ COLONY_EVENTS = tuple(e for e in ColonyEngine.EVENTS if e not in EVENTS + POLY_E
 HIVE_EVENTS = tuple(e for e in HiveEngine.EVENTS if e not in EVENTS + POLY_EVENTS + COLONY_EVENTS)  # build, recall
 OSSEOUS_EVENTS = ("STRIKE", "OSSIFY", "QUILLS")
 CYBER_EVENTS = ("SCAN", "GLITCH")
+MIMETIC_EVENTS = ("SURGE", "DASH", "SCATTER", "GATHER", "SLASH", "RECONFIGURE", "POUNCE")
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
@@ -25,7 +26,7 @@ CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
            [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +
-                                                                  CYBER_EVENTS] +
+                                                                  CYBER_EVENTS + MIMETIC_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -36,7 +37,8 @@ def creature_tab(win) -> QWidget:
     v.addWidget(QLabel("Choose the organism on the Character page: Black Nanomaterial (v1), Mimetic Polyalloy (v2, "
                        "flying), Polyalloy Colony (v3, flock), Polyalloy Hive (v4), their bony Osseous versions "
                        "(v5–v7: bone-link skeletons, scutes, claws, blades, strikes) or the Cyber Hive (v8: white "
-                       "nanomaterial, rails and panels with light lines, machine forms). Auto = the organism decides "
+                       "nanomaterial, rails and panels with light lines, machine forms) or the Mimetic line (v9–v13: "
+                       "Swarm, Spear, Cloud, Blade, Crawler — black liquid metal). Auto = the organism decides "
                        "from its behaviour and the music; any knob can also be a MIDI CC. kick mode · obstacle rate · "
                        "altitude: v2–v4; swarm · armor · mechanism · hunt: v3–v4; architecture · pattern · nanoswarm · "
                        "memory: v4."))
@@ -50,25 +52,32 @@ def creature_tab(win) -> QWidget:
         grid.addWidget(kb, i // 2, (i % 2) * 2 + 1)
     v.addWidget(box)
     box = QGroupBox("Reconfiguration events")
-    row = QHBoxLayout(box)
-    for e in EVENTS:
+    grid = QGridLayout(box)
+    for i, e in enumerate(EVENTS):
         b = QPushButton(e.replace("_", " ").title())
         b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
-        row.addWidget(b)
+        grid.addWidget(b, i // 3, i % 3)
     v.addWidget(box)
-    for title, events in (("Physical events (v2, v3) — the kick does one of these by itself (kick mode)", POLY_EVENTS),
-                          ("Colony (v3, v4) — flock, hardening wave, prey, landing", COLONY_EVENTS),
-                          ("Hive (v4, v7, v8) — living architecture: build a structure, call the material back",
-                           HIVE_EVENTS),
-                          ("Osseous (v5–v8) — lunge and knock away · ossify / lock in a wave · quill volley (v7, v8)",
-                           OSSEOUS_EVENTS),
-                          ("Cyber Hive (v8) — a scan of light sweeps the body · a digital glitch", CYBER_EVENTS)):
+    for title, note, events in (
+            ("Physical events (v2–v13)", "the kick does one of these by itself (kick mode)", POLY_EVENTS),
+            ("Colony (v3–v13)", "flock, hardening wave, prey, landing", COLONY_EVENTS),
+            ("Hive (v4, v7, v8, v9, v11)", "living architecture: build a structure, call the material back",
+             HIVE_EVENTS),
+            ("Osseous (v5–v13)", "lunge and knock away · ossify / lock in a wave · quill volley (hives)",
+             OSSEOUS_EVENTS),
+            ("Cyber Hive (v8)", "a scan of light sweeps the body · a digital glitch", CYBER_EVENTS),
+            ("Mimetic (v9–v13)", "Swarm surge · Spear dash · Cloud scatter / gather · Blade slash · Crawler legs / "
+                                 "pounce", MIMETIC_EVENTS)):
         box = QGroupBox(title)
-        row = QHBoxLayout(box)
-        for e in events:
+        grid = QGridLayout(box)                               # wraps: the page stays narrow
+        lab = QLabel(note)
+        lab.setWordWrap(True)
+        lab.setProperty("muted", True)
+        grid.addWidget(lab, 0, 0, 1, 4)
+        for i, e in enumerate(events):
             b = QPushButton(e.title())
             b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
-            row.addWidget(b)
+            grid.addWidget(b, 1 + i // 4, i % 4)
         v.addWidget(box)
     dbg = QCheckBox("Debug: show the internal control network (nodes + links) in Blender")
     dbg.toggled.connect(lambda on: win.engine.control("creature_debug", 1.0 if on else 0.0))

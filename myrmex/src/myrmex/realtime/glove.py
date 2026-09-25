@@ -26,7 +26,7 @@ PARAMS = ("thumb", "index", "middle", "ring", "pinky", "roll", "pitch", "yaw", "
 FINGERS = PARAMS[:5]
 PRESETS = ("puppet", "sculpt", "conductor", "camera", "marionette", "harp", "heartbeat", "elastic", "dust", "stasis",
            "storm", "leash", "pilot", "flywheel", "shepherd", "swarm", "neon", "rhythm", "echo", "mandala", "off")
-HIVES = ("hive", "osseous_hive", "cyber_hive")
+HIVES = ("hive", "osseous_hive", "cyber_hive", "swarm", "cloud")
 GESTURES = ("FLICK", "CLENCH", "SPREAD", "PUSH", "PINCH")
 # gesture -> events tried in order (the first one the organism knows is used)
 GESTURE_EVENTS = {"FLICK": ("STRIKE", "IMPULSE", "APPENDAGE_BURST"),
@@ -295,6 +295,11 @@ SCULPT_SHAPES = {   # five forms per organism, one per finger (thumb .. pinky)
     "osseous_colony": ("CARAPACE", "SPINE", "SCYTHE", "MANDIBLE", "THORN"),
     "osseous_hive": ("CARAPACE", "SPINE", "SCYTHE", "MANDIBLE", "THORN"),
     "cyber_hive": ("PRISM", "HALO", "ARRAY", "SCYTHE", "SPINE"),
+    "swarm": ("STREAM", "TENDRILS", "CLOUD", "SPINE", "CORE"),
+    "spear": ("LANCE", "SPINE", "SCYTHE", "THORN", "CORE"),
+    "cloud": ("SHARDS", "CLOUD", "STREAM", "SHIELD", "CORE"),
+    "blade": ("SWEEP", "SCYTHE", "WINGS", "CLAW", "CORE"),
+    "crawler": ("CRAWL", "SPINE", "CLAW", "THORN", "CORE"),
 }
 
 

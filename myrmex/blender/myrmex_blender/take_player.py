@@ -51,9 +51,9 @@ def apply(scene: bpy.types.Scene) -> None:
     d = _P.get("d")
     if d is None or scene.get("myrmex_take_player") != _P.get("key"):
         return
-    from .creature import (BONES, LATTICE, PANELS, PLATES, RAILS, SCUTES, _flow, bone_points, panel_light,
-                           panel_points, plate_points, rail_light, rail_points, scute_points, set_cyber_mesh,
-                           strut_points)
+    from .creature import (BONES, FINS, LATTICE, PANELS, PLATES, RAILS, SCUTES, TENDON_THICK, TENDONS, _flow,
+                           bone_points, fin_points, panel_light, panel_points, plate_points, rail_light, rail_points,
+                           scute_points, set_cyber_mesh, strut_points, tendon_points)
     style = _P.get("style", 0)
     f = int(np.clip(scene.frame_current - _P["start"], 0, _P["n"] - 1))
     pos = d["pos"][f].astype(float)
@@ -64,6 +64,23 @@ def apply(scene: bpy.types.Scene) -> None:
         up = pos - c
     t = float(d["t"][f]) if "t" in d else f / 30.0
     ar = float(d["arousal"][f]) if "arousal" in d else 0.5
+    if style >= 3:                                   # Mimetic line: tendons + fins that trail the recorded motion
+        ob = bpy.data.objects.get(TENDONS)
+        if ob is not None and "links" in d:
+            pts = tendon_points(pos, d["links"][f].astype(float), up, t, ar, TENDON_THICK.get(style, 1.0))
+            if len(pts) == len(ob.data.vertices):
+                ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+                ob.data.update()
+        ob = bpy.data.objects.get(FINS)
+        if ob is not None:
+            ts = d["t"] if "t" in d else np.arange(_P["n"]) / 30.0
+            hist = [(float(ts[g]), d["pos"][g].astype(float)) for g in range(f, max(-1, f - 24), -1)]
+            com = d["com"][f] if "com" in d else pos.mean(0)
+            pts = fin_points(style, hist, up, com, float(d["heading"][f]) if "heading" in d else 0.0, t)
+            if len(pts) == len(ob.data.vertices):
+                ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+                ob.data.update()
+        return
     if style == 2:                                   # Cyber Hive: rails + panels carry their light
         com = d["com"][f] if "com" in d else pos.mean(0)
         hd = float(d["heading"][f]) if "heading" in d else 0.0

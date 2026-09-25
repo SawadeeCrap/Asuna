@@ -274,6 +274,10 @@ def copy_app_sources(dst: str) -> None:
 
 
 def make_icon(path: str) -> bool:
+    drawn = os.path.join(REPO, "src", "myrmex", "app", "assets", "Myrmex.icns")     # tools/make_icon.py
+    if os.path.exists(drawn):
+        shutil.copy2(drawn, path)
+        return True
     try:
         from PIL import Image, ImageDraw
     except ImportError:

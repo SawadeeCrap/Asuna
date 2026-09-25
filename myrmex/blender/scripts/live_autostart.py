@@ -63,8 +63,8 @@ def go_live():
     s = scene.myrmex_live
     if "MYRMEX_KEEP_SETTINGS" in os.environ:
         s.keep_settings = os.environ["MYRMEX_KEEP_SETTINGS"] == "1"
-    if os.environ.get("MYRMEX_MODE") in ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony",
-                                         "osseous_hive", "cyber_hive"):
+    from myrmex_blender.looks import CREATURES
+    if os.environ.get("MYRMEX_MODE") in ("creature",) + tuple(CREATURES):
         from myrmex_blender import creature, live, ui
         # A saved look (opened by the app) is used as it is; otherwise the default studio is built.
         variant = {"creature": "nanomaterial"}.get(os.environ["MYRMEX_MODE"], os.environ["MYRMEX_MODE"])

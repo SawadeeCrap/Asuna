@@ -12,7 +12,7 @@ One window for everything the live performance needs:
 * Inputs    - Ableton (Link, Remote Script), MIDI ports, audio input, clock source, latency;
 * MIDI      - monitor + fine mapping;   * Takes - pose stream, recording, take -> video;   * Log.
 
-Sidebar navigation, light / dark theme following macOS (``theme.py``).
+A narrow rail of icons for navigation (``icons.py``), light / dark theme following macOS (``theme.py``).
 
 Settings are saved on exit and restored on the next launch.
 """
@@ -28,10 +28,12 @@ from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                                QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+                               QListView, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea,
                                QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import controllers as C
+from . import icons
 from . import tabs as T
 from . import theme
 from .settings import AppSettings, characters_dir
@@ -91,8 +93,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.s = settings or AppSettings.load()
         self.setWindowTitle("Myrmex")
-        self.resize(1060, 740)
-        self.setMinimumSize(880, 600)
+        self.resize(900, 740)
+        self.setMinimumSize(720, 560)
         self.engine = C.EngineController(self.s, self.log)
         self.blender_proc: QProcess | None = None
         self.prepare_proc: QProcess | None = None
@@ -133,37 +135,41 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(central)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
-        side = QWidget()
+        side = QWidget()                                   # a narrow rail of icons (names in the tooltips)
         side.setObjectName("sidebar")
-        side.setFixedWidth(212)
+        side.setFixedWidth(64)
         sv = QVBoxLayout(side)
-        sv.setContentsMargins(0, 20, 0, 16)
+        sv.setContentsMargins(0, 14, 0, 14)
         sv.setSpacing(2)
-        brand = QLabel("Myrmex")
+        brand = QLabel()
         brand.setObjectName("brand")
-        sub = QLabel("live character engine")
-        sub.setObjectName("brandsub")
-        for lab in (brand, sub):
-            lab.setContentsMargins(22, 0, 16, 0)
-            sv.addWidget(lab)
-        sv.addSpacing(16)
+        brand.setPixmap(icons.logo(36))
+        brand.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        brand.setToolTip("Myrmex — live character engine")
+        sv.addWidget(brand)
+        sv.addSpacing(12)
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
+        self.nav.setViewMode(QListView.ViewMode.IconMode)
+        self.nav.setFlow(QListView.Flow.TopToBottom)
+        self.nav.setMovement(QListView.Movement.Static)
+        self.nav.setWrapping(False)
+        self.nav.setIconSize(QSize(22, 22))
+        self.nav.setGridSize(QSize(64, 46))
         self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         sv.addWidget(self.nav, 1)
-        # Engine state, always visible.
-        box = QWidget()
-        bl = QHBoxLayout(box)
-        bl.setContentsMargins(22, 0, 16, 0)
-        bl.setSpacing(8)
+        # Engine state, always visible: a dot (the words in its tooltip).
         self.dot = QLabel()
-        self.dot.setFixedSize(8, 8)
-        self.lbl_engine = QLabel("Engine stopped")
+        self.dot.setFixedSize(10, 10)
+        self.lbl_engine = QLabel("Engine stopped")           # (not shown: the dot's tooltip)
         self.lbl_engine.setObjectName("enginestate")
-        bl.addWidget(self.dot)
-        bl.addWidget(self.lbl_engine, 1)
-        sv.addWidget(box)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.dot)
+        row.addStretch(1)
+        sv.addLayout(row)
         h.addWidget(side)
         self.stack = QStackedWidget()
         h.addWidget(self.stack, 1)
@@ -181,7 +187,11 @@ class MainWindow(QMainWindow):
         for name, subtitle in self.PAGES:
             actions = [self.btn_blender, self.btn_engine] if name == "Live" else []
             self.page_index[name] = self.stack.addWidget(self._page(name, subtitle, builders[name](), actions))
-            QListWidgetItem(name, self.nav).setSizeHint(QSize(180, 34))
+            it = QListWidgetItem(self.nav)
+            it.setToolTip(f"{name} — {subtitle}")
+            it.setData(Qt.ItemDataRole.UserRole, name)
+            it.setSizeHint(QSize(64, 46))
+        self._nav_icons()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.setCurrentRow(0)
         self._polish()
@@ -238,6 +248,12 @@ class MainWindow(QMainWindow):
                 tbl.verticalHeader().setVisible(False)
                 tbl.setShowGrid(False)
         self._engine_state(False)
+
+    def _nav_icons(self) -> None:
+        """(Re)paint the rail's icons in the current theme's colours."""
+        for i in range(self.nav.count()):
+            it = self.nav.item(i)
+            it.setIcon(icons.nav_icon(it.data(Qt.ItemDataRole.UserRole), theme.T))
 
     def _goto(self, page: str) -> None:
         self.nav.setCurrentRow(self.page_index[page])
@@ -298,7 +314,8 @@ class MainWindow(QMainWindow):
             kb = Knob(k, getattr(self.s, k), self._knob_changed)
             self.knobs[k] = kb
             form.addRow(label, kb)
-        self.chk_hold = QCheckBox("Stand and pose (hold) — otherwise she walks while the music plays")
+        self.chk_hold = QCheckBox("Stand and pose (hold)")
+        self.chk_hold.setToolTip("Otherwise she walks while the music plays")
         self.chk_hold.toggled.connect(lambda on: self.engine.control("hold", 1.0 if on else 0.0))
         form.addRow("", self.chk_hold)
         v.addWidget(box)
@@ -420,6 +437,11 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Osseous Colony (v6: bony flock, scutes, mandibles, strikes)", "osseous_colony")
         self.cmb_backend.addItem("Osseous Hive (v7: bony swarm, quill volleys, fanged gates)", "osseous_hive")
         self.cmb_backend.addItem("Cyber Hive (v8: white nanomaterial, light lines, machine forms)", "cyber_hive")
+        self.cmb_backend.addItem("Mimetic Swarm (v9: distributed fluid flight, streaming filaments)", "swarm")
+        self.cmb_backend.addItem("Mimetic Spear (v10: elongated, high-speed, dashes)", "spear")
+        self.cmb_backend.addItem("Mimetic Cloud (v11: dispersion, camouflage, reassembly)", "cloud")
+        self.cmb_backend.addItem("Mimetic Blade (v12: swept blades, high-velocity cutting)", "blade")
+        self.cmb_backend.addItem("Mimetic Crawler (v13: many legs on rough terrain)", "crawler")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         for cb in (self.cmb_char, self.cmb_backend):                # long names must not widen the page
@@ -428,12 +450,12 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.cmb_look = QComboBox()
         self.cmb_look.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.cmb_look.setMinimumContentsLength(12)
+        self.cmb_look.setMinimumContentsLength(10)
         self.cmb_look.setToolTip("Saved looks of this organism. Choosing one loads it into the Blender that Myrmex "
                                  "opened (what it showed is kept as 'Autosave'); it is also used next time and for "
                                  "take renders.")
         self.cmb_look.activated.connect(self._look_chosen)
-        self.btn_save_look = QPushButton("Save current look…")
+        self.btn_save_look = QPushButton("Save look…")
         self.btn_save_look.setToolTip("Save what the Blender opened by Myrmex shows now (materials, lights, world, "
                                       "colour, render settings) as a look of this organism")
         self.btn_save_look.clicked.connect(self._save_current_look)
@@ -465,10 +487,11 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Your look in Blender")
         form = QFormLayout(box)
         form.addRow(QLabel("Open in Blender, tune materials, lights, world and render settings there, then Save "
-                           "current look (Character type → Look). Every organism keeps its own list of looks: choose "
+                           "look… (Character type → Look). Every organism keeps its own list of looks: choose "
                            "one to load it into Blender at once; live sessions and take renders open the chosen look. "
                            "Humanoid: the look is saved in the character's .blend."))
-        self.chk_keep = QCheckBox("Keep my Blender settings (Myrmex doesn't change EEVEE, colour, shadows, samples)")
+        self.chk_keep = QCheckBox("Keep my Blender settings")
+        self.chk_keep.setToolTip("Myrmex doesn't change EEVEE, colour, shadows or samples")
         self.chk_keep.setChecked(self.s.keep_blender_settings)
         self.chk_keep.toggled.connect(lambda on: self.cmb_rquality.setEnabled(not on))
         form.addRow(self.chk_keep)
@@ -992,11 +1015,13 @@ class MainWindow(QMainWindow):
             for k in self.st:
                 self.st[k].setText("–")
             self._leds_off()
-            self.dot.setStyleSheet(f"background: {tok['text3']}; border-radius: 4px")
+            self.dot.setStyleSheet(f"background: {tok['text3']}; border-radius: 5px")
             self.lbl_engine.setText("Engine stopped")
+            self.dot.setToolTip("Engine stopped")
             return
-        self.dot.setStyleSheet(f"background: {tok['ok'] if not st['errors'] else tok['warn']}; border-radius: 4px")
+        self.dot.setStyleSheet(f"background: {tok['ok'] if not st['errors'] else tok['warn']}; border-radius: 5px")
         self.lbl_engine.setText(f"Running · {st['bpm']:.1f} BPM" if st["bpm"] else "Running")
+        self.dot.setToolTip("Engine " + self.lbl_engine.text().lower())
         now = time.time()
         n0, t0 = self._last_notes
         if now - t0 >= 1.0:
@@ -1041,8 +1066,11 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("Myrmex")
     app.setApplicationDisplayName("Myrmex")
-    theme.follow_system(app)
+    app.setWindowIcon(icons.app_icon())
+    holder: dict = {}
+    theme.follow_system(app, on_change=lambda: holder["w"]._nav_icons() if "w" in holder else None)
     w = MainWindow()
+    holder["w"] = w
     w.show()
     return app.exec()
 

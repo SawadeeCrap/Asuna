@@ -37,8 +37,8 @@ QLabel#statvalue { font-size: 15px; }
 QLabel#enginestate { color: %(text2)s; font-size: 12px; }
 QLabel#badge { color: %(text2)s; background: %(hover)s; border-radius: 9px; padding: 2px 9px; font-size: 11px; }
 
-QListWidget#nav { background: transparent; border: none; padding: 2px 0; }
-QListWidget#nav::item { color: %(text2)s; padding: 7px 10px; margin: 1px 10px; border-radius: 8px; }
+QListWidget#nav { background: transparent; border: none; padding: 0; }
+QListWidget#nav::item { color: %(text2)s; padding: 0; margin: 2px 9px; border-radius: 10px; }
 QListWidget#nav::item:hover { background: %(hover)s; color: %(text)s; }
 QListWidget#nav::item:selected { background: %(navsel)s; color: %(text)s; }
 

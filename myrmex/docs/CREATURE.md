@@ -192,10 +192,30 @@ Colours live in the materials `MyrmexCyberWhite` (body), `MyrmexCyberHull`, `Myr
 light: *Emission Color*, strength = light x pulses) and `MyrmexCyberMote` - change them in Blender and
 **Save Look** keeps them.
 
+# The Mimetic line (backends `swarm`, `spear`, `cloud`, `blade`, `crawler` - creatures v9-v13)
+
+Carbon-based mimetic polyalloy in five regimes of the same machinery (finite material: 128 nodes of fixed
+mass, an adaptive graph, a per-node material field; the colony / hive behaviour, flock split / merge,
+hardening waves, strikes, obstacles and prey).  None of them switches bodies: each lives in its own
+region of morphology space and the material flows between forms.  Look: glossy black liquid metal with
+very dark red internal glints, tendons along the skeleton and fins that follow the motion.
+
+| organism | forms | its own mechanism | fins |
+|---|---|---|---|
+| **Swarm** (v9) - distributed fluid-state flight | STREAM (dense head + a dozen wavy filaments), tendrils, cloud | splits into streams on the music easily; **SURGE** (note 98): a burst forward shedding a wake of machines | long thin filaments = the trails of its own motion |
+| **Spear** (v10) - elongated, high-speed, directional | LANCE (needle + swept blades), spine, scythe | **DASH** (note 100) on the kick: hardens into the lance and lunges | straight shards swept back |
+| **Cloud** (v11) - dispersion, camouflage, reassembly | SHARDS (drifting clumps), cloud, then solid forms | every phrase: **GATHER** (note 103) into a form on energy, **SCATTER** (note 101) back into a cloud in calm; the machines fly out / home | tumbling flakes |
+| **Blade** (v12) - high-velocity cutting precision | SWEEP (flame-like blades fanning back), scythe, wings | zigzag slashes on the beat; **SLASH** (note 105): lunge, flare, hard turn | wide blades trailing the motion |
+| **Crawler** (v13) - multi-contact terrain adaptation | CRAWL (segmented body on 4 / 6 / 8 clawed legs) | walks on rough ground (feet planted on the terrain, body tilted with the slope, falls when airborne); **RECONFIGURE** (note 107) regrows another number of legs, **POUNCE** (note 108) leaps | claws on the feet, spikes on the back |
+
+The Crawler's ground is `creature/mimetic.py: terrain_height(x, y)`; Blender builds the same surface
+(`CrawlerTerrain`) instead of the flat floor.  Materials: `MyrmexLiquidBlack` (body, tendons),
+`MyrmexLiquidFin` (fins; the red edge is the `glint` attribute), `MyrmexLiquidMote` (swarm shards).
+
 # Your look in Blender (saved between sessions)
 
 *Open in Blender* from the app, tune materials, lights, world, colour management and render settings there,
-then in the app: **Character → Look → Save current look…** (give it a name).  Every organism keeps its own
+then in the app: **Character → Look → Save look…** (give it a name).  Every organism keeps its own
 list of looks in `~/Myrmex/looks/<type>/<name>.blend` (the older single `~/Myrmex/looks/<type>.blend` is
 listed as *My look*).  Choosing a look in the list loads it into the running Blender at once - no restart,
 the live stream goes on, an open take is re-imported into it - and what Blender showed before is kept as

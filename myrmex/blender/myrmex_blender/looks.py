@@ -15,7 +15,8 @@ import re
 
 import bpy
 
-CREATURES = ("nanomaterial", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive")
+CREATURES = ("nanomaterial", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive",
+             "swarm", "spear", "cloud", "blade", "crawler")
 DEFAULT_NAME = "My look"          # the older single look per type (<variant>.blend)
 AUTOSAVE = "Autosave"             # what Blender showed before another look was loaded
 
@@ -33,6 +34,10 @@ def look_kind(scene: bpy.types.Scene | None = None) -> str:
         bone = bpy.data.objects.get("PolyBones") is not None
         if bpy.data.objects.get("CyberRails") is not None:
             return "cyber_hive"
+        if bpy.data.objects.get("MimeticTendons") is not None:          # (normally the scene says which)
+            if bpy.data.objects.get("CrawlerTerrain") is not None:
+                return "crawler"
+            return "swarm" if bpy.data.objects.get("HiveSwarm") is not None else "spear"
         if bpy.data.objects.get("HiveSwarm") is not None:
             return "osseous_hive" if bone else "hive"
         if bpy.data.objects.get("ColonyScutes") or bpy.data.objects.get("ColonyPlates"):
