@@ -3,8 +3,8 @@
     b"MYRC" <B ver> <B flags> <H n> <I seq> <d t> <d beat> <f bpm> <B behavior> <B morph> <H pad>
     <f surface> <f glow> <f arousal> <f instability> <3f com> <f heading>
     pos n*3f, radius n*f, stretch n*3f, kind n*B, anchor n*h, [camera block as in realtime.protocol]
-    [FLAG_POLY: <B material> <B fragments> <H links> <H obstacles> <H pad> dispersion n*f,
-                links L*(2H + f strength), obstacles O*4f (x y z radius)]
+    [FLAG_POLY: <B material> <B fragments> <H links> <H obstacles> <H style> dispersion n*f,
+                links L*(2H + f strength, every slot, 65535 = empty), obstacles O*4f (x y z radius)]
     [FLAG_COLONY: <B bodies> <B> <H> <4f prey>, plate n*f, normal n*3f, owner n*B]
     [FLAG_HIVE: <H particles> <B structures> <B memories> <3f origin>, particles P*3h (mm from origin),
                 pattern n*B]
@@ -61,6 +61,7 @@ class CreatureFrame:
     camera: CameraState | None = None
     material: str = ""
     fragments: int = 1
+    style: int = 0                           # 0 classic (struts, plates) · 1 osseous (bone links, scutes)
     dispersion: np.ndarray | None = None
     links: np.ndarray | None = None          # (L, 3) i, j, strength
     obstacles: np.ndarray | None = None      # (O, 4) x, y, z, radius
@@ -95,13 +96,15 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
         out.append(_CAM.pack(*map(float, c.position), *map(float, c.target), float(c.lens), float(c.focus),
                              float(c.fstop), c.shot_id & 0xFFFF, k))
     if poly:
-        lk = st.links[st.links[:, 0] >= 0]
+        lk = st.links                                       # every slot (the renderer keeps link identity)
         ob = st.obstacles                                   # fixed slots (radius 0 = empty)
         out.append(_POLY.pack(MATERIAL_NAMES.index(st.material) if st.material in MATERIAL_NAMES else 0,
-                              min(255, int(st.fragments)), len(lk), len(ob), 0))
+                              min(255, int(st.fragments)), len(lk), len(ob), int(getattr(st, "style", 0))))
         out.append(np.ascontiguousarray(st.dispersion, "<f4").tobytes())
         la = np.zeros(len(lk), _LINK)
-        la["i"], la["j"], la["s"] = lk[:, 0], lk[:, 1], lk[:, 2]
+        la["i"] = np.where(lk[:, 0] >= 0, lk[:, 0], 65535)
+        la["j"] = np.where(lk[:, 1] >= 0, lk[:, 1], 65535)
+        la["s"] = lk[:, 2]
         out.append(la.tobytes())
         out.append(np.ascontiguousarray(ob, "<f4").tobytes())
     if colony:
@@ -145,17 +148,20 @@ def decode_creature(data: bytes) -> CreatureFrame | None:
                        MORPH_NAMES[v[9]] if v[9] < len(MORPH_NAMES) else "COMPACT", v[11], v[12], v[13], v[14],
                        np.array(v[15:18]), v[18], pos, rad, stretch, kind, anchor, flags, cam)
     if flags & FLAG_POLY and len(data) >= off + _POLY.size:
-        m, frag, nl, no, _ = _POLY.unpack_from(data, off)
+        m, frag, nl, no, style = _POLY.unpack_from(data, off)
         off += _POLY.size
         try:
             fr.dispersion = take("<f4", n, (n,))
             la = np.frombuffer(data, _LINK, count=nl, offset=off)
             off += la.nbytes
-            fr.links = np.stack([la["i"], la["j"], la["s"]], 1).astype(float)
+            ii, jj = la["i"].astype(np.int32), la["j"].astype(np.int32)
+            li = np.where(ii == 65535, -1, ii).astype(float)
+            lj = np.where(jj == 65535, -1, jj).astype(float)
+            fr.links = np.stack([li, lj, la["s"].astype(float)], 1)
             fr.obstacles = take("<f4", 4 * no, (no, 4)) if no else np.zeros((0, 4))
         except ValueError:
             return fr
-        fr.material, fr.fragments = MATERIAL_NAMES[m] if m < len(MATERIAL_NAMES) else "", frag
+        fr.material, fr.fragments, fr.style = MATERIAL_NAMES[m] if m < len(MATERIAL_NAMES) else "", frag, style
         if flags & FLAG_COLONY and len(data) >= off + _COL.size:
             c = _COL.unpack_from(data, off)
             off += _COL.size

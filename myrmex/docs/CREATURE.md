@@ -139,6 +139,33 @@ A two-scale material: everything the Colony does, plus a real micro layer and a 
 Control notes (in addition to v3): 86 build · 88 recall.  Frames of v3/v4 exceed macOS's 9216-byte UDP
 limit, so every frame above 8 KB travels in fragments and Blender reassembles it.
 
+# The Osseous line (backends `osseous`, `osseous_colony`, `osseous_hive` - creatures v5, v6, v7)
+
+Bony, aggressive versions of v2, v3 and v4 - the liquid originals stay as they are.  Same physics,
+behaviour and features as the originals, plus:
+
+* **Bone-link skeleton** instead of strut tubes.  The tubes followed random neighbour links and
+  retracted to their midpoints - they floated like shards.  The skeleton is a minimum spanning tree
+  through each body (no crossings, no shortcuts through empty space; a spine with ribs and limbs).
+  Every link is an articulated bone segment - knuckled ends, a thin waist, a sharp dorsal crest facing
+  out, a twist, a hooked tip - with gaps between links; each link grows where the material ossifies,
+  dissolves where it liquefies and keeps mutating its proportions with its own phase.
+* **Ossification**: hardness and *aggression* turn the material to bone; ossified nodes thin into beads
+  strung along the bones; hardening waves ossify in travelling bands.
+* **Bony, aggressive forms** (the style of bionic vertebrae, not their anatomy): SPINE (knuckled ridge with
+  swept-back thorns that jump on kicks), CLAW (two hooked claws), MANDIBLE (claws snapping shut on every
+  beat, v6/v7), SCYTHE (curved blades swinging with the bar), THORN (quills), CARAPACE (faceted shell with a
+  keel).  *aggression* favours them.
+* **Strike**: instead of evading it can harden into blades and lunge - obstacles are knocked away (HIT),
+  prey is struck before it is enveloped.  Events STRIKE and OSSIFY.
+* v6/v7: **bony scutes** (raised, swept back into a spike) instead of flat hexagonal plates.
+  v7: **quill volley** on a drop (bristling + nanomachines fired outwards, event QUILLS), ring gates with
+  **fangs**, reaction-diffusion spines turn to bone.
+
+Control notes (in addition to v2-v4): 89 strike · 91 ossify · 93 quill volley.  Takes of every polyalloy
+organism rebuild their struts / bone links and plates / scutes each frame from the recorded skeleton
+(no big caches); open them through the app so the Myrmex add-on is active.
+
 # Your look in Blender (saved between sessions)
 
 Tune materials, lights, world, colour management and render settings, then *Myrmex panel → Save Look*.

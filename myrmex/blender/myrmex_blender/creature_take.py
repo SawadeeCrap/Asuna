@@ -7,7 +7,8 @@
 Everything the live view showed is rebuilt as ordinary Blender animation, so the .blend is
 self-contained and renders anywhere (no add-on needed):
   * metaball elements  -> keyframes (co, radius, size), decimated where the motion is linear;
-  * internal strut lattice (v2) -> a Point Cache 2 file + Mesh Cache modifier (links re-form over time);
+  * bone links + scutes (v2-v4) -> rebuilt every frame from the recorded skeleton (take_player.py);
+  * nanomachine swarm (v4) -> a Point Cache 2 file + Mesh Cache modifier;
   * obstacles (v2), light rig and floor (they follow the organism) -> keyframes;
   * shader activity / glow / time -> keyframes on the material's value nodes;
   * the live camera -> one camera per shot + timeline markers (as in the humanoid takes);
@@ -24,7 +25,7 @@ import numpy as np
 from myrmex.creature.take import CreatureTake
 
 from . import cinema, compat, preview
-from .creature import CreatureView, setup_creature_scene
+from .creature import setup_creature_scene
 
 
 def _decimate(vals: np.ndarray, tol: float, stride: int) -> np.ndarray:
@@ -85,6 +86,8 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     except Exception:
         pass
     fps = int(fps or round(take.fps))
+    style = 1 if take.variant.startswith("osseous") else 0          # Osseous line: bone links + scutes
+    base = take.variant.replace("osseous_", "").replace("osseous", "polyalloy")
     sc.render.fps, sc.render.fps_base = fps, 1.0
     view = setup_creature_scene(sc, take.variant, keep_look=keep_look)
     mb = view.mb
@@ -130,7 +133,7 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     # Lights and floor follow the organism (and rise with it when it flies).
     com = take.resampled("com", fps) if "com" in take.d else pos.mean(1)
     heading = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]] if "heading" in take.d else np.zeros(m)
-    lift = np.maximum(0.0, com[:, 2] - 1.2) if take.variant in ("polyalloy", "colony", "hive") else np.zeros(m)
+    lift = np.maximum(0.0, com[:, 2] - 1.2) if base in ("polyalloy", "colony", "hive") else np.zeros(m)
     rig, floor = bpy.data.objects.get("MyrmexLightRig"), bpy.data.objects.get("MyrmexFloor")
     if rig is not None:
         _clear_anim(rig)
@@ -139,20 +142,9 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     if floor is not None:
         _clear_anim(floor)
         keys += key_channels(floor, "MyrmexTakeFloor", [("location", 0, com[:, 0]), ("location", 1, com[:, 1])], frames)
-    # Mimetic Polyalloy / Colony: strut lattice (PC2 cache) and obstacles.
-    if take.variant in ("polyalloy", "colony", "hive") and "links" in take.d:
-        links = take.resampled("links", fps).astype(float)
-        n_links = max(1, int((links[:, :, 0] >= 0).sum(1).max()))
-        if len(view.lattice.data.vertices) != 2 * n_links:        # only the slots this take uses (smaller cache)
-            view.make_polyalloy(n_links, len(view.obstacles) or 4)
-        pts = np.stack([CreatureView.strut_points(pos[k], links[k], n_links) for k in range(m)])
-        pc2 = os.path.splitext(path)[0] + "_struts.pc2"
-        write_pc2(pc2, pts)
-        lat = view.lattice
-        mc = lat.modifiers.get("TakeCache") or lat.modifiers.new("TakeCache", "MESH_CACHE")
-        mc.cache_format, mc.filepath, mc.time_mode, mc.play_mode = "PC2", pc2, "FRAME", "SCENE"
-        mc.frame_start = float(frame_start)
-        lat.modifiers.move(lat.modifiers.find(mc.name), 0)   # the cache must come before the struts
+    # Polyalloy family: bone links + scutes are rebuilt per frame from the recorded skeleton (take player).
+    if base in ("polyalloy", "colony", "hive") and "links" in take.d:
+        view.make_polyalloy(len(take.d["links"][0]), len(view.obstacles) or 4, style)
         obs = take.resampled("obstacles", fps)
         for k, o in enumerate(view.obstacles):
             _clear_anim(o)
@@ -172,17 +164,9 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
         mc.cache_format, mc.filepath, mc.time_mode, mc.play_mode = "PC2", pc2, "FRAME", "SCENE"
         mc.frame_start = float(frame_start)
         sw.modifiers.move(sw.modifiers.find(mc.name), 0)
-    # Colony / Hive: armour plates (PC2 cache) and the prey.
-    if take.variant in ("colony", "hive") and "plate" in take.d:
-        plate, nrm = take.resampled("plate", fps), take.resampled("nrm", fps)
-        view.make_colony(n)
-        pts = np.stack([CreatureView.plate_points(pos[k], nrm[k], plate[k], radius[k]) for k in range(m)])
-        pc2 = os.path.splitext(path)[0] + "_plates.pc2"
-        write_pc2(pc2, pts)
-        pl = view.plates
-        mc = pl.modifiers.get("TakeCache") or pl.modifiers.new("TakeCache", "MESH_CACHE")
-        mc.cache_format, mc.filepath, mc.time_mode, mc.play_mode = "PC2", pc2, "FRAME", "SCENE"
-        mc.frame_start = float(frame_start)
+    # Colony / Hive: scutes (take player) and the prey.
+    if base in ("colony", "hive") and "plate" in take.d:
+        view.make_colony(n, style)
         lure = take.resampled("lure", fps)
         _clear_anim(view.lure)
         keys += key_channels(view.lure, "MyrmexTakePrey", [("location", a, lure[:, a]) for a in range(3)] +
@@ -199,6 +183,8 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
         audio = os.path.expanduser(audio)
         preview.add_audio(audio, int(round(frame_start - (off or 0.0) * fps)))
     sc.frame_start, sc.frame_end = frame_start, frame_start + m - 1
+    from . import take_player
+    take_player.attach(sc, take, frame_start, fps)
     sc.frame_set(frame_start)
     sc["myrmex_take"] = path
     return {"variant": take.variant, "frames": m, "fps": fps, "keys": keys, "cameras": len(cams),

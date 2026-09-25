@@ -46,7 +46,7 @@ class HiveState(ColonyState):
     memories: int = 0
 
 
-def structure_shape(kind: str, U: np.ndarray, s: float) -> np.ndarray:
+def structure_shape(kind: str, U: np.ndarray, s: float, fangs: bool = False) -> np.ndarray:
     """Local shape of a built structure (x along the path, z up; the anchor is its base / centre)."""
     u, v, w = U[:, 0], U[:, 1], U[:, 2]
     if kind == "PILLAR":                                   # a twisted column on the ground
@@ -61,9 +61,14 @@ def structure_shape(kind: str, U: np.ndarray, s: float) -> np.ndarray:
         a = 2 * np.pi * v
         rr = 0.16 * s * np.sqrt(w)
         return np.stack([rr * np.cos(a), y + rr * np.sin(a) * 0.3, z + rr * np.sin(a)], 1)
-    R, tube = 1.25 * s, 0.13 * s * np.sqrt(w)              # RING: a gate facing the path
+    R, tube = 1.25 * s, 0.13 * s * np.sqrt(w)              # RING: a gate (osseous: with fangs pointing in)
     a, b = 2 * np.pi * u, 2 * np.pi * v
-    return np.stack([tube * np.sin(b), (R + tube * np.cos(b)) * np.cos(a), (R + tube * np.cos(b)) * np.sin(a)], 1)
+    teeth = (w > 0.78) & fangs
+    ang = np.floor(u * 12.0) / 12.0 * 2 * np.pi              # twelve fangs
+    fang = R - (w - 0.78) / 0.22 * 0.45 * s
+    ring = np.stack([tube * np.sin(b), (R + tube * np.cos(b)) * np.cos(a), (R + tube * np.cos(b)) * np.sin(a)], 1)
+    tooth = np.stack([np.zeros_like(u), fang * np.cos(ang), fang * np.sin(ang)], 1)
+    return np.where(teeth[:, None], tooth, ring)
 
 
 class HiveEngine(ColonyEngine):
@@ -80,6 +85,8 @@ class HiveEngine(ColonyEngine):
         self.born_at: dict[int, float] = {}
         self.last_build = -1e9
         self.build_req: tuple[str | None, float] | None = None
+        self.last_quills = -1e9
+        self.prev_energy = 0.0
         n, Np = self.n, cfg.particles
         r = self.rs.stream("hive-swarm")
         self.p_host = np.array([r.randint(0, n - 1) for _ in range(Np)])
@@ -120,7 +127,7 @@ class HiveEngine(ColonyEngine):
         b = self.bodies[k]
         b.P, b.vel = self.x[idx].mean(0), self.v[idx].mean(0)
         s = self.cfg.size * 0.8
-        loc = structure_shape(self.kind_of[k], self.U[idx], s)
+        loc = structure_shape(self.kind_of[k], self.U[idx], s, fangs=self.BONY)
         ch, sh = math.cos(b.heading), math.sin(b.heading)
         R = np.array([[ch, -sh, 0], [sh, ch, 0], [0, 0, 1.0]])
         tgt = self.anchor[k] + loc @ R.T
@@ -207,7 +214,7 @@ class HiveEngine(ColonyEngine):
 
     # ------------------------------------------------------------------ events and behaviour
     def trigger_event(self, name: str, arg=None) -> bool:
-        if name.upper() not in EVENTS:
+        if name.upper() not in self.EVENTS:
             return False
         self._pending.append((name.upper(), arg))
         return True
@@ -219,14 +226,41 @@ class HiveEngine(ColonyEngine):
         if name == "RECALL":
             self._recall()
             return
+        if name == "QUILLS":
+            self._quills()
+            return
         if name in ("IMPULSE", "WAVE", "OBSTACLE"):            # hits seed new pattern peaks
             seeds = self.nrng.choice(self.n, 3, replace=False)
             self.rd_v[seeds], self.rd_u[seeds] = 0.5, 0.25
         super()._apply_event(name, arg)
 
+    def _quills(self) -> None:
+        """Bristle: every body turns to quills, the material ossifies, the nanomachines fire outwards."""
+        for k in self._alive():
+            b = self.bodies[k]
+            if b.intent not in ("ENVELOP", "PERCH"):
+                b.goal_shape("THORN", 3.0)
+        self.pulse = 1.0
+        self.m[:, 1] = np.maximum(self.m[:, 1], 1.4)
+        b = self.p_bound
+        shot = b & (self.nrng.random(len(b)) < 0.7)
+        self.p_v[shot] += self._nrm[self.p_host[shot]] * (7.0 + 5.0 * self.inp.energy)
+        b[shot] = False
+        self.p_free_t[shot] = 0.0
+        self.last_quills = self.t
+        self._log("QUILLS", None)
+
+    def _oss_extra(self):
+        return 0.6 * np.clip(self.rd_v * 3.0, 0, 1)             # pattern spines are bony
+
     def _think(self, dt: float) -> None:
         super()._think(dt)
         pr, inp, lead = self.params.values(), self.inp, self.bodies[0]
+        # A drop hitting hard: bristle (rising edge, not too often).
+        if self.BONY and inp.energy > 0.88 and self.prev_energy <= 0.88 and self.t - self.last_quills > 12.0 and \
+                pr["aggression"] > 0.2:
+            self._quills()
+        self.prev_energy = inp.energy
         st = self._structures()
         if self.build_req is not None:
             if self._build(self.build_req[0]) or self.t > self.build_req[1]:

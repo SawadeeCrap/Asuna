@@ -16,13 +16,14 @@ from ..creature.polyalloy import PolyalloyEngine
 POLY_EVENTS = tuple(e for e in PolyalloyEngine.EVENTS if e not in EVENTS)   # obstacle, impulse, pressure, turbulence
 COLONY_EVENTS = tuple(e for e in ColonyEngine.EVENTS if e not in EVENTS + POLY_EVENTS)   # split, merge, wave, hunt, perch
 HIVE_EVENTS = tuple(e for e in HiveEngine.EVENTS if e not in EVENTS + POLY_EVENTS + COLONY_EVENTS)  # build, recall
+OSSEOUS_EVENTS = ("STRIKE", "OSSIFY", "QUILLS")
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
-           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS] +
+           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -31,7 +32,8 @@ def creature_tab(win) -> QWidget:
     w = QWidget()
     v = QVBoxLayout(w)
     v.addWidget(QLabel("Choose the organism on the Character page: Black Nanomaterial (v1), Mimetic Polyalloy (v2, "
-                       "flying), Polyalloy Colony (v3, flock) or Polyalloy Hive (v4). Auto = the organism decides "
+                       "flying), Polyalloy Colony (v3, flock), Polyalloy Hive (v4) or their bony Osseous versions "
+                       "(v5–v7: bone-link skeletons, scutes, claws, blades, strikes). Auto = the organism decides "
                        "from its behaviour and the music; any knob can also be a MIDI CC. kick mode · obstacle rate · "
                        "altitude: v2–v4; swarm · armor · mechanism · hunt: v3–v4; architecture · pattern · nanoswarm · "
                        "memory: v4."))
@@ -53,7 +55,9 @@ def creature_tab(win) -> QWidget:
     v.addWidget(box)
     for title, events in (("Physical events (v2, v3) — the kick does one of these by itself (kick mode)", POLY_EVENTS),
                           ("Colony (v3, v4) — flock, hardening wave, prey, landing", COLONY_EVENTS),
-                          ("Hive (v4) — living architecture: build a structure, call the material back", HIVE_EVENTS)):
+                          ("Hive (v4, v7) — living architecture: build a structure, call the material back", HIVE_EVENTS),
+                          ("Osseous (v5–v7) — lunge and knock away · ossify in a wave · quill volley (v7)",
+                           OSSEOUS_EVENTS)):
         box = QGroupBox(title)
         row = QHBoxLayout(box)
         for e in events:

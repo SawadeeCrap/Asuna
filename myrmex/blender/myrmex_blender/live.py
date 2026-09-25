@@ -326,13 +326,15 @@ class LiveLink:
 
 def _clear_take_animation() -> None:
     """An imported take (keyframes, strut cache) would fight the live stream: switch it off."""
-    from .creature import LATTICE, LURE, META, OBSTACLE, PLATES, SWARM
+    from . import take_player
+    from .creature import BONES, LATTICE, LURE, META, OBSTACLE, PLATES, SCUTES, SWARM
+    take_player.detach()
     mb = bpy.data.metaballs.get(META)
     for idb in [mb, mb.materials[0].node_tree if mb is not None and mb.materials and mb.materials[0] else None,
                 bpy.data.objects.get(LURE)] + [o for o in bpy.data.objects if o.name.startswith(OBSTACLE)]:
         if idb is not None and idb.animation_data is not None and idb.animation_data.action is not None:
             idb.animation_data.action = None
-    for name in (LATTICE, PLATES, SWARM):
+    for name in (BONES, SCUTES, LATTICE, PLATES, SWARM):
         ob = bpy.data.objects.get(name)
         if ob is not None and "TakeCache" in ob.modifiers:
             ob.modifiers.remove(ob.modifiers["TakeCache"])

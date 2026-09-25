@@ -20,6 +20,7 @@ from .control import CreatureControlInput
 from .engine import EVENTS, CreatureEngine
 from .colony import ColonyConfig, ColonyEngine
 from .hive import HiveConfig, HiveEngine
+from .osseous import VARIANTS as OSSEOUS
 from .polyalloy import PolyalloyConfig, PolyalloyEngine
 
 # Notes on the control track / channel: choreography events for the creature.
@@ -30,7 +31,9 @@ CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 
                  # Polyalloy Colony: flock, hardening wave, prey, landing
                  77: "SPLIT", 79: "MERGE", 81: "WAVE", 83: "HUNT", 84: "PERCH",
                  # Polyalloy Hive: living architecture
-                 86: "BUILD", 88: "RECALL"}
+                 86: "BUILD", 88: "RECALL",
+                 # Osseous line (v5-v7): lunge, ossify, quill volley
+                 89: "STRIKE", 91: "OSSIFY", 93: "QUILLS"}
 
 
 CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
@@ -42,7 +45,8 @@ class CreatureBackend:
     def __init__(self, cfg: CreatureConfig | PolyalloyConfig | ColonyConfig | HiveConfig | None = None, record: bool = False,
                  variant: str = "nanomaterial"):
         self.variant = variant
-        kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine}.get(variant, CreatureEngine)
+        kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine,
+                **{k: v[0] for k, v in OSSEOUS.items()}}.get(variant, CreatureEngine)
         self.engine = kind(cfg)
         self.events = getattr(kind, "EVENTS", EVENTS)
         self.fx = FeatureExtractor(MusicTimeline(source="live"))

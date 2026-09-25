@@ -18,10 +18,12 @@ META = "CreatureBody"
 DEBUG = "CreatureDebug"
 MAT = "MyrmexNanomaterial"
 POLY_MAT = "MyrmexPolyalloy"
-PLATES = "ColonyPlates"
+PLATES = "ColonyPlates"          # (old armour plates - removed when found)
+SCUTES = "ColonyScutes"
+BONES = "PolyBones"
 SWARM = "HiveSwarm"
 LURE = "ColonyPrey"
-LATTICE = "PolyLattice"
+LATTICE = "PolyLattice"          # (old strut tubes - removed when found)
 MICRO = "PolyMicro"
 OBSTACLE = "PolyObstacle"
 
@@ -197,6 +199,202 @@ def micro_nodes(body: bpy.types.Object, density: float = 2500.0) -> bpy.types.No
     return ng
 
 
+# ---------------------------------------------------------------------------- bone links and scutes
+def bone_material() -> bpy.types.Material:
+    """Dark bionic bone: warm satin black, porous micro relief, a thin coat."""
+    mat = bpy.data.materials.get("MyrmexBone")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MyrmexBone")
+    try:
+        mat.use_nodes = True
+    except Exception:
+        pass
+    nt = mat.node_tree
+    b = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    for k, v in (("Base Color", (0.052, 0.048, 0.043, 1.0)), ("Metallic", 0.3), ("Roughness", 0.42),
+                 ("Coat Weight", 0.35), ("Coat Roughness", 0.22), ("Specular IOR Level", 0.5)):
+        if k in b.inputs:
+            b.inputs[k].default_value = v
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    nz = nt.nodes.new("ShaderNodeTexNoise")
+    nz.inputs["Scale"].default_value = 95.0
+    nz.inputs["Detail"].default_value = 8.0
+    nt.links.new(tc.outputs["Object"], nz.inputs["Vector"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.3
+    bump.inputs["Distance"].default_value = 0.002
+    nt.links.new(nz.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    rr = nt.nodes.new("ShaderNodeMapRange")
+    rr.inputs["To Min"].default_value = 0.3
+    rr.inputs["To Max"].default_value = 0.52
+    nt.links.new(nz.outputs["Fac"], rr.inputs["Value"])
+    nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
+    return mat
+
+
+_RING_S = np.array([0.0, 0.1, 0.32, 0.68, 0.9, 1.0])
+_SEC = 7
+_BONE_V = len(_RING_S) * _SEC + 2
+
+
+def bone_faces(K: int) -> list[tuple]:
+    R, S = len(_RING_S), _SEC
+    faces = []
+    for k in range(K):
+        b = k * _BONE_V
+        for r in range(R - 1):
+            for q in range(S):
+                faces.append((b + r * S + q, b + r * S + (q + 1) % S, b + (r + 1) * S + (q + 1) % S, b + (r + 1) * S + q))
+        for q in range(S):
+            faces.append((b + R * S, b + (q + 1) % S, b + q))
+            faces.append((b + R * S + 1, b + (R - 1) * S + q, b + (R - 1) * S + (q + 1) % S))
+    return faces
+
+
+def bone_points(pos: np.ndarray, links: np.ndarray, up: np.ndarray, t: float, arousal: float = 0.5,
+                scale: float = 1.0) -> np.ndarray:
+    """Articulated bone links along the skeleton, one per slot; they mutate continuously.
+
+    Knuckled ends and a thin waist, a sharp dorsal crest facing out, a twist, a hooked tip - all
+    breathing with time and arousal, each link with its own phase.  Slots without a link collapse.
+    """
+    K = len(links)
+    R, S = len(_RING_S), _SEC
+    ok = links[:, 0] >= 0
+    i = np.where(ok, links[:, 0], 0).astype(int)
+    j = np.where(ok, links[:, 1], 0).astype(int)
+    st = np.where(ok, np.clip(links[:, 2], 0.0, 1.0), 0.0)
+    A, B = pos[i], pos[j]
+    d = B - A
+    L = np.linalg.norm(d, axis=1)
+    X = d / np.maximum(L, 1e-6)[:, None]
+    uh = up[i] + up[j]
+    uh = uh - (uh * X).sum(1, keepdims=True) * X
+    alt = np.cross(X, np.array([0.0, 0.0, 1.0]))
+    alt[np.linalg.norm(alt, axis=1) < 1e-5] = (0.0, 1.0, 0.0)
+    bad = np.linalg.norm(uh, axis=1) < 1e-5
+    uh[bad] = alt[bad]
+    Z = uh / np.maximum(np.linalg.norm(uh, axis=1, keepdims=True), 1e-6)
+    Y = np.cross(Z, X)
+    A2, L2 = A + d * 0.1, L * 0.8                            # gaps between the links: articulated, not a tube
+    ph = (np.arange(K) * 0.6180339887) % 1.0 * 2 * np.pi
+    w = 0.6 + 1.2 * float(arousal)
+    flare = 0.35 + 0.25 * np.sin(w * t + ph)
+    waist = 0.45 + 0.15 * np.sin(1.3 * w * t + ph)
+    crest = (0.5 + 0.5 * np.sin(0.7 * w * t + 2 * ph)) * (0.6 + 0.8 * float(arousal))
+    twist = 0.6 * np.sin(0.5 * w * t + 3 * ph)
+    hook = 0.3 * np.sin(0.9 * w * t + 1.7 * ph)
+    r0 = st * (0.03 + 0.05 * np.minimum(1.0, L / 0.45)) * scale
+    ones = np.ones(K)
+    ringmul = np.stack([0.3 * ones, 1 + flare, waist, waist, 1 + 0.8 * flare, 0.25 * ones], 1)          # (K, R)
+    sR = _RING_S
+    ridge = np.sin(np.pi * sR) ** 0.8
+    th = 2 * np.pi * np.arange(S) / S + np.pi / 2                                                       # q=0 -> dorsal
+    theta = th[None, None, :] + twist[:, None, None] * (sR - 0.5)[None, :, None]                       # (K, R, S)
+    dors = np.maximum(0.0, np.sin(theta)) ** 6
+    mul = (1.0 + 2.2 * crest[:, None, None] * ridge[None, :, None] * dors) * np.where(np.sin(theta) < 0, 0.78, 1.0)
+    rad = r0[:, None, None] * ringmul[:, :, None] * mul
+    zoff = hook[:, None] * L2[:, None] * sR[None, :] ** 2 * 0.35
+    center = A2[:, None, :] + X[:, None, :] * (sR[None, :] * L2[:, None])[..., None] + Z[:, None, :] * zoff[..., None]
+    offs = (Y[:, None, None, :] * np.cos(theta)[..., None] + Z[:, None, None, :] * np.sin(theta)[..., None]) * rad[..., None]
+    ring = center[:, :, None, :] + offs
+    out = np.empty((K, _BONE_V, 3))
+    out[:, :R * S] = ring.reshape(K, R * S, 3)
+    out[:, R * S] = A2 - X * (0.06 * L2)[:, None]
+    out[:, R * S + 1] = A2 + X * (1.14 * L2)[:, None] + Z * (hook * 0.12 * L2)[:, None]
+    hide = (~ok) | (st < 0.02) | (L < 1e-4)
+    if hide.any():
+        out[hide] = pos.mean(0)
+    return out.reshape(-1, 3)
+
+
+def scute_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np.ndarray, heading: float,
+                 scale: float = 1.0) -> np.ndarray:
+    """Bony scutes: raised, swept back into a spike (against the direction of travel)."""
+    n = len(pos)
+    nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+    back = -np.array([math.cos(heading), math.sin(heading), 0.0])
+    T = back[None, :] - (nr @ back)[:, None] * nr
+    e1 = np.cross(nr, np.array([0.0, 0.0, 1.0]))
+    e1[np.linalg.norm(e1, axis=1) < 1e-5] = (1.0, 0.0, 0.0)
+    weak = np.linalg.norm(T, axis=1) < 1e-4
+    T[weak] = e1[weak]
+    T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-6)
+    Bv = np.cross(nr, T)
+    c = pos + nr * (0.92 * radius)[:, None]
+    h = (np.clip(plate, 0.0, 1.0) * 0.1 * scale)[:, None]
+    out = np.empty((n, 7, 3))
+    out[:, 0] = c + nr * 0.35 * h
+    out[:, 1] = c - T * 0.6 * h
+    out[:, 2] = c - T * 0.15 * h + Bv * 0.55 * h
+    out[:, 3] = c + T * 0.5 * h + Bv * 0.4 * h
+    out[:, 4] = c + T * 1.8 * h + nr * 0.3 * h
+    out[:, 5] = c + T * 0.5 * h - Bv * 0.4 * h
+    out[:, 6] = c - T * 0.15 * h - Bv * 0.55 * h
+    return out.reshape(-1, 3)
+
+
+def strut_points(pos: np.ndarray, links: np.ndarray, n_links: int) -> np.ndarray:
+    """Segment endpoints for every link slot; weak links retract into their midpoint (invisible)."""
+    out = np.zeros((n_links, 2, 3))
+    m = min(n_links, len(links))
+    lk = links[:m]
+    ok = lk[:, 0] >= 0
+    i = np.where(ok, lk[:, 0], 0).astype(int)
+    j = np.where(ok, lk[:, 1], 0).astype(int)
+    s = np.where(ok, np.clip(lk[:, 2], 0, 1), 0.0)[:, None]
+    mid = 0.5 * (pos[i] + pos[j])
+    half = 0.5 * (pos[j] - pos[i]) * s
+    out[:m, 0], out[:m, 1] = mid - half, mid + half
+    if m < n_links:
+        out[m:] = pos.mean(0)
+    return out.reshape(-1, 3)
+
+
+def plate_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np.ndarray,
+                 scale: float = 0.075) -> np.ndarray:
+    """Hexagonal plates on the surface, facing out; size 0 collapses a plate to a point."""
+    n = len(pos)
+    nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+    up = np.where(np.abs(nr[:, 2:3]) > 0.9, np.array([[1.0, 0.0, 0.0]]), np.array([[0.0, 0.0, 1.0]]))
+    e1 = np.cross(nr, up)
+    e1 /= np.maximum(np.linalg.norm(e1, axis=1, keepdims=True), 1e-6)
+    e2 = np.cross(nr, e1)
+    c = pos + nr * (0.92 * radius)[:, None]
+    h = (np.clip(plate, 0, 1) * scale)[:, None]
+    out = np.empty((n, 7, 3))
+    out[:, 0] = c
+    for j in range(6):
+        a = math.pi / 3 * j
+        out[:, 1 + j] = c + (math.cos(a) * e1 + math.sin(a) * e2) * h
+    return out.reshape(-1, 3)
+
+
+def _replace_mesh_object(name: str, verts: int, faces: list, material, coll) -> bpy.types.Object:
+    ob = bpy.data.objects.get(name)
+    if ob is not None and len(ob.data.vertices) == verts:
+        return ob
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([(0.0, 0.0, 0.0)] * verts, [], faces)
+    for poly in me.polygons:
+        poly.use_smooth = True
+    me.materials.append(material)
+    if ob is None:
+        ob = bpy.data.objects.new(name, me)
+        coll.objects.link(ob)
+    else:
+        ob.data = me
+    return ob
+
+
+def _drop(name: str) -> None:
+    ob = bpy.data.objects.get(name)
+    if ob is not None:
+        bpy.data.objects.remove(ob, do_unlink=True)
+
+
 def swarm_nodes() -> bpy.types.NodeTree:
     """Loose points -> tiny hexagonal machine plates, randomly turned and sized (the nanomachine swarm)."""
     ng = bpy.data.node_groups.get("MyrmexNanoSwarm")
@@ -301,26 +499,33 @@ class CreatureView:
         self.plates = self.lure = self.swarm = None
         self.obstacles: list = []
 
-    def make_polyalloy(self, n_links: int, n_obstacles: int = 4) -> None:
-        """Second organism: polyalloy skin, internal strut lattice, obstacles, micro-machine layer."""
+    def make_polyalloy(self, n_links: int, n_obstacles: int = 4, style: int = 0) -> None:
+        """Polyalloy family: skin, frame (struts, or bone links for the Osseous line), obstacles, micro-machines."""
+        self.style = style
         self.poly = True
         pm = nanomaterial(POLY_MAT, poly=True)
         if not self.mb.materials:
             self.mb.materials.append(pm)
         elif self.mb.materials[0] is None or self.mb.materials[0].name == MAT:   # keep a material you chose
             self.mb.materials[0] = pm
-        ob = bpy.data.objects.get(LATTICE)
-        if ob is None or len(ob.data.vertices) != 2 * n_links:
-            me = bpy.data.meshes.new(LATTICE)
-            me.from_pydata([(0.0, 0.0, 0.0)] * (2 * n_links), [(2 * k, 2 * k + 1) for k in range(n_links)], [])
-            if ob is None:
-                ob = bpy.data.objects.new(LATTICE, me)
-                self.coll.objects.link(ob)
-            else:
-                ob.data = me
-        if "Struts" not in ob.modifiers:
-            ob.modifiers.new("Struts", "NODES").node_group = tube_nodes()
-        self.lattice = ob
+        if style == 1:                                     # Osseous: articulated bone links
+            _drop(LATTICE)
+            self.lattice = _replace_mesh_object(BONES, n_links * _BONE_V, bone_faces(n_links), bone_material(),
+                                                self.coll)
+        else:                                              # classic: strut tubes (Geometry Nodes)
+            _drop(BONES)
+            ob = bpy.data.objects.get(LATTICE)
+            if ob is None or len(ob.data.vertices) != 2 * n_links:
+                me = bpy.data.meshes.new(LATTICE)
+                me.from_pydata([(0.0, 0.0, 0.0)] * (2 * n_links), [(2 * k, 2 * k + 1) for k in range(n_links)], [])
+                if ob is None:
+                    ob = bpy.data.objects.new(LATTICE, me)
+                    self.coll.objects.link(ob)
+                else:
+                    ob.data = me
+            if "Struts" not in ob.modifiers:
+                ob.modifiers.new("Struts", "NODES").node_group = tube_nodes()
+            self.lattice = ob
         mi = bpy.data.objects.get(MICRO)
         if mi is None:
             mi = bpy.data.objects.new(MICRO, bpy.data.meshes.new(MICRO))
@@ -379,20 +584,17 @@ class CreatureView:
         ob.data.update()
         self.debug_obj = ob
 
-    def make_colony(self, n_nodes: int) -> None:
-        """Third organism: armour plates (hexagons that rise where the material hardens) and the prey."""
-        ob = bpy.data.objects.get(PLATES)
-        if ob is None or len(ob.data.vertices) != 7 * n_nodes:
-            me = bpy.data.meshes.new(PLATES)
-            faces = [(7 * i, 7 * i + 1 + j, 7 * i + 1 + (j + 1) % 6) for i in range(n_nodes) for j in range(6)]
-            me.from_pydata([(0.0, 0.0, 0.0)] * (7 * n_nodes), [], faces)
-            me.materials.append(_simple_material("MyrmexArmor", (0.028, 0.028, 0.032), 1.0, 0.28, 0.5))
-            if ob is None:
-                ob = bpy.data.objects.new(PLATES, me)
-                self.coll.objects.link(ob)
-            else:
-                ob.data = me
-        self.plates = ob
+    def make_colony(self, n_nodes: int, style: int = 0) -> None:
+        """Colony family: armour (hexagonal plates, or bony scutes for the Osseous line) and the prey."""
+        faces = [(7 * i, 7 * i + 1 + j, 7 * i + 1 + (j + 1) % 6) for i in range(n_nodes) for j in range(6)]
+        if style == 1:
+            _drop(PLATES)
+            self.plates = _replace_mesh_object(SCUTES, 7 * n_nodes, faces, bone_material(), self.coll)
+        else:
+            _drop(SCUTES)
+            self.plates = _replace_mesh_object(PLATES, 7 * n_nodes, faces, _simple_material(
+                "MyrmexArmor", (0.028, 0.028, 0.032), 1.0, 0.28, 0.5), self.coll)
+        self.armour_style = style
         lure = bpy.data.objects.get(LURE)
         if lure is None:
             import bmesh
@@ -413,25 +615,6 @@ class CreatureView:
             self.coll.objects.link(lure)
         lure.scale = (0.0, 0.0, 0.0)
         self.lure = lure
-
-    @staticmethod
-    def plate_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np.ndarray,
-                     scale: float = 0.075) -> np.ndarray:
-        """Hexagonal plates on the surface, facing out; size 0 collapses a plate to a point."""
-        n = len(pos)
-        nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
-        up = np.where(np.abs(nr[:, 2:3]) > 0.9, np.array([[1.0, 0.0, 0.0]]), np.array([[0.0, 0.0, 1.0]]))
-        e1 = np.cross(nr, up)
-        e1 /= np.maximum(np.linalg.norm(e1, axis=1, keepdims=True), 1e-6)
-        e2 = np.cross(nr, e1)
-        c = pos + nr * (0.92 * radius)[:, None]
-        h = (np.clip(plate, 0, 1) * scale)[:, None]
-        out = np.empty((n, 7, 3))
-        out[:, 0] = c
-        for j in range(6):
-            a = math.pi / 3 * j
-            out[:, 1 + j] = c + (math.cos(a) * e1 + math.sin(a) * e2) * h
-        return out.reshape(-1, 3)
 
     def make_hive(self, n_particles: int) -> None:
         """Fourth organism: the nanomachine swarm (points instanced as tiny plates)."""
@@ -458,9 +641,12 @@ class CreatureView:
 
     def _apply_colony(self, fr) -> None:
         n = len(fr.pos)
-        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != 7 * n:
-            self.make_colony(n)
-        pts = self.plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
+        style = int(getattr(fr, "style", 0))
+        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != 7 * n or \
+                getattr(self, "armour_style", -1) != style:
+            self.make_colony(n, style)
+        pts = scute_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading)) if style == 1 else \
+            plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
         me = self.plates.data
         me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
         me.update()
@@ -468,29 +654,17 @@ class CreatureView:
         self.lure.location = (lx, ly, lz)
         self.lure.scale = (lr, lr, lr)
 
-    @staticmethod
-    def strut_points(pos: np.ndarray, links: np.ndarray, n_links: int) -> np.ndarray:
-        """Segment endpoints for every link slot; weak links retract into their midpoint (invisible)."""
-        out = np.zeros((n_links, 2, 3))
-        m = min(n_links, len(links))
-        lk = links[:m]
-        ok = lk[:, 0] >= 0
-        i = np.where(ok, lk[:, 0], 0).astype(int)
-        j = np.where(ok, lk[:, 1], 0).astype(int)
-        s = np.where(ok, np.clip(lk[:, 2], 0, 1), 0.0)[:, None]
-        mid = 0.5 * (pos[i] + pos[j])
-        half = 0.5 * (pos[j] - pos[i]) * s
-        out[:m, 0], out[:m, 1] = mid - half, mid + half
-        if m < n_links:
-            out[m:] = pos.mean(0)
-        return out.reshape(-1, 3)
-
     def _apply_poly(self, fr) -> None:
-        n_links = len(self.lattice.data.vertices) // 2 if self.lattice else 0
-        if self.lattice is None or (fr.links is not None and len(fr.links) > n_links):
-            self.make_polyalloy(max(480, len(fr.links)), max(4, len(fr.obstacles)))
-            n_links = len(self.lattice.data.vertices) // 2
-        pts = self.strut_points(fr.pos, fr.links, n_links)
+        style = int(getattr(fr, "style", 0))
+        per = _BONE_V if style == 1 else 2
+        if self.lattice is None or getattr(self, "style", -1) != style or \
+                len(self.lattice.data.vertices) != per * len(fr.links):
+            self.make_polyalloy(len(fr.links), max(4, len(fr.obstacles)), style)
+        if style == 1:
+            up = fr.nrm if getattr(fr, "nrm", None) is not None else fr.pos - fr.pos.mean(0)
+            pts = bone_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal))
+        else:
+            pts = strut_points(fr.pos, fr.links, len(fr.links))
         me = self.lattice.data
         me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
         me.update()
@@ -544,11 +718,14 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
                 bpy.data.objects.remove(ob, do_unlink=True)
     scene["myrmex_variant"] = variant
     view = CreatureView(scene)
-    if variant in ("polyalloy", "colony", "hive"):
-        view.make_polyalloy(480 if variant == "polyalloy" else 640, 4)
-    if variant in ("colony", "hive"):
-        view.make_colony(128)
-    if variant == "hive":
+    style = 1 if variant.startswith("osseous") else 0
+    base = variant.replace("osseous_", "").replace("osseous", "polyalloy")
+    if base in ("polyalloy", "colony", "hive"):
+        view.make_polyalloy((128 if base == "polyalloy" else 192) if style else (480 if base == "polyalloy" else 640),
+                            4, style)
+    if base in ("colony", "hive"):
+        view.make_colony(128, style)
+    if base == "hive":
         view.make_hive(1536)
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)

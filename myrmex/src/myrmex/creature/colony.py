@@ -29,12 +29,15 @@ from ..util.noise import Noise1D
 from ..util.rng import RngStreams, stable_hash64
 from .config import DEFAULT_PARAMS
 from .control import CreatureControlInput, ParameterSet
-from .polyalloy import MATERIAL, Obstacle, PolyalloyState, _knn_edges, attractor_shape
+from .polyalloy import AGGRESSIVE, MATERIAL, Obstacle, PolyalloyState, _knn_edges, attractor_shape
+from .skeleton import Skeleton
 
 SHAPES = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN", "LEGS",
-          "ENVELOP")
+          "ENVELOP", "SPINE", "CLAW", "MANDIBLE", "SCYTHE", "THORN", "CARAPACE")
+FREE_SHAPES = tuple(x for x in SHAPES if x not in ("LEGS", "ENVELOP"))
+CLASSIC_FREE = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN")
 INTENTS = ("CRUISE", "HOVER", "EXPLORE", "DISPLAY", "EVADE", "REFORM", "HUNT", "ENVELOP", "PERCH", "FORMATION",
-           "MERGE", "PATROL", "STRUCTURE")
+           "MERGE", "PATROL", "STRUCTURE", "STRIKE")
 PLAN = {   # preferred shapes, material state, cruise factor
     "CRUISE": (("SPINDLE", "WINGS", "TENDRILS", "LATTICE"), "ELASTIC", 1.0),
     "HOVER": (("CORE", "RING", "CROWN", "CLOUD"), "COHESIVE", 0.12),
@@ -46,6 +49,22 @@ PLAN = {   # preferred shapes, material state, cruise factor
     "ENVELOP": (("ENVELOP",), "COHESIVE", 0.0),
     "PERCH": (("LEGS",), "ELASTIC", 0.25),
     "FORMATION": (("SPINDLE", "WINGS", "BLADES", "TENDRILS"), "ELASTIC", 1.0),
+    "MERGE": (("CORE", "CLOUD"), "FLUID", 1.3),
+    "PATROL": (("SPINDLE", "WINGS", "TENDRILS"), "ELASTIC", 1.1),       # v4: around / through its structures
+    "STRUCTURE": (("CORE",), "HIGH_STIFFNESS", 0.0),
+}
+PLAN_BONE = {   # Osseous Colony / Hive (v6, v7): bony, aggressive vocabulary + the strike
+    "CRUISE": (("SPINDLE", "SPINE", "WINGS", "TENDRILS", "SCYTHE"), "ELASTIC", 1.0),
+    "HOVER": (("CORE", "RING", "CROWN", "CARAPACE", "THORN"), "COHESIVE", 0.12),
+    "EXPLORE": (("CLOUD", "TENDRILS", "SPINDLE", "RING", "SPINE"), "FLUID", 0.6),
+    "DISPLAY": (("LATTICE", "THORN", "SCYTHE", "MANDIBLE", "CROWN", "CARAPACE"), "STRUCTURED", 0.35),
+    "EVADE": (("SPINDLE", "SHIELD", "CARAPACE", "CLOUD"), "FLUID", 1.0),
+    "REFORM": (("CORE", "SPINDLE", "SPINE"), "COHESIVE", 0.6),
+    "HUNT": (("SPINE", "SCYTHE", "WINGS", "MANDIBLE"), "ELASTIC", 1.5),
+    "STRIKE": (("MANDIBLE", "CLAW", "SCYTHE"), "HIGH_STIFFNESS", 1.0),
+    "ENVELOP": (("ENVELOP",), "COHESIVE", 0.0),
+    "PERCH": (("LEGS",), "ELASTIC", 0.25),
+    "FORMATION": (("SPINDLE", "SPINE", "WINGS", "SCYTHE", "TENDRILS"), "ELASTIC", 1.0),
     "MERGE": (("CORE", "CLOUD"), "FLUID", 1.3),
     "PATROL": (("SPINDLE", "WINGS", "TENDRILS"), "ELASTIC", 1.1),       # v4: around / through its structures
     "STRUCTURE": (("CORE",), "HIGH_STIFFNESS", 0.0),
@@ -139,7 +158,16 @@ def shape3(name: str, U: np.ndarray, s: float, elong: float, ph: dict, ground: f
         t2 = np.clip((f - 0.5) / 0.5, 0, 1)[:, None]
         leg = np.where((f < 0.5)[:, None], hip + (knee - hip) * t1, knee + (foot - knee) * t2)
         return np.where(body[:, None], P, leg)
-    return attractor_shape(name if name in ("CORE", "SHIELD", "LATTICE", "CLOUD") else "CORE", U, s, elong)
+    if name == "MANDIBLE":                                  # claws that snap shut on every beat
+        return attractor_shape("CLAW", U, s, elong, snap=ph["snap"])
+    if name == "CLAW":
+        return attractor_shape("CLAW", U, s, elong, snap=0.35 + 0.3 * math.sin(0.7 * ph["t"]))
+    if name == "SCYTHE":                                    # blades swing with the bar
+        return attractor_shape("SCYTHE", U, s, elong, swing=math.sin(math.pi * ph["beat"] / 2.0))
+    if name in ("THORN", "SPINE"):                          # quills jump on kicks
+        return attractor_shape(name, U, s, elong, pulse=ph["pulse"])
+    return attractor_shape(name if name in ("CORE", "SHIELD", "LATTICE", "CLOUD", "CARAPACE") else "CORE", U, s,
+                           elong)
 
 
 _SITUATIONAL = [SHAPES.index("ENVELOP"), SHAPES.index("LEGS")]
@@ -179,6 +207,9 @@ class Body:
 
 class ColonyEngine:
     EVENTS = EVENTS
+    BONY = False                 # the Osseous subclasses (v6, v7) switch on bone links, scutes, strikes
+    PLAN = PLAN
+    VOCAB = CLASSIC_FREE
 
     def __init__(self, cfg: ColonyConfig | None = None):
         self.cfg = cfg = cfg or ColonyConfig()
@@ -219,6 +250,9 @@ class ColonyEngine:
         self.response_hist: list[str] = []
         self.events: list[tuple[float, str, object]] = []
         self._pending: list[tuple[str, object]] = []
+        self.skel = Skeleton(cfg.max_links)
+        self._state_t = 0.0
+        self.hn = np.array([(k * 0.7548776662) % 1.0 for k in range(n)])
 
     # ------------------------------------------------------------------ API
     def set_input(self, inp: CreatureControlInput) -> None:
@@ -228,7 +262,7 @@ class ColonyEngine:
         return self.params.set(name, value)
 
     def trigger_event(self, name: str, arg=None) -> bool:
-        if name.upper() not in EVENTS:
+        if name.upper() not in self.EVENTS:
             return False
         self._pending.append((name.upper(), arg))
         return True
@@ -251,11 +285,22 @@ class ColonyEngine:
     def _post_targets(self, T: np.ndarray, dt: float) -> np.ndarray:
         return T
 
+    def _oss_extra(self) -> np.ndarray | float:
+        return 0.0
+
+    def _pick(self, prefs) -> str:
+        """A shape from the intent's vocabulary; aggression favours the bony, aggressive ones."""
+        if not self.BONY:
+            return prefs[self.rng.randint(0, len(prefs) - 1)]
+        a = self.params["aggression"]
+        w = [(0.5 + 1.8 * a) if p in AGGRESSIVE + ("MANDIBLE",) else (1.3 - 0.8 * a) for p in prefs]
+        return prefs[self.rng.weighted_index(w)]
+
     def _set_intent(self, b: Body, intent: str, shape: str | None = None) -> None:
-        prefs, mstate, _ = PLAN[intent]
+        prefs, mstate, _ = self.PLAN[intent]
         b.intent, b.intent_t = intent, 0.0
         b.dwell = self.rng.uniform(4.0, 10.0) * (0.6 + 0.8 * self.params["coherence"])
-        b.goal_shape(shape or prefs[self.rng.randint(0, len(prefs) - 1)])
+        b.goal_shape(shape or self._pick(prefs))
         b.mat_goal = np.array(MATERIAL[mstate])
 
     def _renormalize(self, k: int) -> None:
@@ -451,13 +496,13 @@ class ColonyEngine:
         elif name == "MORPHOLOGY_SHIFT":                  # within the vocabulary of what each body is doing
             for k in alive:
                 b = self.bodies[k]
-                prefs = PLAN[b.intent][0]
-                if arg in SHAPES and arg not in ("ENVELOP", "LEGS") and b.intent not in ("PERCH", "ENVELOP"):
+                prefs = self.PLAN[b.intent][0]
+                if arg in self.VOCAB and b.intent not in ("PERCH", "ENVELOP"):
                     b.goal_shape(arg)
                 elif b.intent in ("PERCH", "ENVELOP") or r.chance(0.7):
-                    b.goal_shape(prefs[r.randint(0, len(prefs) - 1)])
+                    b.goal_shape(self._pick(prefs))
                 else:
-                    b.goal_shape(SHAPES[r.randint(0, len(SHAPES) - 3)])
+                    b.goal_shape(self.VOCAB[r.randint(0, len(self.VOCAB) - 1)])
         elif name == "COLLAPSE":
             for k in alive:
                 self.bodies[k].mat_goal = np.array(MATERIAL["DISPERSED"])
@@ -470,9 +515,27 @@ class ColonyEngine:
             lead.intent, lead.intent_t = "REFORM", 0.0
         elif name == "APPENDAGE_BURST":
             for k in alive:
-                self.bodies[k].goal_shape("BLADES")
+                self.bodies[k].goal_shape(self._pick(("SCYTHE", "BLADES", "THORN")) if self.BONY else "BLADES")
                 self.bodies[k].mat_goal = np.array(MATERIAL["STRUCTURED"])
+        elif name == "STRIKE":
+            for k in alive:
+                self._strike(k, None)
+            return
+        elif name == "OSSIFY":                                 # a hardening wave through every body
+            self.m[:, 1] = np.maximum(self.m[:, 1], 1.4)
+            self._wave(1.0)
         self._log(name, arg if isinstance(arg, str) else None)
+
+    def _strike(self, k: int, target) -> None:
+        """Lunge: the body hardens into claws / blades and goes for the target (or straight ahead)."""
+        b = self.bodies[k]
+        self._set_intent(b, "STRIKE")
+        b.strike = target
+        idx = self.own == k
+        self.m[idx, 1] = np.maximum(self.m[idx, 1], 1.3)
+        if target is None:
+            self.v[idx] += b.R()[:, 0] * 5.0
+        self._log("STRIKE", None)
 
     # ------------------------------------------------------------------ behaviour
     def _think(self, dt: float) -> None:
@@ -512,11 +575,12 @@ class ColonyEngine:
                 rel, rv = ob.pos - b.P, ob.vel - b.vel
                 tca = -float(rel @ rv) / max(float(rv @ rv), 1e-6)
                 dca = float(np.linalg.norm(rel + rv * max(tca, 0.0)))
-                if 0.0 < tca < 1.3 and dca < ob.radius + 0.8 * self.cfg.size and b.intent not in ("ENVELOP",):
+                if 0.0 < tca < 1.3 and dca < ob.radius + 0.8 * self.cfg.size and b.intent not in ("ENVELOP", "STRIKE"):
                     ob.handled = True
-                    opts = ["SPLIT", "SHIELD", "DISPERSE", "DODGE", "PARTITION"]
+                    opts = ["SPLIT", "SHIELD", "DISPERSE", "DODGE", "PARTITION"] + (["STRIKE"] if self.BONY else [])
                     w = [1.4 * pr["fluidity"] + 0.3, 0.6 + pr["rigidity"] + 0.5 * pr["armor"], 0.4 + 0.8 * pr["instability"],
-                         0.6 + pr["speed"], (1.2 * pr["swarm"] + 0.2) if (len(alive) == 1 and k == 0) else 0.0]
+                         0.6 + pr["speed"], (1.2 * pr["swarm"] + 0.2) if (len(alive) == 1 and k == 0) else 0.0] + \
+                        ([0.3 + 1.6 * pr["aggression"]] if self.BONY else [])
                     for i, o in enumerate(opts):
                         if o in self.response_hist[-2:]:
                             w[i] *= 0.3
@@ -524,7 +588,9 @@ class ColonyEngine:
                     self.response_hist.append(b.response)
                     self._log("RESPONSE", b.response)
                     b.intent, b.intent_t = "EVADE", 0.0
-                    if b.response == "SHIELD":
+                    if b.response == "STRIKE":                   # meet it and knock it away
+                        self._strike(k, ob)
+                    elif b.response == "SHIELD":
                         b.goal_shape("SHIELD", 3.0)
                         b.mat_goal = np.array(MATERIAL["HIGH_STIFFNESS"])
                         self._wave(0.8, b.P + rel / max(np.linalg.norm(rel), 1e-6))
@@ -546,6 +612,20 @@ class ColonyEngine:
         # Intent machine.
         for k in list(self._alive()):
             b = self.bodies[k]
+            if b.intent == "STRIKE":
+                tgt = getattr(b, "strike", None)
+                L = self.lure
+                if isinstance(tgt, dict) and L is tgt and L["state"] == "FREE" and \
+                        np.linalg.norm(L["pos"] - b.P) < 1.8 * self.cfg.size ** 0.5:
+                    for kk in self._alive()[1:]:              # caught in the strike: the flock closes round it
+                        self._absorb(kk)
+                    self._set_intent(lead, "ENVELOP", "ENVELOP")
+                    self._log("ENVELOP", None)
+                    break
+                if b.intent_t > 1.3:
+                    b.strike = None
+                    self._set_intent(b, "REFORM" if k == 0 else "FORMATION")
+                continue
             if b.intent == "EVADE" and b.intent_t > 1.6:
                 if b.response == "PARTITION" and len(self._alive()) > 1:
                     self._start_merge()
@@ -563,6 +643,10 @@ class ColonyEngine:
                     self._set_intent(b, "CRUISE" if k == 0 else "FORMATION")
                     if k == 0 and L is not None and L["state"] == "FREE":
                         L["state"], L["until"] = "GONE", self.t + 1.0
+                elif np.linalg.norm(L["pos"] - b.P) < 4.0 and L["state"] == "FREE" and \
+                        self.BONY and self.params["aggression"] > 0.15 and not getattr(b, "struck", False):
+                    b.struck = True                            # the last metres: a lunge with snapping mandibles
+                    self._strike(k, L)
                 elif np.linalg.norm(L["pos"] - b.P) < 1.8 * self.cfg.size ** 0.5 and L["state"] == "FREE":
                     for kk in self._alive()[1:]:              # close the trap: the flock fuses around it
                         self._absorb(kk)
@@ -604,7 +688,7 @@ class ColonyEngine:
                         self._set_intent(self.bodies[kk], "HUNT")
             elif k > 0 and b.intent == "FORMATION" and b.intent_t > b.dwell:
                 b.intent_t = 0.0
-                b.goal_shape(PLAN["FORMATION"][0][r.randint(0, 3)])
+                b.goal_shape(self.PLAN["FORMATION"][0][r.randint(0, 3)])
         if self.instab > 1.0:
             self.instab = 0.0
             self._pending.append(("MORPHOLOGY_SHIFT", None))
@@ -656,8 +740,17 @@ class ColonyEngine:
             v_des = d / max(dn, 1e-6) * min(1.6 * base + 2.0, 1.5 * dn + 1.0)
         elif b.intent == "ENVELOP" and L is not None:
             v_des = L["vel"] + 2.5 * (L["pos"] - b.P)
+        elif b.intent == "STRIKE":
+            tgt = getattr(b, "strike", None)
+            if isinstance(tgt, dict):
+                aim = tgt["pos"] + tgt["vel"] * 0.2 - b.P
+            elif tgt is not None:
+                aim = tgt.pos + tgt.vel * 0.25 - b.P
+            else:
+                aim = b.R()[:, 0]
+            v_des = aim / max(float(np.linalg.norm(aim)), 1e-6) * cfg.size * 7.0
         else:
-            cruise = base * PLAN[b.intent][2]
+            cruise = base * self.PLAN[b.intent][2]
             want = b.heading + 1.5 * b.wander * dt
             home = -b.P[:2]
             if float(np.linalg.norm(home)) > 0.7 * cfg.stage_radius:
@@ -748,7 +841,7 @@ class ColonyEngine:
         self.pulse = max(self.pulse * math.exp(-dt / 0.18), inp.transient)
         self.gait = math.pi * inp.beat
         ph = {"t": self.t, "beat": inp.beat, "spin": self.spin, "flap": self.flap, "pulse": self.pulse,
-              "gait": self.gait, "mech": mech}
+              "gait": self.gait, "mech": mech, "snap": math.exp(-(inp.beat % 1.0) / 0.12) * mech}
         n = self.n
         x, v = self.x, self.v
         T = np.empty_like(x)
@@ -857,6 +950,14 @@ class ColonyEngine:
                 if slot >= 0:
                     m[inside, 1] = np.maximum(m[inside, 1], 1.5)
                     self.glow = max(self.glow, 0.8)
+                    hitter = self.bodies[int(np.bincount(self.own[inside]).argmax())]
+                    if hitter.intent == "STRIKE" and not getattr(ob, "hit", False):   # knocked away
+                        away = ob.pos - hitter.P
+                        away /= max(float(np.linalg.norm(away)), 1e-6)
+                        ob.vel = away * (10.0 + 8.0 * self.params["aggression"]) + ob.vel * 0.15
+                        ob.hit = True
+                        self.glow = 1.0
+                        self._log("HIT", None)
             if slot >= 0:
                 b = next((self.bodies[k] for k in self._alive() if getattr(self.bodies[k], "threat", None) is ob), None)
                 if b is not None and b.intent == "EVADE" and b.response in ("SPLIT", "DISPERSE"):
@@ -909,21 +1010,32 @@ class ColonyEngine:
         rn = np.linalg.norm(rel, axis=1)
         disp = np.clip(rn / (1.2 * sizes[self.own]) - 0.5, 0, 1) * 0.5 + 0.3 * self.local + 0.4 * self.m[:, 5]
         disp = np.clip(disp, 0, 1)
-        stiff = self.m[:, 1]
         r0 = 0.62 * cfg.size * (1.0 / n) ** (1 / 3) * 1.9
-        radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.3 * np.clip((stiff - 0.5) / 1.1, 0, 1))
-        links = np.full((cfg.max_links, 3), -1.0)
-        links[:, 2] = 0.0
-        mm = min(cfg.max_links, len(self.edges))
-        if mm:
-            e = self.edges[:mm]
-            links[:mm, 0:2] = e
-            links[:mm, 2] = np.clip((np.minimum(stiff[e[:, 0]], stiff[e[:, 1]]) - 0.45) / 0.9, 0, 1) * self.alive[:mm]
+        if self.BONY:
+            stiff = self.m[:, 1] * (0.4 + 1.2 * self.params["rigidity"])
+            # Ossification: hard material turns to bone (links + scutes), aggression calcifies it further.
+            oss = np.clip((stiff - 0.3) / 0.8 + 0.25 + 0.35 * self.params["aggression"] + self._oss_extra(), 0, 1) * \
+                (1.0 - 0.7 * disp)
+            radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.38 * oss)
+            dt_s, self._state_t = max(0.0, self.t - self._state_t), self.t
+            links = self.skel.update(self.x, self.own, oss, dt_s, 0.5 * cfg.size)
+            plate = np.clip((oss - 0.6) / 0.35, 0, 1) * (0.3 + 0.7 * self.params["armor"]) * (self.hn > 0.3)
+        else:
+            stiff = self.m[:, 1]
+            radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.3 * np.clip((stiff - 0.5) / 1.1, 0, 1))
+            links = np.full((cfg.max_links, 3), -1.0)
+            links[:, 2] = 0.0
+            mm = min(cfg.max_links, len(self.edges))
+            if mm:
+                e = self.edges[:mm]
+                links[:mm, 0:2] = e
+                links[:mm, 2] = np.clip((np.minimum(stiff[e[:, 0]], stiff[e[:, 1]]) - 0.45) / 0.9, 0, 1) * \
+                    self.alive[:mm]
+            plate = np.clip((stiff - 0.85) / 0.65, 0, 1) * (0.25 + 0.75 * self.params["armor"])
         obs = np.zeros((cfg.max_obstacles, 4))
         for k, ob in enumerate(self.obstacles):
             if ob is not None:
                 obs[k] = (*ob.pos, ob.radius)
-        plate = np.clip((stiff - 0.85) / 0.65, 0, 1) * (0.25 + 0.75 * self.params["armor"])
         nrm = rel / np.maximum(rn, 1e-6)[:, None]
         lead = self.bodies[0]
         mstate = min(MATERIAL, key=lambda k: float(np.abs(np.array(MATERIAL[k]) - lead.mat).sum()))
@@ -937,7 +1049,7 @@ class ColonyEngine:
                            lead.heading, self.params.values(),
                            {"total": float(self.mass.sum()), "bodies": len(self._alive())}, self.surface, self.glow,
                            self.arousal, self.instab, list(self.events[-6:]), links, obs, disp, mstate,
-                           self.fragments(), plate, nrm, self.own.copy(), len(self._alive()), lure)
+                           self.fragments(), int(self.BONY), plate, nrm, self.own.copy(), len(self._alive()), lure)
 
 
-__all__ = ["ColonyEngine", "ColonyConfig", "ColonyState", "SHAPES", "INTENTS", "EVENTS"]
+__all__ = ["ColonyEngine", "ColonyConfig", "ColonyState", "SHAPES", "INTENTS", "EVENTS", "PLAN", "PLAN_BONE"]

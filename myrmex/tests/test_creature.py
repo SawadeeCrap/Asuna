@@ -206,7 +206,8 @@ def test_polyalloy_protocol_roundtrip():
     cam = CameraState(np.array([1.0, 2, 3]), np.zeros(3), 35.0, 4.0, 2.8, 7, "orbit")
     fr = decode_creature(encode_creature(s, 3, 1.5, 124.0, 1, cam))
     assert fr.material == s.material and fr.camera.kind == "orbit"
-    assert fr.links.shape[0] == int((s.links[:, 0] >= 0).sum()) and fr.obstacles.shape == s.obstacles.shape
+    assert fr.links.shape == s.links.shape and np.array_equal(fr.links[:, :2], s.links[:, :2])
+    assert fr.obstacles.shape == s.obstacles.shape and fr.style == 0
     assert np.allclose(fr.pos, s.pos, atol=1e-5)
 
 
@@ -416,3 +417,70 @@ def test_hive_protocol_and_take(tmp_path):
     take = CreatureTake(ses.save_take())
     p = take.particles(30)
     assert take.variant == "hive" and p.shape[1] == 1536 and np.isfinite(p).all()
+
+
+# ---------------------------------------------------------------------------- Osseous line (v5-v7)
+def _run(engine, seconds, dt=1 / 60, events=(), energy=0.8):
+    out = []
+    for i in range(int(seconds / dt)):
+        t = i * dt
+        beat = t * 2
+        kick = 1.0 if (beat % 1.0) < dt * 2.5 else 0.0
+        for at, name in events:
+            if i == int(at / dt):
+                engine.trigger_event(name)
+        engine.set_input(CreatureControlInput(bass=0.6, high=0.4, energy=energy, transient=kick, spectral_flux=0.3,
+                                              amplitude=0.7, tempo=120, beat=beat, playing=True))
+        out.append(engine.update(dt))
+    return out
+
+
+def test_skeleton_is_a_tree_without_long_bones():
+    from myrmex.creature.skeleton import mst_edges
+    rng = np.random.default_rng(1)
+    x = rng.normal(size=(60, 3))
+    own = np.repeat([0, 1], 30)
+    edges = mst_edges(x, own, max_len=10.0)
+    assert len(edges) == 58 and all(own[a] == own[b] for a, b in edges)
+    assert all(np.linalg.norm(x[a] - x[b]) <= 0.8 for a, b in mst_edges(x, own, max_len=0.8))
+
+
+def test_osseous_polyalloy_grows_bones_and_strikes():
+    from myrmex.creature.osseous import OsseousPolyalloyEngine
+    e = OsseousPolyalloyEngine()
+    e.set_parameter("aggression", 0.9)
+    states = _run(e, 12, events=((6.0, "STRIKE"),))
+    s = states[-1]
+    assert s.style == 1 and len(s.links) == 128 and np.isfinite(s.pos).all()
+    assert max(int((st.links[:, 2] > 0.3).sum()) for st in states) > 20       # bone links
+    assert "STRIKE" in {n for _, n, _ in e.events} or any(st.behavior == "STRIKE" for st in states)
+
+
+def test_classic_organisms_stay_classic():
+    from myrmex.creature.colony import ColonyEngine
+    from myrmex.creature.polyalloy import CLASSIC, PolyalloyEngine
+    e = PolyalloyEngine()
+    assert not e.trigger_event("STRIKE") and e.trigger_event("IMPULSE")
+    states = _run(e, 6)
+    assert states[-1].style == 0 and len(states[-1].links) == 480
+    assert all(st.morphology in CLASSIC for st in states)
+    c = ColonyEngine()
+    assert not c.trigger_event("OSSIFY")
+    assert _run(c, 2)[-1].style == 0
+
+
+def test_osseous_colony_and_hive():
+    from myrmex.creature.osseous import OsseousColonyEngine, OsseousHiveEngine
+    from myrmex.creature.protocol import decode_creature, encode_creature
+    c = OsseousColonyEngine()
+    c.set_parameter("aggression", 0.8)
+    states = _run(c, 10, events=((2.0, "OSSIFY"),))
+    s = states[-1]
+    assert s.style == 1 and len(s.links) == 192
+    assert max(float(st.plate.max()) for st in states) > 0.3                  # scutes
+    fr = decode_creature(encode_creature(s, 1, 0.0, 120.0, 1))
+    assert fr.style == 1 and np.array_equal(fr.links[:, :2], s.links[:, :2])
+    h = OsseousHiveEngine()
+    h.set_parameter("aggression", 0.8)
+    states = _run(h, 6, events=((2.0, "QUILLS"),))
+    assert "QUILLS" in {n for _, n, _ in h.events} and np.isfinite(states[-1].particles).all()

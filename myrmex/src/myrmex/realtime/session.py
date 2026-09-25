@@ -103,12 +103,16 @@ class PoseSink:
         self.sock.close()
 
 
+CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive")
+FLYING = CREATURES[1:]
+
+
 class LiveSession:
     def __init__(self, cfg: LiveConfig, plan: BipedPlan | None = None, *, start_inputs: bool = True,
                  sink: PoseSink | None = None, now: float | None = None):
         self.cfg = cfg
         self.creature = None
-        if cfg.backend in ("creature", "polyalloy", "colony", "hive"):
+        if cfg.backend in CREATURES:
             from ..creature.backend import CreatureBackend
             from ..creature.config import CreatureConfig
             if cfg.backend == "polyalloy":
@@ -121,6 +125,10 @@ class LiveSession:
             elif cfg.backend == "hive":
                 from ..creature.hive import HiveConfig
                 self.creature = CreatureBackend(HiveConfig(seed=cfg.seed), record=bool(cfg.record), variant="hive")
+            elif cfg.backend.startswith("osseous"):             # the bony line (v5-v7)
+                from ..creature.osseous import VARIANTS
+                self.creature = CreatureBackend(VARIANTS[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                                                variant=cfg.backend)
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
                 self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
@@ -146,7 +154,7 @@ class LiveSession:
         self.t0 = now
         self.clock = ClockHub(cfg.clock, cfg.bpm, link=cfg.link, now=now)
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
-        if cfg.camera and cfg.backend in ("polyalloy", "colony", "hive"):
+        if cfg.camera and cfg.backend in FLYING:
             from ..camera.aerial import AerialCinematographer
             self.camera = AerialCinematographer(self.creature.engine.cfg.size, cfg.seed)
         else:
@@ -257,12 +265,12 @@ class LiveSession:
         from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
         cfg = self.cfg
         s = self.creature.tick(t, dt, notes, st)
-        aerial = self.creature.variant in ("polyalloy", "colony", "hive")
+        aerial = self.creature.variant in FLYING
         if aerial and self.camera is not None:
             for _, name, _a in self.creature.fresh:
                 if name in ("IMPULSE", "PRESSURE", "TURBULENCE"):
                     self.camera.impact(0.5, t)
-                elif name in ("RESPONSE", "COLLAPSE"):
+                elif name in ("RESPONSE", "COLLAPSE", "HIT", "QUILLS"):
                     self.camera.impact(1.0, t, reframe=True)
                 elif name in self.AERIAL_SUGGEST:
                     self.camera.suggest(self.AERIAL_SUGGEST[name], t)

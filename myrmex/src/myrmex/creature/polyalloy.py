@@ -28,8 +28,13 @@ import numpy as np
 from ..util.rng import RngStreams, stable_hash64
 from .config import DEFAULT_PARAMS
 from .control import CreatureControlInput, ParameterSet
+from .skeleton import Skeleton
 
-ATTRACTORS = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD")
+ATTRACTORS = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD",
+              # bony, aggressive forms (the style of bionic vertebrae, not their anatomy)
+              "SPINE", "CLAW", "SCYTHE", "THORN", "CARAPACE")
+AGGRESSIVE = ("SPINE", "CLAW", "SCYTHE", "THORN", "CARAPACE", "BLADES", "SHIELD")
+CLASSIC = ATTRACTORS[:8]                  # the Mimetic Polyalloy's own vocabulary (the bony forms are v5+)
 MATERIAL = {   # cohesion, stiffness, damping, repulsion, break ratio (persistence), dispersion
     "FLUID":          (0.55, 0.15, 0.35, 0.6, 1.6, 0.15),
     "ELASTIC":        (0.80, 0.50, 0.45, 0.7, 2.2, 0.05),
@@ -38,14 +43,23 @@ MATERIAL = {   # cohesion, stiffness, damping, repulsion, break ratio (persisten
     "HIGH_STIFFNESS": (0.90, 1.60, 0.80, 1.0, 4.0, 0.00),
     "DISPERSED":      (0.10, 0.05, 0.25, 1.3, 1.2, 0.90),
 }
-INTENTS = ("CRUISE", "HOVER", "EVADE", "REFORM", "EXPLORE", "DISPLAY")
+INTENTS = ("CRUISE", "HOVER", "EVADE", "REFORM", "EXPLORE", "DISPLAY", "STRIKE")
 INTENT_PLAN = {  # preferred attractors, material state, cruise factor
     "CRUISE": (("SPINDLE", "WINGS", "LATTICE"), "ELASTIC", 1.0),
     "HOVER": (("CORE", "RING", "CLOUD"), "COHESIVE", 0.15),
     "EVADE": (("SPINDLE", "SHIELD", "CLOUD"), "FLUID", 1.0),
     "REFORM": (("CORE", "SPINDLE"), "COHESIVE", 0.7),
-    "EXPLORE": (ATTRACTORS, "FLUID", 0.6),
+    "EXPLORE": (CLASSIC, "FLUID", 0.6),
     "DISPLAY": (("LATTICE", "BLADES", "RING", "SHIELD"), "STRUCTURED", 0.5),
+}
+INTENT_PLAN_BONE = {  # Osseous Polyalloy (v5): bony, aggressive vocabulary + the strike
+    "CRUISE": (("SPINDLE", "SPINE", "WINGS", "SCYTHE", "LATTICE"), "ELASTIC", 1.0),
+    "HOVER": (("CORE", "RING", "CARAPACE", "THORN", "CLOUD"), "COHESIVE", 0.15),
+    "EVADE": (("SPINDLE", "SHIELD", "CARAPACE", "CLOUD"), "FLUID", 1.0),
+    "REFORM": (("CORE", "SPINDLE", "SPINE"), "COHESIVE", 0.7),
+    "STRIKE": (("CLAW", "SCYTHE", "SPINE"), "HIGH_STIFFNESS", 1.0),
+    "EXPLORE": (ATTRACTORS, "FLUID", 0.6),
+    "DISPLAY": (("LATTICE", "THORN", "SCYTHE", "CLAW", "CARAPACE", "BLADES"), "STRUCTURED", 0.5),
 }
 KICK_MODES = ("IMPULSE", "OBSTACLE", "PRESSURE", "TURBULENCE", "MIX")
 G = 9.81
@@ -66,9 +80,63 @@ class PolyalloyConfig:
     params: dict = field(default_factory=lambda: dict(DEFAULT_PARAMS))
 
 
-def attractor_shape(name: str, U: np.ndarray, s: float, elong: float) -> np.ndarray:
-    """Local target positions (x forward, z up) of every material coordinate for one attractor."""
+_QUILLS = np.array([[math.cos(math.pi * (1 + 5 ** 0.5) * k) * math.sin(math.acos(1 - 2 * (k + 0.5) / 14)),
+                      math.sin(math.pi * (1 + 5 ** 0.5) * k) * math.sin(math.acos(1 - 2 * (k + 0.5) / 14)),
+                      1 - 2 * (k + 0.5) / 14] for k in range(14)])
+
+
+def attractor_shape(name: str, U: np.ndarray, s: float, elong: float, pulse: float = 0.0,
+                    snap: float = 0.0, swing: float = 0.0) -> np.ndarray:
+    """Local target positions (x forward, z up) of every material coordinate for one attractor.
+
+    ``pulse`` (kick envelope), ``snap`` (0 open .. 1 closed) and ``swing`` (-1..1) animate the bony forms.
+    """
     u, v, w = U[:, 0], U[:, 1], U[:, 2]
+    if name == "SPINE":                                    # a segmented ridge with swept-back dorsal thorns
+        core = u < 0.62
+        x = (u / 0.62 - 0.5) * 2.0 * s * elong
+        a = 2 * np.pi * v
+        rr = 0.1 * s * (1.0 + 0.5 * np.abs(np.sin(x / (0.18 * s) * np.pi)))          # knuckled, not smooth
+        k = np.floor(v * 8.0)
+        along = np.clip((u - 0.62) / 0.38, 0, 1)
+        tx = (k / 7.0 - 0.5) * 1.7 * s * elong - along * 0.25 * s
+        tz = 0.12 * s + along * (0.42 * s + 0.25 * s * pulse) * (1.0 - 0.4 * np.abs(k / 7.0 - 0.5))
+        thorn = np.stack([tx, (w - 0.5) * 0.04 * s, tz], 1)
+        return np.where(core[:, None], np.stack([x, rr * np.cos(a), rr * np.sin(a)], 1), thorn)
+    if name == "CLAW":                                     # two hooked claws ahead of a compact core
+        core = u < 0.34
+        P = attractor_shape("CORE", U, s * 0.7, 1.0)
+        side = np.where(v < 0.5, -1.0, 1.0)
+        f = np.clip((u - 0.34) / 0.66, 0, 1)
+        open_ = 1.0 - 0.75 * snap
+        y = side * (0.28 * s + 0.42 * s * np.sin(np.pi * np.minimum(f, 0.8) / 0.8 * 0.5) * open_)
+        hook = np.clip((f - 0.72) / 0.28, 0, 1)
+        y = y - side * hook * 0.38 * s * open_
+        x = 0.15 * s + f * 1.05 * s - hook ** 2 * 0.15 * s
+        z = 0.18 * s * np.sin(np.pi * f) + (w - 0.5) * 0.05 * s
+        return np.where(core[:, None], P - np.array([0.25 * s, 0, 0]), np.stack([x, y, z], 1))
+    if name == "SCYTHE":                                   # curved blades sweeping back from the body
+        k = np.floor(u * 4.0)
+        phi = np.array([0.7, 2.44, 3.84, 5.58])[np.minimum(3, k).astype(int)] + 0.45 * swing
+        f = v
+        bx = -f * 1.05 * s * np.cos(1.25 * f) + 0.1 * s
+        bz = 0.18 * s + f * 0.95 * s * np.sin(1.25 * f)
+        th = (w - 0.5) * 0.05 * s * (1.0 - f)
+        return np.stack([bx + th, -np.sin(phi) * bz, np.cos(phi) * bz], 1)
+    if name == "THORN":                                    # a core bristling with quills that jump on kicks
+        core = u < 0.38
+        P = attractor_shape("CORE", U, s * 0.85, 1.0)
+        d = _QUILLS[np.minimum(13, np.floor(v * 14.0)).astype(int)]
+        along = 0.22 * s + np.clip((u - 0.38) / 0.62, 0, 1) * (0.62 * s + 0.55 * s * pulse)
+        return np.where(core[:, None], P, d * along[:, None] + (w - 0.5)[:, None] * 0.02 * s)
+    if name == "CARAPACE":                                 # an angular, faceted shell with a keel
+        th, ph = 2 * np.pi * u, np.arccos(1 - 2 * v)
+        d = np.stack([np.sin(ph) * np.cos(th), np.sin(ph) * np.sin(th), np.cos(ph)], 1)
+        d = d / np.maximum(np.abs(d).sum(1, keepdims=True), 1e-6)          # octahedral facets
+        r = 0.62 * s * (0.85 + 0.15 * w)
+        P = d * r[:, None] * np.array([1.5 * elong, 1.0, 0.8])
+        P[:, 2] += np.maximum(0.0, 0.25 * s - np.abs(P[:, 1]) * 0.9) * (P[:, 2] > 0)      # dorsal keel
+        return P
     if name == "CORE":
         r, th, ph = 0.34 * s * np.cbrt(w), 2 * np.pi * u, np.arccos(1 - 2 * v)
         return np.stack([r * np.sin(ph) * np.cos(th) * elong, r * np.sin(ph) * np.sin(th), r * np.cos(ph)], 1)
@@ -150,11 +218,15 @@ class PolyalloyState:
     dispersion: np.ndarray       # (N,)
     material: str = "COHESIVE"
     fragments: int = 1
+    style: int = 0               # 0 classic (struts, plates) · 1 osseous (bone links, scutes)
 
 
 class PolyalloyEngine:
     EVENTS = ("MORPHOLOGY_SHIFT", "MASS_REBALANCE", "APPENDAGE_BURST", "COLLAPSE", "RECONSTRUCTION", "IMPULSE",
               "OBSTACLE", "PRESSURE", "TURBULENCE")
+    BONY = False                 # the Osseous subclass (v5) switches on bone links, scutes, strikes
+    PLAN = INTENT_PLAN
+    VOCAB = CLASSIC
 
     def __init__(self, cfg: PolyalloyConfig | None = None):
         self.cfg = cfg = cfg or PolyalloyConfig()
@@ -178,7 +250,8 @@ class PolyalloyEngine:
         self.mat_goal = self.mat.copy()
         self.intent, self.intent_t, self.intent_dwell = "CRUISE", 0.0, 6.0
         R = self._R()
-        self.x = self.P + self._targets(R, np.ones(len(ATTRACTORS)) / len(ATTRACTORS)) @ np.eye(3)
+        w0 = np.array([1.0 if a in self.VOCAB else 0.0 for a in ATTRACTORS])
+        self.x = self.P + self._targets(R, w0 / w0.sum()) @ np.eye(3)
         self.v = np.zeros((n, 3))
         self.edges, self.rest = _knn_edges(self.x, cfg.k_neighbors)
         self.alive = np.ones(len(self.edges), bool)
@@ -193,6 +266,13 @@ class PolyalloyEngine:
         self.events: list[tuple[float, str, object]] = []
         self._pending: list[tuple[str, object]] = []
         self.wander = r.uniform(-1, 1)
+        # Bone: ossification (0 liquid .. 1 bone), the skeleton's growing links, strikes.
+        self.oss = 0.3
+        self.pulse = 0.0
+        self.hn = np.array([(k * 0.7548776662) % 1.0 for k in range(n)])
+        self.skel = Skeleton(cfg.max_links)
+        self._state_t = 0.0
+        self.strike_target = None
 
     # ------------------------------------------------------------------ API (same as CreatureEngine)
     def set_input(self, inp: CreatureControlInput) -> None:
@@ -226,7 +306,7 @@ class PolyalloyEngine:
         loc = np.zeros((self.n, 3))
         for a, wa in zip(ATTRACTORS, w):
             if wa > 0.01:
-                shp = attractor_shape(a, self.U, s, elong)
+                shp = attractor_shape(a, self.U, s, elong, getattr(self, "pulse", 0.0))
                 loc += wa * (shp - shp.mean(0))            # thrust places the body, not the shape
         asym = pr["asymmetry"]
         loc[:, 1] *= 1.0 + 0.35 * asym * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + 1.0)
@@ -286,7 +366,8 @@ class PolyalloyEngine:
             self.turb_until = self.t + 0.7
         elif name == "MORPHOLOGY_SHIFT":
             self.z_goal = np.zeros(len(ATTRACTORS))
-            self.z_goal[ATTRACTORS.index(arg) if arg in ATTRACTORS else int(r.randint(0, len(ATTRACTORS) - 1))] = 2.5
+            self.z_goal[ATTRACTORS.index(arg) if arg in self.VOCAB else
+                        ATTRACTORS.index(self.VOCAB[int(r.randint(0, len(self.VOCAB) - 1))])] = 2.5
         elif name in ("COLLAPSE",):
             self.mat_goal = np.array(MATERIAL["DISPERSED"])
             self.alive[:] = False
@@ -294,11 +375,34 @@ class PolyalloyEngine:
         elif name in ("RECONSTRUCTION", "MASS_REBALANCE"):
             self.mat_goal = np.array(MATERIAL["COHESIVE"])
             self.intent, self.intent_t = "REFORM", 0.0
+        elif name == "STRIKE":                              # a lunge: harden, claws out, forward
+            self._strike(None)
+        elif name == "OSSIFY":
+            self.oss = 1.0
+            self.mat_goal = np.array(MATERIAL["STRUCTURED"])
         elif name == "APPENDAGE_BURST":
             self.z_goal = np.zeros(len(ATTRACTORS))
-            self.z_goal[ATTRACTORS.index("BLADES")] = 2.5
+            self.z_goal[ATTRACTORS.index(self._pick(("SCYTHE", "BLADES", "THORN")) if self.BONY else "BLADES")] = 2.5
             self.mat_goal = np.array(MATERIAL["STRUCTURED"])
         self._log(name, arg if isinstance(arg, str) else None)
+
+    def _pick(self, prefs) -> str:
+        """A shape from the intent's vocabulary; aggression favours the bony, aggressive ones."""
+        if not self.BONY:
+            return prefs[self.rng.randint(0, len(prefs) - 1)]
+        a = self.params["aggression"]
+        w = [(0.5 + 1.8 * a) if p in AGGRESSIVE else (1.3 - 0.8 * a) for p in prefs]
+        return prefs[self.rng.weighted_index(w)]
+
+    def _strike(self, target) -> None:
+        self.intent, self.intent_t, self.strike_target = "STRIKE", 0.0, target
+        self.z_goal = np.zeros(len(ATTRACTORS))
+        self.z_goal[ATTRACTORS.index(self._pick(self.PLAN["STRIKE"][0]))] = 3.0
+        self.mat_goal = np.array(MATERIAL["HIGH_STIFFNESS"])
+        self.oss = 1.0
+        fwd = self._R()[:, 0]
+        self.v += fwd * 5.0 if target is None else 0.0
+        self._log("STRIKE", None)
 
     # ------------------------------------------------------------------ behaviour (hand-written controller)
     def _think(self, dt: float) -> None:
@@ -323,13 +427,13 @@ class PolyalloyEngine:
             if 0.0 < tca < 1.3 and dca < ob.radius + 0.8 * self.cfg.size and not ob.handled:
                 threat = (ob, tca)
         self.intent_t += dt
-        if threat is not None and self.intent != "EVADE":
+        if threat is not None and self.intent not in ("EVADE", "STRIKE"):
             ob, tca = threat
             ob.handled = True
             # The same event must not always produce the same answer: memory + state choose.
-            opts = ["SPLIT", "SHIELD", "DISPERSE", "DODGE"]
+            opts = ["SPLIT", "SHIELD", "DISPERSE", "DODGE"] + (["STRIKE"] if self.BONY else [])
             w = [1.4 * pr["fluidity"] + 0.3, 0.6 + pr["rigidity"] + 0.5 * pr["aggression"], 0.4 + 0.8 * pr["instability"],
-                 0.6 + pr["speed"]]
+                 0.6 + pr["speed"]] + ([0.3 + 1.6 * pr["aggression"]] if self.BONY else [])
             for k, o in enumerate(opts):
                 if o in self.response_hist[-2:]:
                     w[k] *= 0.3
@@ -337,7 +441,9 @@ class PolyalloyEngine:
             self.response_hist.append(self.response)
             self.threat, self.intent, self.intent_t = ob, "EVADE", 0.0
             self._log("RESPONSE", self.response)
-            if self.response == "SHIELD":
+            if self.response == "STRIKE":                    # meet it: harden into blades and hit it away
+                self._strike(ob)
+            elif self.response == "SHIELD":
                 self.z_goal = np.zeros(len(ATTRACTORS))
                 self.z_goal[ATTRACTORS.index("SHIELD")] = 3.0
                 self.mat_goal = np.array(MATERIAL["HIGH_STIFFNESS"])
@@ -351,11 +457,12 @@ class PolyalloyEngine:
                 self.z_goal[ATTRACTORS.index("SPINDLE")] = 3.0
             else:
                 self.mat_goal = np.array(MATERIAL["FLUID"])
-        elif self.intent == "EVADE" and self.intent_t > 1.6:
+        elif self.intent in ("EVADE", "STRIKE") and self.intent_t > (1.3 if self.intent == "STRIKE" else 1.6):
+            self.strike_target = None
             self.intent, self.intent_t = "REFORM", 0.0
             self.mat_goal = np.array(MATERIAL["COHESIVE"])
             self._log("REASSEMBLY", None)
-        elif self.intent_t > self.intent_dwell and self.intent != "EVADE":
+        elif self.intent_t > self.intent_dwell and self.intent not in ("EVADE", "STRIKE"):
             pool = ["CRUISE", "HOVER", "EXPLORE", "DISPLAY"]
             w = [1.2 + inp.energy, 0.8 * (1 - inp.energy), 0.5 + pr["mutation"] + self.instab,
                  0.4 + pr["rigidity"] + pr["tendril_activity"]]
@@ -363,9 +470,9 @@ class PolyalloyEngine:
                 w[pool.index(self.intent)] *= 0.4
             self.intent = pool[r.weighted_index(w)]
             self.intent_t, self.intent_dwell = 0.0, r.uniform(4.0, 10.0) * (0.6 + 0.8 * pr["coherence"])
-            prefs, mstate, _ = INTENT_PLAN[self.intent]
+            prefs, mstate, _ = self.PLAN[self.intent]
             self.z_goal = np.zeros(len(ATTRACTORS))
-            self.z_goal[ATTRACTORS.index(prefs[r.randint(0, len(prefs) - 1)])] = 2.5
+            self.z_goal[ATTRACTORS.index(self._pick(prefs))] = 2.5
             self.mat_goal = np.array(MATERIAL[mstate])
             self._log("MORPHOLOGY_SHIFT", self.intent)
         if self.instab > 1.0:
@@ -392,6 +499,12 @@ class PolyalloyEngine:
         noise = self.nrng.standard_normal(len(ATTRACTORS)) * pr["mutation"] * 0.6
         self.z += (self.z_goal - self.z) * min(1.0, dt / tau_m) + noise * math.sqrt(dt)
         self.mat += (self.mat_goal - self.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"]))
+        self.pulse = max(self.pulse * math.exp(-dt / 0.18), inp.transient)
+        oss_goal = float(np.clip(0.2 + 0.55 * max(0.0, self.mat[1] - 0.3) + 0.35 * pr["aggression"] +
+                                 0.25 * pr["rigidity"] - 0.9 * self.mat[5], 0.0, 1.0))
+        self.oss += (oss_goal - self.oss) * min(1.0, dt / 1.5)
+        if inp.transient > 0.5:
+            self.oss = min(1.0, self.oss + 0.4 * dt * pr["aggression"])
         coh, stiff, damp, rep, brk, disp = self.mat
         coh *= 0.5 + pr["coherence"]
         stiff *= 0.4 + 1.2 * pr["rigidity"]
@@ -399,7 +512,7 @@ class PolyalloyEngine:
         # Flight: desired velocity (cruise along a wandering heading, altitude band), distributed thrust.
         vcom = self.v.mean(axis=0)
         self.P = (self.x * self.mass[:, None]).sum(0) / self.mass.sum()
-        cruise = cfg.cruise * INTENT_PLAN.get(self.intent, (0, 0, 1.0))[2] * (0.4 + 1.2 * pr["speed"]) * (0.6 + self.arousal)
+        cruise = cfg.cruise * self.PLAN.get(self.intent, (0, 0, 1.0))[2] * (0.4 + 1.2 * pr["speed"]) * (0.6 + self.arousal)
         self.wander += self.rng.normal(0, 1) * math.sqrt(dt) * (0.4 + pr["noise"])
         self.wander *= math.exp(-dt * 0.3)
         home = -self.P[:2]
@@ -412,6 +525,13 @@ class PolyalloyEngine:
         alt_goal = lo + (hi - lo) * pr["altitude"]
         vz = np.clip((alt_goal - self.P[2]) * 0.8 + 0.3 * math.sin(0.4 * self.t), -1.5, 1.5)
         v_des = np.array([math.cos(want) * cruise, math.sin(want) * cruise, vz])
+        if self.intent == "STRIKE":
+            ob = self.strike_target
+            if ob is not None:                              # lunge where it will be
+                aim = ob.pos + ob.vel * 0.25 - self.P
+                v_des = aim / max(float(np.linalg.norm(aim)), 1e-6) * (cfg.size * 7.0)
+            else:
+                v_des = self._R()[:, 0] * max(cruise, 1.0) * 2.5
         a_des = (v_des - vcom) / 0.8 + np.array([0.0, 0.0, G])
         # Moment of inertia of the current body limits the turn rate (morphology changes flight).
         I = float((self.mass * ((self.x - self.P) ** 2).sum(1)).sum()) / max(cfg.size ** 2, 1e-6)
@@ -476,6 +596,13 @@ class PolyalloyEngine:
                 vn = (v[inside] * nrm).sum(1, keepdims=True)
                 v[inside] -= np.minimum(vn, 0) * nrm * 1.6
                 self.glow = max(self.glow, 0.8)
+                if self.intent == "STRIKE" and not getattr(ob, "hit", False):    # the blow knocks it away
+                    away = ob.pos - self.P
+                    away /= max(float(np.linalg.norm(away)), 1e-6)
+                    ob.vel = away * (10.0 + 8.0 * self.params["aggression"]) + ob.vel * 0.15
+                    ob.hit = True
+                    self.glow = 1.0
+                    self._log("HIT", None)
             # Threat corridor: material in the obstacle's path loosens (local dispersion) to let it through.
             if self.intent == "EVADE" and getattr(self, "response", "") in ("SPLIT", "DISPERSE"):
                 ahead = rel - ob.vel * (rel @ ob.vel)[:, None] / max(float(ob.vel @ ob.vel), 1e-6)
@@ -523,15 +650,21 @@ class PolyalloyEngine:
         n = self.n
         disp = np.clip(np.linalg.norm(self.x - self.P, axis=1) / (1.2 * cfg.size) - 0.5, 0, 1) * 0.6 + 0.4 * self.local
         r0 = 0.62 * cfg.size * (1.0 / n) ** (1 / 3) * 1.9
-        stiff = float(self.mat[1])
-        # Hardened material thins into beads along its internal frame: the skeleton shows.
-        radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.3 * min(1.0, max(0.0, (stiff - 0.5) / 1.1)))
-        # Link slots are stable between network rebuilds (render objects can follow them).
-        links = np.full((cfg.max_links, 3), -1.0)
-        links[:, 2] = 0.0
-        m = min(cfg.max_links, len(self.edges))
-        links[:m, 0:2] = self.edges[:m]
-        links[:m, 2] = min(1.0, max(0.0, (stiff - 0.4) / 1.0)) * self.alive[:m]
+        if self.BONY:
+            # Ossified material thins into beads along its skeleton: the bone links show.
+            oss_n = np.clip(self.oss * (0.65 + 0.35 * self.hn) * (1.0 - disp), 0.0, 1.0)
+            radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.38 * oss_n)
+            dt_s, self._state_t = max(0.0, self.t - self._state_t), self.t
+            links = self.skel.update(self.x, np.zeros(n, int), oss_n, dt_s, 0.5 * cfg.size)
+        else:
+            stiff = float(self.mat[1])
+            # Hardened material thins into beads along its internal frame: the struts show.
+            radius = r0 * (1.0 - 0.45 * disp) * (1.0 - 0.3 * min(1.0, max(0.0, (stiff - 0.5) / 1.1)))
+            links = np.full((cfg.max_links, 3), -1.0)
+            links[:, 2] = 0.0
+            m = min(cfg.max_links, len(self.edges))
+            links[:m, 0:2] = self.edges[:m]
+            links[:m, 2] = min(1.0, max(0.0, (stiff - 0.4) / 1.0)) * self.alive[:m]
         obs = np.zeros((cfg.max_obstacles, 4))
         for k, ob in enumerate(self.obstacles):
             if ob is not None:
@@ -542,7 +675,7 @@ class PolyalloyEngine:
                               np.ones((n, 3)), np.ones(n, np.int8), np.full(n, -1, np.int16), self.P.copy(),
                               self.heading, self.params.values(), {"total": float(self.mass.sum())},
                               self.surface, self.glow, self.arousal, self.instab, list(self.events[-6:]),
-                              links, obs, disp, mstate, self.fragments())
+                              links, obs, disp, mstate, self.fragments(), int(self.BONY))
 
 
 __all__ = ["PolyalloyEngine", "PolyalloyConfig", "PolyalloyState", "ATTRACTORS", "MATERIAL", "INTENTS"]

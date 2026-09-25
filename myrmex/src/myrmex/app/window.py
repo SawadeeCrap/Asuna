@@ -412,6 +412,9 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Mimetic Polyalloy (flying, self-reconfiguring material)", "polyalloy")
         self.cmb_backend.addItem("Polyalloy Colony (flock, armour, mechanisms, prey)", "colony")
         self.cmb_backend.addItem("Polyalloy Hive (nanomachine swarm, builds, patterns, remembers)", "hive")
+        self.cmb_backend.addItem("Osseous Polyalloy (v5: bone-link skeleton, bony blades, strikes)", "osseous")
+        self.cmb_backend.addItem("Osseous Colony (v6: bony flock, scutes, mandibles, strikes)", "osseous_colony")
+        self.cmb_backend.addItem("Osseous Hive (v7: bony swarm, quill volleys, fanged gates)", "osseous_hive")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         row = QHBoxLayout()
@@ -663,7 +666,8 @@ class MainWindow(QMainWindow):
         self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
 
     def _show_looks(self) -> None:
-        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony", "hive": "Hive"}
+        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony", "hive": "Hive",
+                 "osseous": "Osseous", "osseous_colony": "Osseous Colony", "osseous_hive": "Osseous Hive"}
         parts = [f"{label} {'✓' if C.look_file(b) else '–'}" for b, label in names.items()]
         self.lbl_looks.setText("   ".join(parts))
 
