@@ -76,6 +76,7 @@ class AppSettings:
     midi_bindings: list = field(default_factory=list)
     camera_controls: dict = field(default_factory=dict)
     glove: dict = field(default_factory=dict)          # Hand Glove link: preset, intensity, mapping, neutral pose
+    looks: dict = field(default_factory=dict)          # organism -> the chosen saved look ("" = default studio)
 
     @classmethod
     def load(cls) -> "AppSettings":

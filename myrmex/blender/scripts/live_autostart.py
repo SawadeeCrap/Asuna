@@ -56,6 +56,9 @@ def _look_through_camera():
 
 def go_live():
     _register()
+    from myrmex_blender import control
+    if control.enabled():                  # the app can save / load looks in this Blender
+        control.start()
     scene = bpy.context.scene
     s = scene.myrmex_live
     if "MYRMEX_KEEP_SETTINGS" in os.environ:

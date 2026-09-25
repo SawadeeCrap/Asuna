@@ -57,6 +57,10 @@ def main():
         print("Myrmex: video written:", out, flush=True)
         return
     if not bpy.app.background:
+        from myrmex_blender import control
+        if control.enabled():              # the app can save / load looks in this Blender
+            control.start()
+
         def look():
             for win in bpy.context.window_manager.windows:
                 for area in win.screen.areas:

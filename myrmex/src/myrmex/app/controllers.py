@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,9 +32,43 @@ def looks_dir() -> str:
     return os.path.join(characters_dir(), "looks")
 
 
-def look_file(backend_or_variant: str) -> str:
-    """The organism's saved look (Blender > Myrmex > Save Look), if there is one."""
-    p = os.path.join(looks_dir(), variant_of(backend_or_variant) + ".blend")
+LOOK_DEFAULT_NAME, LOOK_AUTOSAVE = "My look", "Autosave"     # as in blender/myrmex_blender/looks.py
+
+
+def list_looks(backend_or_variant: str) -> list[tuple[str, str]]:
+    """(name, path) of an organism's saved looks: "My look" (the older single one), then by name, autosave last."""
+    v = variant_of(backend_or_variant)
+    out = []
+    legacy = os.path.join(looks_dir(), v + ".blend")
+    if os.path.isfile(legacy):
+        out.append((LOOK_DEFAULT_NAME, legacy))
+    d = os.path.join(looks_dir(), v)
+    if os.path.isdir(d):
+        names = sorted((f[:-6] for f in os.listdir(d) if f.endswith(".blend") and not f.startswith(".")),
+                       key=lambda n: (n == LOOK_AUTOSAVE, n.lower()))
+        out += [(n, os.path.join(d, n + ".blend")) for n in names]
+    return out
+
+
+def look_path(backend_or_variant: str, name: str) -> str:
+    """Where a look of this name is kept ("My look" = the older single file)."""
+    v = variant_of(backend_or_variant)
+    if name == LOOK_DEFAULT_NAME:
+        return os.path.join(looks_dir(), v + ".blend")
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", name).strip().strip(".")
+    name = re.sub(r"\s+", " ", name)[:60] or "Look"
+    return os.path.join(looks_dir(), v, name + ".blend")
+
+
+def look_file(backend_or_variant: str, chosen: dict | None = None) -> str:
+    """The look to open for an organism: the one chosen in the app ("" = the default studio), else the
+    older single look, else none."""
+    v = variant_of(backend_or_variant)
+    if chosen is not None and v in chosen:
+        p = chosen[v]
+        if not p or os.path.isfile(p):
+            return p or ""
+    p = os.path.join(looks_dir(), v + ".blend")
     return p if os.path.exists(p) else ""
 
 
@@ -180,11 +215,11 @@ def find_blender(hint: str = "") -> str | None:
 
 
 def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid",
-                         keep_settings: bool = True) -> tuple[list[str], dict]:
+                         keep_settings: bool = True, looks: dict | None = None) -> tuple[list[str], dict]:
     env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend,
-               MYRMEX_KEEP_SETTINGS="1" if keep_settings else "0", MYRMEX_LOOKS=looks_dir())
-    if backend in CREATURE_BACKENDS:           # the saved look, or a scene built from scratch
-        look = look_file(backend)
+               MYRMEX_KEEP_SETTINGS="1" if keep_settings else "0", MYRMEX_LOOKS=looks_dir(), MYRMEX_CONTROL="stdin")
+    if backend in CREATURE_BACKENDS:           # the chosen look, or a scene built from scratch
+        look = look_file(backend, looks)
         return [blender] + ([look] if look else []) + ["--python", AUTOSTART], env
     return [blender, character, "--python", AUTOSTART], env
 
@@ -202,10 +237,11 @@ def take_variant(take: str) -> str | None:
 
 
 def take_command(blender: str, take: str, character: str = "", audio: str = "", render: bool = False,
-                 size: str = "1920x1080", quality: str = "eevee", keep_settings: bool = True) -> list[str]:
-    """Open (or render, headless) a recorded take in Blender - in your saved look when there is one."""
+                 size: str = "1920x1080", quality: str = "eevee", keep_settings: bool = True,
+                 looks: dict | None = None) -> list[str]:
+    """Open (or render, headless) a recorded take in Blender - in the chosen saved look when there is one."""
     variant = take_variant(take)
-    scene = (look_file(variant) if variant else character) or ""
+    scene = (look_file(variant, looks) if variant else character) or ""
     cmd = [blender] + (["-b"] if render else []) + ([scene] if scene else [])
     cmd += ["--python", OPEN_TAKE, "--", "--take", take, "--size", size, "--quality", quality]
     if keep_settings:

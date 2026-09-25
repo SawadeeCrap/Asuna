@@ -18,6 +18,7 @@ Settings are saved on exit and restored on the next launch.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -26,7 +27,7 @@ import time
 from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
                                QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -421,6 +422,31 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Cyber Hive (v8: white nanomaterial, light lines, machine forms)", "cyber_hive")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
+        for cb in (self.cmb_char, self.cmb_backend):                # long names must not widen the page
+            cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(18)
+        row = QHBoxLayout()
+        self.cmb_look = QComboBox()
+        self.cmb_look.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_look.setMinimumContentsLength(12)
+        self.cmb_look.setToolTip("Saved looks of this organism. Choosing one loads it into the Blender that Myrmex "
+                                 "opened (what it showed is kept as 'Autosave'); it is also used next time and for "
+                                 "take renders.")
+        self.cmb_look.activated.connect(self._look_chosen)
+        self.btn_save_look = QPushButton("Save current look…")
+        self.btn_save_look.setToolTip("Save what the Blender opened by Myrmex shows now (materials, lights, world, "
+                                      "colour, render settings) as a look of this organism")
+        self.btn_save_look.clicked.connect(self._save_current_look)
+        self.btn_del_look = QPushButton("Delete")
+        self.btn_del_look.setToolTip("Delete the selected look")
+        self.btn_del_look.clicked.connect(self._delete_look)
+        self.lbl_look_note = QLabel("in the character's .blend")
+        self.lbl_look_note.setProperty("muted", True)
+        row.addWidget(self.cmb_look, 1)
+        row.addWidget(self.lbl_look_note, 1)
+        row.addWidget(self.btn_save_look)
+        row.addWidget(self.btn_del_look)
+        form.addRow("Look", row)
         row = QHBoxLayout()
         self.ed_blender = QLineEdit(self.s.blender or (C.find_blender() or ""))
         b = QPushButton("…")
@@ -438,23 +464,16 @@ class MainWindow(QMainWindow):
         v.addWidget(box)
         box = QGroupBox("Your look in Blender")
         form = QFormLayout(box)
-        form.addRow(QLabel("Tune materials, lights, world and render settings in Blender, then press Save Look in "
-                           "the Myrmex panel (N sidebar). Humanoid: the look is saved in the character's .blend. "
-                           "Organisms: each type keeps its own look; live sessions and take renders open it."))
+        form.addRow(QLabel("Open in Blender, tune materials, lights, world and render settings there, then Save "
+                           "current look (Character type → Look). Every organism keeps its own list of looks: choose "
+                           "one to load it into Blender at once; live sessions and take renders open the chosen look. "
+                           "Humanoid: the look is saved in the character's .blend."))
         self.chk_keep = QCheckBox("Keep my Blender settings (Myrmex doesn't change EEVEE, colour, shadows, samples)")
         self.chk_keep.setChecked(self.s.keep_blender_settings)
         self.chk_keep.toggled.connect(lambda on: self.cmb_rquality.setEnabled(not on))
         form.addRow(self.chk_keep)
-        row = QHBoxLayout()
-        self.lbl_looks = QLabel()
-        b = QPushButton("Forget saved look")
-        b.setToolTip("Delete the saved look of the selected organism: next time the default studio is built")
-        b.clicked.connect(self._forget_look)
-        row.addWidget(self.lbl_looks, 1)
-        row.addWidget(b)
-        form.addRow("Saved looks", row)
-        self.cmb_backend.currentIndexChanged.connect(lambda *_: self._show_looks())
-        self._show_looks()
+        self.cmb_backend.currentIndexChanged.connect(lambda *_: self._fill_looks())
+        self._fill_looks()
         v.addWidget(box)
         box = QGroupBox("New character from a Hunyuan3D GLB")
         form = QFormLayout(box)
@@ -672,24 +691,129 @@ class MainWindow(QMainWindow):
         path = self.engine.save_take()
         self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
 
-    def _show_looks(self) -> None:
-        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony", "hive": "Hive",
-                 "osseous": "Osseous", "osseous_colony": "Osseous Colony", "osseous_hive": "Osseous Hive",
-                 "cyber_hive": "Cyber Hive"}
-        parts = [f"{label} {'✓' if C.look_file(b) else '–'}" for b, label in names.items()]
-        self.lbl_looks.setText("   ".join(parts))
-
-    def _forget_look(self) -> None:
+    # ------------------------------------------------------------------ looks (saved in / loaded into Blender)
+    def _fill_looks(self) -> None:
         b = self.cmb_backend.currentData()
-        path = C.look_file(b)
-        if not path:
-            self.log("no saved look for this character type" if b in C.CREATURE_BACKENDS else
-                     "the humanoid look lives in the character's .blend")
+        creature = b in C.CREATURE_BACKENDS
+        self.cmb_look.setVisible(creature)
+        self.btn_del_look.setVisible(creature)
+        self.lbl_look_note.setVisible(not creature)
+        self.cmb_look.blockSignals(True)
+        self.cmb_look.clear()
+        if creature:
+            self.cmb_look.addItem("Default studio (built by Myrmex)", "")
+            for name, path in C.list_looks(b):
+                self.cmb_look.addItem("Autosave (before the last switch)" if name == C.LOOK_AUTOSAVE else name, path)
+            self.cmb_look.setCurrentIndex(max(0, self.cmb_look.findData(C.look_file(b, self.s.looks))))
+        self.cmb_look.blockSignals(False)
+        self.btn_del_look.setEnabled(creature and bool(self.cmb_look.currentData()))
+
+    def _blender_for(self, variant: str | None = None) -> QProcess | None:
+        """The Blender that Myrmex opened and that listens to it (showing ``variant``, if given)."""
+        procs = [self.blender_proc] + list(reversed(getattr(self, "take_procs", [])))
+        for p in procs:
+            if p is None or p.state() == QProcess.ProcessState.NotRunning or not p.property("myrmex_control"):
+                continue
+            if variant is None or p.property("myrmex_variant") == variant:
+                return p
+        return None
+
+    def _blender_send(self, p: QProcess, cmd: dict) -> None:
+        p.write((json.dumps(cmd) + "\n").encode("utf-8"))
+
+    def _look_chosen(self, *_) -> None:
+        b = self.cmb_backend.currentData()
+        if b not in C.CREATURE_BACKENDS:
             return
-        if QMessageBox.question(self, "Myrmex", f"Delete the saved look?\n{path}") == QMessageBox.StandardButton.Yes:
+        v, path, name = C.variant_of(b), self.cmb_look.currentData() or "", self.cmb_look.currentText()
+        self.s.looks[v] = path
+        self.s.save()
+        self.btn_del_look.setEnabled(bool(path))
+        p = self._blender_for(v)
+        if p is not None:
+            self._blender_send(p, {"cmd": "load_look", "path": path, "kind": v, "keep": self.chk_keep.isChecked()})
+            self.log(f"loading the look '{name}' into Blender…")
+        else:
+            self.log(f"look '{name}': used when Blender opens this organism (Open in Blender, takes)")
+
+    def _save_current_look(self) -> None:
+        p = self._blender_for()
+        if p is None:
+            QMessageBox.information(self, "Myrmex", "Open Blender from Myrmex first (Open in Blender, or a take), "
+                                                    "tune the look there, then save it here.")
+            return
+        v = p.property("myrmex_variant") or "humanoid"
+        if v not in [C.variant_of(b) for b in C.CREATURE_BACKENDS]:
+            self._blender_send(p, {"cmd": "save_look", "kind": "humanoid"})
+            self.log("saving the look in the character's .blend…")
+            return
+        looks = C.list_looks(v)
+        chosen = C.look_file(v, self.s.looks)
+        default = next((n for n, path in looks if path == chosen and n != C.LOOK_AUTOSAVE), "")
+        if not default:
+            taken = {n.lower() for n, _ in looks}
+            k = 1
+            while f"look {k}" in taken:
+                k += 1
+            default = f"Look {k}"
+        label = self.cmb_backend.itemText(self.cmb_backend.findData(
+            next((b for b in C.CREATURE_BACKENDS if C.variant_of(b) == v), v))).split(" (")[0]
+        name, ok = QInputDialog.getText(self, "Save current look", f"Name of the look ({label}):", text=default)
+        name = name.strip()
+        if not ok or not name:
+            return
+        path = C.look_path(v, name)
+        if os.path.exists(path) and QMessageBox.question(self, "Myrmex", f"Replace the look '{name}'?") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        self._blender_send(p, {"cmd": "save_look", "path": path, "kind": v})
+        self.log(f"saving the look '{name}'…")
+
+    def _delete_look(self) -> None:
+        path, name = self.cmb_look.currentData() or "", self.cmb_look.currentText()
+        if not path:
+            return
+        if QMessageBox.question(self, "Myrmex", f"Delete the look '{name}'?\n{path}") != QMessageBox.StandardButton.Yes:
+            return
+        try:
             os.remove(path)
-            self.log(f"saved look removed: {path}")
-            self._show_looks()
+        except OSError as e:
+            self.log(f"! could not delete the look: {e}")
+            return
+        v = C.variant_of(self.cmb_backend.currentData())
+        if self.s.looks.get(v) == path:
+            self.s.looks[v] = ""
+            self.s.save()
+        self.log(f"look deleted: {name}")
+        self._fill_looks()
+
+    def _on_blender_reply(self, p: QProcess, d: dict) -> None:
+        cmd = d.get("cmd")
+        if cmd == "hello":
+            p.setProperty("myrmex_control", True)
+            return
+        if not d.get("ok"):
+            self.log(f"! Blender: {d.get('error', 'failed')}")
+            return
+        name = os.path.splitext(os.path.basename(d.get("path") or ""))[0]
+        kind = d.get("kind", "")
+        if cmd == "save_look":
+            if kind == "humanoid":
+                self.log(f"look saved in the character: {d.get('path')}")
+                return
+            if name == kind:
+                name = C.LOOK_DEFAULT_NAME
+            self.s.looks[kind] = d.get("path", "")
+            self.s.save()
+            self.log(f"look saved: {name} ({d.get('path')})")
+        elif cmd == "load_look":
+            what = name if d.get("path") else "the default studio"
+            if name == kind:
+                what = C.LOOK_DEFAULT_NAME
+            self.log(f"Blender shows the look '{what}' now" + (" (the take was reloaded in it)" if d.get("take") else "")
+                     + (" · what was on screen is kept as 'Autosave'" if d.get("autosaved") else ""))
+        if C.variant_of(self.cmb_backend.currentData() or "") == kind:
+            self._fill_looks()
 
     def _install_rs(self) -> None:
         try:
@@ -759,9 +883,10 @@ class MainWindow(QMainWindow):
         if not self.engine.running:
             self.start_engine()
         cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend,
-                                          self.s.keep_blender_settings)
-        if C.look_file(self.s.backend):
-            self.log(f"using your saved look: {C.look_file(self.s.backend)}")
+                                          self.s.keep_blender_settings, self.s.looks)
+        look = C.look_file(self.s.backend, self.s.looks) if self.s.backend in C.CREATURE_BACKENDS else ""
+        if look:
+            self.log(f"using your saved look: {look}")
         p = QProcess(self)
         qenv = QProcessEnvironment.systemEnvironment()
         for k, val in env.items():
@@ -770,6 +895,7 @@ class MainWindow(QMainWindow):
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         p.readyReadStandardOutput.connect(lambda: self._pipe(p, "blender"))
         p.finished.connect(lambda *_: self.log("Blender closed"))
+        p.setProperty("myrmex_variant", C.variant_of(self.s.backend))
         p.start(cmd[0], cmd[1:])
         self.blender_proc = p
         self.log(f"opening {os.path.basename(self.s.character)} in Blender (live link on port {self.s.pose_port})")
@@ -788,8 +914,14 @@ class MainWindow(QMainWindow):
         if not take:
             return
         cmd = C.take_command(blender, take, self.s.character, self.s.take_audio, render, self.s.render_size,
-                             self.s.render_quality, self.s.keep_blender_settings)
+                             self.s.render_quality, self.s.keep_blender_settings, self.s.looks)
         p = QProcess(self)
+        if not render:                                     # the app can save / load looks in this Blender
+            qenv = QProcessEnvironment.systemEnvironment()
+            qenv.insert("MYRMEX_CONTROL", "stdin")
+            qenv.insert("MYRMEX_LOOKS", C.looks_dir())
+            p.setProcessEnvironment(qenv)
+            p.setProperty("myrmex_variant", C.take_variant(take) or "humanoid")
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         p.readyReadStandardOutput.connect(lambda: self._pipe(p, "render", ("Myrmex", "rror")) if render
                                           else self._pipe(p, "blender"))
@@ -835,10 +967,19 @@ class MainWindow(QMainWindow):
             self.log(f"! prepare failed (exit {code})")
 
     def _pipe(self, p: QProcess, tag: str, only=None) -> None:
-        data = bytes(p.readAllStandardOutput()).decode("utf-8", "replace")
-        for line in data.splitlines():
-            if line.strip() and (only is None or any(o in line for o in only)):
-                self.log(f"[{tag}] {line.strip()}")
+        data = (p.property("myrmex_buf") or "") + bytes(p.readAllStandardOutput()).decode("utf-8", "replace")
+        lines = data.split("\n")
+        p.setProperty("myrmex_buf", lines.pop())             # a line still arriving
+        for line in lines:
+            line = line.strip()
+            if line.startswith("MYRMEX_REPLY "):                # an answer to Save / load look
+                try:
+                    self._on_blender_reply(p, json.loads(line[len("MYRMEX_REPLY "):]))
+                except ValueError:
+                    pass
+                continue
+            if line and (only is None or any(o in line for o in only)):
+                self.log(f"[{tag}] {line}")
 
     # ------------------------------------------------------------------ status
     def _refresh(self) -> None:

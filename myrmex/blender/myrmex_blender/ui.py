@@ -163,7 +163,7 @@ class MYRMEX_OT_save_look(bpy.types.Operator):
 class MYRMEX_OT_forget_look(bpy.types.Operator):
     bl_idname = "myrmex.forget_look"
     bl_label = "Forget Saved Look"
-    bl_description = "Delete the saved look of this creature: the next session starts from the default studio"
+    bl_description = "Delete the look this Blender has open from the saved looks"
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -171,7 +171,9 @@ class MYRMEX_OT_forget_look(bpy.types.Operator):
     def execute(self, context):
         from . import looks
         kind = looks.look_kind(context.scene)
-        self.report({"INFO"}, f"Saved look removed ({kind})" if looks.forget_look(kind) else "No saved look")
+        cur = looks.current_look(kind)
+        self.report({"INFO"}, f"Saved look removed ({kind})" if cur and looks.forget_look(kind, cur) else
+                    "This scene is not a saved look")
         return {"FINISHED"}
 
 
@@ -409,9 +411,13 @@ class MYRMEX_PT_live(bpy.types.Panel):
         row = box.row(align=True)
         row.operator("myrmex.save_look", icon="FILE_TICK")
         if kind in looks.CREATURES:
-            row.operator("myrmex.forget_look", icon="X", text="")
-            if os.path.exists(looks.look_path(kind)):
-                box.label(text="saved: " + looks.look_path(kind).replace(os.path.expanduser("~"), "~"), icon="CHECKMARK")
+            cur = looks.current_look(kind)
+            if cur:
+                row.operator("myrmex.forget_look", icon="X", text="")
+                name = next((n for n, p in looks.list_looks(kind) if os.path.abspath(p) == cur), "")
+                box.label(text=f"editing: {name}", icon="CHECKMARK")
+            n = len(looks.list_looks(kind))
+            box.label(text=f"{n} saved look{'s' if n != 1 else ''} · choose / save them in the Myrmex app", icon="INFO")
         box.prop(s, "keep_settings")
         box = L.box()
         box.label(text="Takes → video", icon="RENDER_ANIMATION")

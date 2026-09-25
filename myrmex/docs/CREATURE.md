@@ -194,10 +194,17 @@ light: *Emission Color*, strength = light x pulses) and `MyrmexCyberMote` - chan
 
 # Your look in Blender (saved between sessions)
 
-Tune materials, lights, world, colour management and render settings, then *Myrmex panel → Save Look*.
-Humanoid: saved in the character's .blend (next to its rig.json).  Organisms: `~/Myrmex/looks/<type>.blend`
-- the app opens it for live sessions and for take renders instead of building the default studio
-(*Character → Your look in Blender* shows which looks exist, *Forget saved look* deletes one).
+*Open in Blender* from the app, tune materials, lights, world, colour management and render settings there,
+then in the app: **Character → Look → Save current look…** (give it a name).  Every organism keeps its own
+list of looks in `~/Myrmex/looks/<type>/<name>.blend` (the older single `~/Myrmex/looks/<type>.blend` is
+listed as *My look*).  Choosing a look in the list loads it into the running Blender at once - no restart,
+the live stream goes on, an open take is re-imported into it - and what Blender showed before is kept as
+*Autosave*.  The chosen look is also what *Open in Blender* and take renders open; *Default studio*
+builds the scene from scratch; *Delete* removes a look.  A look is saved without the take that happens to
+be open (its keyframes, shot cameras, markers and song stay out of it).
+The Myrmex panel in Blender (N sidebar) still has *Save Look* (updates the look being edited, or *My
+look*).  Humanoid: saved in the character's .blend (next to its rig.json).  The app talks to the Blender it
+opened through that Blender's standard input / output (`blender/myrmex_blender/control.py`).
 **Keep my Blender settings** (on by default): Myrmex no longer changes EEVEE / colour / shadows / samples,
 neither when going live nor in *Render Video* (which then only sets size, frame rate and the output file).
 Ctrl+Z, redo or opening another file while live no longer stops the stream: the link finds its objects
