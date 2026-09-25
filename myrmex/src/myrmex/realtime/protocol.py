@@ -36,6 +36,45 @@ _HDR = struct.Struct("<4sBBHIddfI")
 _CAM = struct.Struct("<3f3ffffHH")
 _SUBJ = struct.Struct("<3ffff")
 
+# Large frames (creatures with many nodes, particle swarms) are cut into fragments: macOS refuses UDP
+# datagrams above net.inet.udp.maxdgram (9216 bytes by default) - a bigger frame would silently vanish.
+FRAG_MAGIC = b"MYRK"
+_FRAG = struct.Struct("<4sBBHHI")          # magic, version, pad, index, count, message id
+MAX_DGRAM = 8192
+
+
+def fragment(data: bytes, msg_id: int, max_size: int = MAX_DGRAM) -> list[bytes]:
+    if len(data) <= max_size:
+        return [data]
+    step = max_size - _FRAG.size
+    parts = [data[i:i + step] for i in range(0, len(data), step)]
+    return [_FRAG.pack(FRAG_MAGIC, 1, 0, k, len(parts), msg_id & 0xFFFFFFFF) + p for k, p in enumerate(parts)]
+
+
+class Reassembler:
+    """Receiver side of :func:`fragment`: whole packets pass through, fragments are joined."""
+
+    def __init__(self):
+        self.msg: int | None = None
+        self.parts: dict[int, bytes] = {}
+        self.count = 0
+
+    def feed(self, data: bytes) -> bytes | None:
+        if data[:4] != FRAG_MAGIC:
+            return data
+        if len(data) < _FRAG.size:
+            return None
+        _, _ver, _, idx, count, mid = _FRAG.unpack_from(data, 0)
+        if mid != self.msg:                   # a newer frame started: an unfinished older one is dropped
+            self.msg, self.parts, self.count = mid, {}, count
+        self.parts[idx] = data[_FRAG.size:]
+        if len(self.parts) < self.count:
+            return None
+        out = b"".join(self.parts[i] for i in range(self.count) if i in self.parts)
+        self.msg, self.parts = None, {}
+        return out
+
+
 SHOT_KINDS = ("front_dolly", "front_low", "side_track", "three_quarter", "rear_follow", "feet_close",
               "hips_close", "face_close", "wide_orbit", "free",
               # aerial camera (Mimetic Polyalloy)

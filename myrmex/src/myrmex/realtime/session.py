@@ -32,7 +32,7 @@ from ..performance.performance import Recorder
 from ..rig.rigdesc import RigDescription
 from .clock import ClockHub, ClockState
 from .inputs import InputConfig, InputHub
-from .protocol import (FLAG_HOLD, FLAG_PLAYING, FLAG_RECORDING, PoseFrame, encode_names, encode_pose,
+from .protocol import (FLAG_HOLD, FLAG_PLAYING, FLAG_RECORDING, PoseFrame, encode_names, encode_pose, fragment,
                        rig_id)
 
 
@@ -68,6 +68,9 @@ class PoseSink:
         self.names_packet = encode_names(names)
         self.last_names = -1e9
         self.sent = 0
+        self.msg_id = 0
+        self.last_error = ""
+        self.errors = 0
 
     def send(self, fr: PoseFrame, now: float) -> None:
         data = encode_pose(fr)
@@ -80,15 +83,21 @@ class PoseSink:
         self.sent += 1
 
     def send_raw(self, data: bytes) -> None:
+        self.msg_id += 1
+        parts = fragment(data, self.msg_id)
         for a in self.addrs:
-            self._tx(data, a)
+            for part in parts:
+                self._tx(part, a)
         self.sent += 1
 
     def _tx(self, data: bytes, addr) -> None:
         try:
             self.sock.sendto(data, addr)
-        except OSError:
+        except ConnectionRefusedError:
             pass                          # receiver not up yet - keep going
+        except OSError as e:              # anything else (e.g. a datagram too large) is reported
+            self.errors += 1
+            self.last_error = f"{type(e).__name__}: {e}"
 
     def close(self) -> None:
         self.sock.close()
@@ -99,7 +108,7 @@ class LiveSession:
                  sink: PoseSink | None = None, now: float | None = None):
         self.cfg = cfg
         self.creature = None
-        if cfg.backend in ("creature", "polyalloy", "colony"):
+        if cfg.backend in ("creature", "polyalloy", "colony", "hive"):
             from ..creature.backend import CreatureBackend
             from ..creature.config import CreatureConfig
             if cfg.backend == "polyalloy":
@@ -109,6 +118,9 @@ class LiveSession:
             elif cfg.backend == "colony":
                 from ..creature.colony import ColonyConfig
                 self.creature = CreatureBackend(ColonyConfig(seed=cfg.seed), record=bool(cfg.record), variant="colony")
+            elif cfg.backend == "hive":
+                from ..creature.hive import HiveConfig
+                self.creature = CreatureBackend(HiveConfig(seed=cfg.seed), record=bool(cfg.record), variant="hive")
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
                 self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
@@ -134,7 +146,7 @@ class LiveSession:
         self.t0 = now
         self.clock = ClockHub(cfg.clock, cfg.bpm, link=cfg.link, now=now)
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
-        if cfg.camera and cfg.backend in ("polyalloy", "colony"):
+        if cfg.camera and cfg.backend in ("polyalloy", "colony", "hive"):
             from ..camera.aerial import AerialCinematographer
             self.camera = AerialCinematographer(self.creature.engine.cfg.size, cfg.seed)
         else:
@@ -213,7 +225,8 @@ class LiveSession:
     CONTROL_NOTES = {60: "pose", 62: "flourish", 64: "camera", 65: "pose:look_back", 67: "flourish:hair_touch",
                      69: "flourish:hand_hip", 71: "flourish:shoulder_roll"}
     HOLD_NOTE = 72
-    AERIAL_SUGGEST = {"SPLIT": "retreat", "ENVELOP": "approach", "PERCH": "track", "MERGE": "observe"}
+    AERIAL_SUGGEST = {"SPLIT": "retreat", "ENVELOP": "approach", "PERCH": "track", "MERGE": "observe",
+                      "BUILD": "orbit", "RECALL": "retreat"}
 
     def _control_notes(self, notes, t: float) -> None:
         if self.creature is not None:
@@ -244,7 +257,7 @@ class LiveSession:
         from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
         cfg = self.cfg
         s = self.creature.tick(t, dt, notes, st)
-        aerial = self.creature.variant in ("polyalloy", "colony")
+        aerial = self.creature.variant in ("polyalloy", "colony", "hive")
         if aerial and self.camera is not None:
             for _, name, _a in self.creature.fresh:
                 if name in ("IMPULSE", "PRESSURE", "TURBULENCE"):
@@ -419,7 +432,8 @@ class LiveSession:
             "osc_packets": self.inputs.stats["osc_packets"], "sent": self.sink.sent if self.sink else 0,
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),
             "max_tick_ms": round(self.stats["max_tick_ms"], 2), "overruns": self.stats["overruns"],
-            "errors": self.inputs.stats["errors"] + ([self.clock.link_error] if self.clock.link_error else []),
+            "errors": self.inputs.stats["errors"] + ([self.clock.link_error] if self.clock.link_error else []) +
+                      ([f"pose stream: {self.sink.last_error}"] if getattr(self.sink, "last_error", "") else []),
         }
 
 

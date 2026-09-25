@@ -34,7 +34,7 @@ from .polyalloy import MATERIAL, Obstacle, PolyalloyState, _knn_edges, attractor
 SHAPES = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN", "LEGS",
           "ENVELOP")
 INTENTS = ("CRUISE", "HOVER", "EXPLORE", "DISPLAY", "EVADE", "REFORM", "HUNT", "ENVELOP", "PERCH", "FORMATION",
-           "MERGE")
+           "MERGE", "PATROL", "STRUCTURE")
 PLAN = {   # preferred shapes, material state, cruise factor
     "CRUISE": (("SPINDLE", "WINGS", "TENDRILS", "LATTICE"), "ELASTIC", 1.0),
     "HOVER": (("CORE", "RING", "CROWN", "CLOUD"), "COHESIVE", 0.12),
@@ -47,6 +47,8 @@ PLAN = {   # preferred shapes, material state, cruise factor
     "PERCH": (("LEGS",), "ELASTIC", 0.25),
     "FORMATION": (("SPINDLE", "WINGS", "BLADES", "TENDRILS"), "ELASTIC", 1.0),
     "MERGE": (("CORE", "CLOUD"), "FLUID", 1.3),
+    "PATROL": (("SPINDLE", "WINGS", "TENDRILS"), "ELASTIC", 1.1),       # v4: around / through its structures
+    "STRUCTURE": (("CORE",), "HIGH_STIFFNESS", 0.0),
 }
 EVENTS = ("MORPHOLOGY_SHIFT", "MASS_REBALANCE", "APPENDAGE_BURST", "COLLAPSE", "RECONSTRUCTION", "IMPULSE",
           "OBSTACLE", "PRESSURE", "TURBULENCE", "SPLIT", "MERGE", "WAVE", "HUNT", "PERCH")
@@ -239,6 +241,16 @@ class ColonyEngine:
     def _alive(self) -> list[int]:
         return [k for k, b in enumerate(self.bodies) if b.alive]
 
+    def _physics_bodies(self) -> list[int]:
+        """Bodies that get a step (subclasses add static structures)."""
+        return self._alive()
+
+    def _is_static(self, k: int) -> bool:
+        return False
+
+    def _post_targets(self, T: np.ndarray, dt: float) -> np.ndarray:
+        return T
+
     def _set_intent(self, b: Body, intent: str, shape: str | None = None) -> None:
         prefs, mstate, _ = PLAN[intent]
         b.intent, b.intent_t = intent, 0.0
@@ -259,7 +271,7 @@ class ColonyEngine:
     def _rebuild(self) -> None:
         """Re-form the elastic network inside every body (recombination)."""
         pairs, rests = [], []
-        for k in self._alive():
+        for k in self._physics_bodies():
             idx = np.nonzero(self.own == k)[0]
             if len(idx) < 3:
                 continue
@@ -608,6 +620,24 @@ class ColonyEngine:
         lo, hi = cfg.altitude
         alt_goal = lo + (hi - lo) * pr["altitude"]
         b.wander = b.wander * math.exp(-dt * 0.3) + self.nrng.standard_normal() * math.sqrt(dt) * (0.4 + pr["noise"])
+        v_des = self._v_des(k, b, lead, dt, pr, sb, base, alt_goal)
+        if b.intent != "PERCH":
+            v_des[2] += max(0.0, 1.0 - b.P[2]) * 2.0
+        a_des = (v_des - b.vel) / 0.8 + np.array([0.0, 0.0, G])
+        I = float(((xb - b.P) ** 2).sum(1).mean()) / max(sb * sb, 1e-6)
+        sp = float(np.linalg.norm(b.vel[:2]))
+        if sp > 0.3:
+            dy = (math.atan2(b.vel[1], b.vel[0]) - b.heading + math.pi) % (2 * math.pi) - math.pi
+            b.yaw_rate += dt * (3.0 * dy - 2.2 * b.yaw_rate) / (0.3 + 3.0 * I)
+        b.heading += dt * b.yaw_rate
+        pitch_goal = 0.0 if b.intent in ("PERCH", "ENVELOP") else math.atan2(b.vel[2], max(sp, 0.5)) * 0.6
+        b.pitch += (pitch_goal - b.pitch) * min(1.0, dt * 2.0)
+        return a_des, sb
+
+    def _v_des(self, k: int, b: Body, lead: Body, dt: float, pr: dict, sb: float, base: float,
+               alt_goal: float) -> np.ndarray:
+        """Where this body wants to go (by its intent)."""
+        cfg = self.cfg
         L = self.lure
         if b.intent == "FORMATION" and k > 0:
             goal = lead.P + lead.R() @ b.slot
@@ -638,18 +668,7 @@ class ColonyEngine:
             else:
                 vz = float(np.clip((alt_goal - b.P[2]) * 0.8 + 0.3 * math.sin(0.4 * self.t + k), -1.5, 1.5))
             v_des = np.array([math.cos(want) * cruise, math.sin(want) * cruise, vz])
-        if b.intent != "PERCH":
-            v_des[2] += max(0.0, 1.0 - b.P[2]) * 2.0
-        a_des = (v_des - b.vel) / 0.8 + np.array([0.0, 0.0, G])
-        I = float(((xb - b.P) ** 2).sum(1).mean()) / max(sb * sb, 1e-6)
-        sp = float(np.linalg.norm(b.vel[:2]))
-        if sp > 0.3:
-            dy = (math.atan2(b.vel[1], b.vel[0]) - b.heading + math.pi) % (2 * math.pi) - math.pi
-            b.yaw_rate += dt * (3.0 * dy - 2.2 * b.yaw_rate) / (0.3 + 3.0 * I)
-        b.heading += dt * b.yaw_rate
-        pitch_goal = 0.0 if b.intent in ("PERCH", "ENVELOP") else math.atan2(b.vel[2], max(sp, 0.5)) * 0.6
-        b.pitch += (pitch_goal - b.pitch) * min(1.0, dt * 2.0)
-        return a_des, sb
+        return v_des
 
     def _targets(self, k: int, idx: np.ndarray, sb: float, ph: dict) -> np.ndarray:
         pr, b = self.params, self.bodies[k]
@@ -737,12 +756,17 @@ class ColonyEngine:
         vcom = np.empty_like(x)
         goal = np.empty((n, 6))
         tau_m = 0.8 + 3.0 * pr["rigidity"] * (1.2 - pr["fluidity"])
-        for k in self._alive():
+        for k in self._physics_bodies():
             idx = np.nonzero(self.own == k)[0]
             if len(idx) == 0:
                 self.bodies[k].alive = False
                 continue
             b = self.bodies[k]
+            if self._is_static(k):                          # structures hold their place and shape
+                ad, tgt = self._static_step(k, idx, dt)
+                a_des[idx], vcom[idx], T[idx], goal[idx] = ad, b.vel, tgt, b.mat
+                b.mat += (b.mat_goal - b.mat) * min(1.0, dt / 0.6)
+                continue
             noise = self.nrng.standard_normal(len(SHAPES)) * pr["mutation"] * 0.6 * math.sqrt(dt)
             noise[_SITUATIONAL] = 0.0
             b.z += (b.z_goal - b.z) * min(1.0, dt / tau_m) + noise
@@ -752,6 +776,7 @@ class ColonyEngine:
             vcom[idx] = b.vel
             T[idx] = self._targets(k, idx, sb, ph)
             goal[idx] = b.mat
+        T = self._post_targets(T, dt)
         # Per-node material field: relax to the body's state, diffuse along the network, waves, hits.
         m = self.m
         m += (goal - m) * min(1.0, dt / 0.35)

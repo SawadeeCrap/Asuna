@@ -19,6 +19,7 @@ DEBUG = "CreatureDebug"
 MAT = "MyrmexNanomaterial"
 POLY_MAT = "MyrmexPolyalloy"
 PLATES = "ColonyPlates"
+SWARM = "HiveSwarm"
 LURE = "ColonyPrey"
 LATTICE = "PolyLattice"
 MICRO = "PolyMicro"
@@ -196,6 +197,38 @@ def micro_nodes(body: bpy.types.Object, density: float = 2500.0) -> bpy.types.No
     return ng
 
 
+def swarm_nodes() -> bpy.types.NodeTree:
+    """Loose points -> tiny hexagonal machine plates, randomly turned and sized (the nanomachine swarm)."""
+    ng = bpy.data.node_groups.get("MyrmexNanoSwarm")
+    if ng is not None:
+        return ng
+    ng = bpy.data.node_groups.new("MyrmexNanoSwarm", "GeometryNodeTree")
+    ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gi, go = _node(ng, "NodeGroupInput", (-600, 0)), _node(ng, "NodeGroupOutput", (500, 0))
+    cyl = _node(ng, "GeometryNodeMeshCylinder", (-600, -250))
+    cyl.inputs["Vertices"].default_value = 6
+    cyl.inputs["Radius"].default_value = 0.012
+    cyl.inputs["Depth"].default_value = 0.003
+    sm = _node(ng, "GeometryNodeSetMaterial", (-350, -250))
+    sm.inputs["Material"].default_value = _simple_material("MyrmexMicroPlate", (0.02, 0.02, 0.022), 1.0, 0.22, 0.4)
+    ng.links.new(cyl.outputs["Mesh"], sm.inputs["Geometry"])
+    rot = _node(ng, "FunctionNodeRandomValue", (-350, -450))
+    rot.data_type = "FLOAT_VECTOR"
+    rot.inputs["Max"].default_value = (6.2832, 6.2832, 6.2832)
+    size = _node(ng, "FunctionNodeRandomValue", (-350, -650))
+    size.data_type = "FLOAT"
+    size.inputs["Min"].default_value = 0.6
+    size.inputs["Max"].default_value = 1.4
+    iop = _node(ng, "GeometryNodeInstanceOnPoints", (100, 0))
+    ng.links.new(gi.outputs[0], iop.inputs["Points"])
+    ng.links.new(sm.outputs["Geometry"], iop.inputs["Instance"])
+    ng.links.new(rot.outputs["Value"], iop.inputs["Rotation"])
+    ng.links.new(size.outputs["Value"], iop.inputs["Scale"])
+    ng.links.new(iop.outputs["Instances"], go.inputs[0])
+    return ng
+
+
 def dark_studio(scene: bpy.types.Scene) -> None:
     """Dark environment, one large soft source, two rim lights, glossy black floor (all follow the creature)."""
     world = scene.world or bpy.data.worlds.new("MyrmexCreatureWorld")
@@ -265,7 +298,7 @@ class CreatureView:
         self.t0 = None
         self.poly = False
         self.lattice = self.micro = None
-        self.plates = self.lure = None
+        self.plates = self.lure = self.swarm = None
         self.obstacles: list = []
 
     def make_polyalloy(self, n_links: int, n_obstacles: int = 4) -> None:
@@ -400,6 +433,29 @@ class CreatureView:
             out[:, 1 + j] = c + (math.cos(a) * e1 + math.sin(a) * e2) * h
         return out.reshape(-1, 3)
 
+    def make_hive(self, n_particles: int) -> None:
+        """Fourth organism: the nanomachine swarm (points instanced as tiny plates)."""
+        ob = bpy.data.objects.get(SWARM)
+        if ob is None or len(ob.data.vertices) != n_particles:
+            me = bpy.data.meshes.new(SWARM)
+            me.from_pydata([(0.0, 0.0, 0.0)] * n_particles, [], [])
+            if ob is None:
+                ob = bpy.data.objects.new(SWARM, me)
+                self.coll.objects.link(ob)
+            else:
+                ob.data = me
+        if "Swarm" not in ob.modifiers:
+            ob.modifiers.new("Swarm", "NODES").node_group = swarm_nodes()
+        self.swarm = ob
+
+    def _apply_hive(self, fr) -> None:
+        n = len(fr.particles)
+        if getattr(self, "swarm", None) is None or len(self.swarm.data.vertices) != n:
+            self.make_hive(n)
+        me = self.swarm.data
+        me.vertices.foreach_set("co", np.asarray(fr.particles, np.float32).ravel())
+        me.update()
+
     def _apply_colony(self, fr) -> None:
         n = len(fr.pos)
         if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != 7 * n:
@@ -452,6 +508,8 @@ class CreatureView:
             self._apply_poly(fr)
         if getattr(fr, "plate", None) is not None:
             self._apply_colony(fr)
+        if getattr(fr, "particles", None) is not None:
+            self._apply_hive(fr)
         els = self.mb.elements
         for i, e in enumerate(els):
             r = float(fr.radius[i])
@@ -486,10 +544,12 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
                 bpy.data.objects.remove(ob, do_unlink=True)
     scene["myrmex_variant"] = variant
     view = CreatureView(scene)
-    if variant in ("polyalloy", "colony"):
-        view.make_polyalloy(640 if variant == "colony" else 480, 4)
-    if variant == "colony":
+    if variant in ("polyalloy", "colony", "hive"):
+        view.make_polyalloy(480 if variant == "polyalloy" else 640, 4)
+    if variant in ("colony", "hive"):
         view.make_colony(128)
+    if variant == "hive":
+        view.make_hive(1536)
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)
     return view

@@ -1,6 +1,6 @@
 """Saved looks: your materials, lights, world, colour management and render settings, kept between sessions.
 
-* Creatures (Black Nanomaterial / Mimetic Polyalloy / Polyalloy Colony): the scene is saved as
+* Organisms (Black Nanomaterial / Mimetic Polyalloy / Polyalloy Colony / Polyalloy Hive): the scene is saved as
   ``~/Myrmex/looks/<variant>.blend``; the Myrmex app opens it for live work and for take renders
   instead of building the default studio.
 * Humanoid: the look lives in the character's own .blend (saved in place, next to its rig.json).
@@ -11,7 +11,7 @@ import os
 
 import bpy
 
-CREATURES = ("nanomaterial", "polyalloy", "colony")
+CREATURES = ("nanomaterial", "polyalloy", "colony", "hive")
 
 
 def looks_dir() -> str:
@@ -24,6 +24,8 @@ def look_kind(scene: bpy.types.Scene | None = None) -> str:
     if v in CREATURES:
         return v
     if bpy.data.objects.get("CreatureBody") is not None:
+        if bpy.data.objects.get("HiveSwarm") is not None:
+            return "hive"
         if bpy.data.objects.get("ColonyPlates") is not None:
             return "colony"
         return "polyalloy" if bpy.data.objects.get("PolyLattice") is not None else "nanomaterial"

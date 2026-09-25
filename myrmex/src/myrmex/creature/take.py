@@ -78,6 +78,12 @@ class CreatureTake:
         T = np.stack([R["cam_tx"], R["cam_ty"], R["cam_tz"]], 1)
         return CameraTrack(fps, P, T, R["cam_lens"], R["cam_focus"], R["cam_fstop"], shots)
 
+    def particles(self, fps: float) -> np.ndarray | None:
+        """Hive nanomachines (frames, P, 3) in metres."""
+        if "particles" not in self.d:
+            return None
+        return self.resampled("particles", fps) / 1000.0 + self.resampled("com", fps)[:, None, :]
+
     def audio_offset(self) -> float | None:
         """Song time (s) at the first frame of the take (negative: the song started later)."""
         d = self.d

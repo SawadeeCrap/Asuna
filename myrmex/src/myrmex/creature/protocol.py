@@ -6,6 +6,9 @@
     [FLAG_POLY: <B material> <B fragments> <H links> <H obstacles> <H pad> dispersion n*f,
                 links L*(2H + f strength), obstacles O*4f (x y z radius)]
     [FLAG_COLONY: <B bodies> <B> <H> <4f prey>, plate n*f, normal n*3f, owner n*B]
+    [FLAG_HIVE: <H particles> <B structures> <B memories> <3f origin>, particles P*3h (mm from origin),
+                pattern n*B]
+Frames above 8 KB travel in fragments (realtime.protocol.fragment).
 """
 from __future__ import annotations
 
@@ -25,9 +28,10 @@ MATERIAL_NAMES = tuple(MATERIAL)
 
 MAGIC = b"MYRC"
 VERSION = 1
-FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY = 1, 4, 16, 32, 64
+FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY, FLAG_HIVE = 1, 4, 16, 32, 64, 128
 _POLY = struct.Struct("<BBHHH")
 _COL = struct.Struct("<BBH4f")          # bodies, pad, pad, prey x y z radius
+_HIVE = struct.Struct("<HBB3f")         # particles, structures, memories, origin
 _LINK = np.dtype([("i", "<u2"), ("j", "<u2"), ("s", "<f4")])
 _HDR = struct.Struct("<4sBBHIddfBBHffff3ff")
 MORPH_NAMES = tuple(dict.fromkeys(tuple(MORPHS) + ATTRACTORS + COLONY_SHAPES))
@@ -65,13 +69,19 @@ class CreatureFrame:
     owner: np.ndarray | None = None          # colony: body index per node
     bodies: int = 1
     lure: np.ndarray | None = None           # colony: prey x, y, z, radius
+    particles: np.ndarray | None = None      # hive: nanomachines (P, 3)
+    rd: np.ndarray | None = None             # hive: reaction-diffusion activator per node
+    structures: int = 0
+    memories: int = 0
 
 
 def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camera: CameraState | None = None) -> bytes:
     n = len(st.pos)
     poly = getattr(st, "links", None) is not None
     colony = poly and getattr(st, "plate", None) is not None
-    fl = flags | (FLAG_CAMERA if camera is not None else 0) | (FLAG_POLY if poly else 0) | (FLAG_COLONY if colony else 0)
+    hive = colony and getattr(st, "particles", None) is not None
+    fl = flags | (FLAG_CAMERA if camera is not None else 0) | (FLAG_POLY if poly else 0) | \
+        (FLAG_COLONY if colony else 0) | (FLAG_HIVE if hive else 0)
     out = [_HDR.pack(MAGIC, VERSION, fl, n, seq & 0xFFFFFFFF, st.t, beat, bpm,
                      BEHAVIOR_NAMES.index(st.behavior) if st.behavior in BEHAVIOR_NAMES else 0,
                      MORPH_NAMES.index(st.morphology) if st.morphology in MORPH_NAMES else 0, 0, st.surface, st.glow,
@@ -98,6 +108,11 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
         out.append(_COL.pack(min(255, int(st.bodies)), 0, 0, *map(float, st.lure)))
         out += [np.ascontiguousarray(st.plate, "<f4").tobytes(), np.ascontiguousarray(st.nrm, "<f4").tobytes(),
                 np.ascontiguousarray(st.owner, "u1").tobytes()]
+    if hive:
+        origin = np.asarray(st.com, float)
+        q = np.clip(np.round((st.particles - origin) * 1000.0), -32767, 32767).astype("<i2")
+        out.append(_HIVE.pack(len(q), min(255, int(st.structures)), min(255, int(st.memories)), *map(float, origin)))
+        out += [q.tobytes(), np.clip(np.asarray(st.rd) * 255.0, 0, 255).astype("u1").tobytes()]
     return b"".join(out)
 
 
@@ -149,4 +164,15 @@ def decode_creature(data: bytes) -> CreatureFrame | None:
             except ValueError:
                 return fr
             fr.bodies, fr.lure = c[0], np.array(c[3:7])
+            if flags & FLAG_HIVE and len(data) >= off + _HIVE.size:
+                hv = _HIVE.unpack_from(data, off)
+                off += _HIVE.size
+                try:
+                    q = np.frombuffer(data, "<i2", count=3 * hv[0], offset=off).reshape(-1, 3)
+                    off += q.nbytes
+                    fr.particles = np.array(hv[3:6]) + q.astype(float) / 1000.0
+                    fr.rd = take("u1", n).astype(float) / 255.0
+                except ValueError:
+                    return fr
+                fr.structures, fr.memories = hv[1], hv[2]
     return fr

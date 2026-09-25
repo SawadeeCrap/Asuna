@@ -23,7 +23,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from myrmex.realtime.protocol import decode_names, decode_pose
+from myrmex.realtime.protocol import Reassembler, decode_names, decode_pose
 
 LIVE_CAMERA = "MyrmexLiveCam"
 _ACTIVE: dict = {"link": None}
@@ -113,6 +113,7 @@ class LiveLink:
         self.stats = {"packets": 0, "applied": 0, "fps": 0.0, "age_ms": 0.0, "dropped": 0, "error": ""}
         self._fps_t, self._fps_n = time.perf_counter(), 0
         self._last_seq = None
+        self.reasm = Reassembler()                 # big frames arrive in fragments
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -210,6 +211,9 @@ class LiveLink:
                 break
             except OSError:
                 break
+            data = self.reasm.feed(data)
+            if data is None:
+                continue
             if data[:4] == b"MYRC":
                 creature = data
                 self.stats["packets"] += 1
@@ -322,13 +326,13 @@ class LiveLink:
 
 def _clear_take_animation() -> None:
     """An imported take (keyframes, strut cache) would fight the live stream: switch it off."""
-    from .creature import LATTICE, LURE, META, OBSTACLE, PLATES
+    from .creature import LATTICE, LURE, META, OBSTACLE, PLATES, SWARM
     mb = bpy.data.metaballs.get(META)
     for idb in [mb, mb.materials[0].node_tree if mb is not None and mb.materials and mb.materials[0] else None,
                 bpy.data.objects.get(LURE)] + [o for o in bpy.data.objects if o.name.startswith(OBSTACLE)]:
         if idb is not None and idb.animation_data is not None and idb.animation_data.action is not None:
             idb.animation_data.action = None
-    for name in (LATTICE, PLATES):
+    for name in (LATTICE, PLATES, SWARM):
         ob = bpy.data.objects.get(name)
         if ob is not None and "TakeCache" in ob.modifiers:
             ob.modifiers.remove(ob.modifiers["TakeCache"])

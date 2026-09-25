@@ -411,6 +411,7 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Black Nanomaterial Creature (procedural organism)", "creature")
         self.cmb_backend.addItem("Mimetic Polyalloy (flying, self-reconfiguring material)", "polyalloy")
         self.cmb_backend.addItem("Polyalloy Colony (flock, armour, mechanisms, prey)", "colony")
+        self.cmb_backend.addItem("Polyalloy Hive (nanomachine swarm, builds, patterns, remembers)", "hive")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         row = QHBoxLayout()
@@ -662,7 +663,7 @@ class MainWindow(QMainWindow):
         self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
 
     def _show_looks(self) -> None:
-        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony"}
+        names = {"creature": "Nanomaterial", "polyalloy": "Polyalloy", "colony": "Colony", "hive": "Hive"}
         parts = [f"{label} {'✓' if C.look_file(b) else '–'}" for b, label in names.items()]
         self.lbl_looks.setText("   ".join(parts))
 

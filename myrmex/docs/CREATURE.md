@@ -118,6 +118,27 @@ The same finite polyalloy, 128 nodes, now able to act as several bodies and to b
 
 Control notes (in addition to v2): 77 split · 79 merge · 81 hardening wave · 83 hunt · 84 perch.
 
+# Polyalloy Hive (backend `hive`, creature v4)
+
+A two-scale material: everything the Colony does, plus a real micro layer and a memory.
+
+* **Nanomachine swarm** (knob *nanoswarm*): 1536 micro-machines ride on the structural nodes and circulate over
+  the surface.  Where the material loosens, is hit or scattered they come off and fly as smoke-like streams in
+  a swirling flow, then match the body's speed, home back and re-attach.  Calm music: ~15 % in the air;
+  a drop: over half.  While the colony is split, couriers stream between the bodies - living bridges.
+* **Emergent morphogenesis** (knob *pattern*): a Gray-Scott reaction-diffusion system runs on the elastic
+  network; activator peaks push the surface out into spines and fins that migrate, split and fade.  Hits seed
+  new peaks; energy and highs tune the chemistry.
+* **Living architecture** (knob *architecture*): like army ants bridging with their own bodies, it leaves part
+  of its material behind as a twisted pillar, an arch or a ring gate on its path (the tail detaches and flies
+  there), circles it or flies through the gate, and calls the material back on a drop or after a while.
+  Manual *Build* waits (up to 8 s) until the organism is free to build.
+* **Phrase memory** (knob *memory*): every 4 bars it fingerprints the passage; when a passage returns it returns
+  to the form it had then (with variation), otherwise it learns the new one.
+
+Control notes (in addition to v3): 86 build · 88 recall.  Frames of v3/v4 exceed macOS's 9216-byte UDP
+limit, so every frame above 8 KB travels in fragments and Blender reassembles it.
+
 # Your look in Blender (saved between sessions)
 
 Tune materials, lights, world, colour management and render settings, then *Myrmex panel → Save Look*.
@@ -140,4 +161,5 @@ again by itself; *Start Live* also works in organism scenes (no armature needed)
    (or F12 / Render Animation).  Or **Render last take → .mp4** renders in the background (H.264 + AAC,
    next to the take; sizes 1920×1080, 1080×1920 for reels, square, 4K).
 4. In Blender: *Myrmex* panel → *Takes → video* → **Import Take** works for any take
-   (`nanomaterial_take_*`, `polyalloy_take_*`, `colony_take_*`, humanoid `take_*` with the character's .blend open).
+   (`nanomaterial_take_*`, `polyalloy_take_*`, `colony_take_*`, `hive_take_*`, humanoid `take_*` with the
+   character's .blend open).  Hive takes also write `*_swarm.pc2` (the nanomachines) next to the take.

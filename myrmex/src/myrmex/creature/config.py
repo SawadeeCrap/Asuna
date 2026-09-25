@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 PARAMS = ("aggression", "arousal", "expansion", "contraction", "fluidity", "rigidity", "asymmetry",
           "tendril_activity", "instability", "surface_activity", "mass_shift", "reactivity", "noise",
           "coherence", "mutation", "speed", "density", "kick_mode", "obstacle_rate", "altitude",
-          "swarm", "armor", "mechanism", "hunt")
+          "swarm", "armor", "mechanism", "hunt",
+          "architecture", "pattern", "nanoswarm", "memory")
 
 DEFAULT_PARAMS = {"aggression": 0.3, "arousal": 0.3, "expansion": 0.5, "contraction": 0.3, "fluidity": 0.6,
                   "rigidity": 0.4, "asymmetry": 0.4, "tendril_activity": 0.4, "instability": 0.25,
@@ -17,7 +18,10 @@ DEFAULT_PARAMS = {"aggression": 0.3, "arousal": 0.3, "expansion": 0.5, "contract
                   "kick_mode": 0.9, "obstacle_rate": 0.3, "altitude": 0.5,
                   # Polyalloy Colony (v3) only: flock splitting, armour plates / hardening waves,
                   # articulated mechanisms (wings, rotors, tendrils, legs), prey hunting
-                  "swarm": 0.5, "armor": 0.5, "mechanism": 0.6, "hunt": 0.4}
+                  "swarm": 0.5, "armor": 0.5, "mechanism": 0.6, "hunt": 0.4,
+                  # Polyalloy Hive (v4) only: builds structures from itself, reaction-diffusion patterns,
+                  # free-flying nanomachine streams, musical phrase memory
+                  "architecture": 0.5, "pattern": 0.5, "nanoswarm": 0.6, "memory": 0.6}
 
 
 @dataclass

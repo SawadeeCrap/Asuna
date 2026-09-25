@@ -308,3 +308,111 @@ def test_take_command_uses_saved_look(tmp_path, monkeypatch):
     assert cmd[:3] == ["B", "-b", str(tmp_path / "colony.blend")]
     live, env = C.blender_live_command("B", "/c.blend", 9101, "colony", keep_settings=False)
     assert live[1] == str(tmp_path / "colony.blend") and env["MYRMEX_KEEP_SETTINGS"] == "0"
+
+
+# ---------------------------------------------------------------------------- big frames (macOS UDP limit)
+def test_frames_survive_macos_datagram_limit():
+    import socket
+
+    from myrmex.creature.protocol import decode_creature
+    from myrmex.realtime.protocol import Reassembler
+    from myrmex.realtime.session import LiveConfig, LiveSession, PoseSink
+
+    class MacSock:                                   # net.inet.udp.maxdgram = 9216 on macOS
+        def __init__(self, real):
+            self.real = real
+
+        def sendto(self, data, addr):
+            if len(data) > 9216:
+                raise OSError(40, "Message too long")
+            return self.real.sendto(data, addr)
+
+        def close(self):
+            self.real.close()
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rx.bind(("127.0.0.1", 0))
+    rx.settimeout(2.0)
+    for backend in ("creature", "polyalloy", "colony", "hive"):
+        sink = PoseSink([f"127.0.0.1:{rx.getsockname()[1]}"], [])
+        sink.sock = MacSock(sink.sock)
+        s = LiveSession(LiveConfig(backend=backend, clock="internal", out=[]), start_inputs=False, sink=sink, now=0.0)
+        now = 0.0
+        for _ in range(4):
+            now += 1 / 60
+            s.step(now)
+        ra, fr = Reassembler(), None
+        while fr is None:
+            got = ra.feed(rx.recvfrom(65536)[0])
+            fr = decode_creature(got) if got is not None else None
+        assert sink.errors == 0 and len(fr.pos) >= 61, backend
+        sink.close()
+    rx.close()
+
+
+# ---------------------------------------------------------------------------- Polyalloy Hive (v4)
+def _hive_run(seconds=30.0, events=(), energy_fn=None, seed=4, dt=1 / 60, params=None):
+    from myrmex.creature.hive import HiveConfig, HiveEngine
+    e = HiveEngine(HiveConfig(seed=seed))
+    for k, val in (params or {}).items():
+        e.set_parameter(k, val)
+    out = []
+    for i in range(int(seconds / dt)):
+        t = i * dt
+        beat = t * 2
+        energy = energy_fn(t) if energy_fn else 0.5
+        kick = 1.0 if (beat % 1.0) < dt * 2.5 and energy > 0.4 else 0.0
+        for at, name in events:
+            if i == int(at / dt):
+                e.trigger_event(name)
+        e.set_input(CreatureControlInput(bass=0.5, high=0.3, energy=energy, transient=kick, spectral_flux=0.3,
+                                         amplitude=0.7, tempo=120, beat=beat, playing=True))
+        out.append(e.update(dt))
+    return e, out
+
+
+def test_hive_builds_and_recalls_structures():
+    e, states = _hive_run(24, events=((2.0, "BUILD"), (16.0, "RECALL")), params={"architecture": 0.0})
+    assert max(s.structures for s in states) == 1 and states[-1].structures == 0
+    assert abs(states[-1].volumes["total"] - 1.0) < 1e-9 and np.isfinite(states[-1].particles).all()
+    assert "PATROL" in {s.behavior for s in states}
+
+
+def test_hive_swarm_breathes_with_the_music():
+    e, _ = _hive_run(20, energy_fn=lambda t: 0.15)
+    calm = float((~e.p_bound).mean())
+    e2, _ = _hive_run(20, energy_fn=lambda t: 0.95)
+    assert calm < 0.4 and float((~e2.p_bound).mean()) > calm
+
+
+def test_hive_remembers_repeated_phrases():
+    e, _ = _hive_run(72, energy_fn=lambda t: 0.2 if (t % 24) < 12 else 0.7)
+    names = [n for _, n, _ in e.events]
+    assert len(e.memory) >= 2 and "REMEMBER" in names
+
+
+def test_hive_protocol_and_take(tmp_path):
+    from myrmex.creature.protocol import decode_creature, encode_creature
+    from myrmex.creature.take import CreatureTake
+    from myrmex.realtime.session import LiveConfig, LiveSession
+    _, states = _hive_run(1.0)
+    s = states[-1]
+    fr = decode_creature(encode_creature(s, 1, 0.0, 120.0, 1))
+    assert np.abs(fr.particles - s.particles).max() < 1e-3 and fr.rd.shape == (len(s.pos),)
+
+    class Sink:
+        sent = 0
+
+        def send_raw(self, b):
+            pass
+
+        def close(self):
+            pass
+    ses = LiveSession(LiveConfig(backend="hive", clock="internal", record=str(tmp_path), out=[]), start_inputs=False,
+                      sink=Sink(), now=0.0)
+    now = 0.0
+    for _ in range(240):
+        now += 1 / 120
+        ses.step(now)
+    take = CreatureTake(ses.save_take())
+    p = take.particles(30)
+    assert take.variant == "hive" and p.shape[1] == 1536 and np.isfinite(p).all()

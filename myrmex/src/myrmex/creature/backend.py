@@ -19,6 +19,7 @@ from .config import PARAMS, CreatureConfig
 from .control import CreatureControlInput
 from .engine import EVENTS, CreatureEngine
 from .colony import ColonyConfig, ColonyEngine
+from .hive import HiveConfig, HiveEngine
 from .polyalloy import PolyalloyConfig, PolyalloyEngine
 
 # Notes on the control track / channel: choreography events for the creature.
@@ -27,7 +28,9 @@ CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 
                  # Mimetic Polyalloy: physical events (kick = impulse / obstacle / pressure / turbulence)
                  71: "OBSTACLE", 72: "IMPULSE", 74: "PRESSURE", 76: "TURBULENCE",
                  # Polyalloy Colony: flock, hardening wave, prey, landing
-                 77: "SPLIT", 79: "MERGE", 81: "WAVE", 83: "HUNT", 84: "PERCH"}
+                 77: "SPLIT", 79: "MERGE", 81: "WAVE", 83: "HUNT", 84: "PERCH",
+                 # Polyalloy Hive: living architecture
+                 86: "BUILD", 88: "RECALL"}
 
 
 CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
@@ -36,10 +39,10 @@ CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_len
 class CreatureBackend:
     height = 1.4
 
-    def __init__(self, cfg: CreatureConfig | PolyalloyConfig | ColonyConfig | None = None, record: bool = False,
+    def __init__(self, cfg: CreatureConfig | PolyalloyConfig | ColonyConfig | HiveConfig | None = None, record: bool = False,
                  variant: str = "nanomaterial"):
         self.variant = variant
-        kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine}.get(variant, CreatureEngine)
+        kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine}.get(variant, CreatureEngine)
         self.engine = kind(cfg)
         self.events = getattr(kind, "EVENTS", EVENTS)
         self.fx = FeatureExtractor(MusicTimeline(source="live"))
@@ -103,6 +106,10 @@ class CreatureBackend:
         if getattr(s, "plate", None) is not None:
             f.update(plate=s.plate.astype(np.float16), nrm=s.nrm.astype(np.float16), owner=s.owner.astype(np.uint8),
                      lure=s.lure.astype(np.float32), bodies=s.bodies)
+        if getattr(s, "particles", None) is not None:       # millimetres from the centre of mass
+            f.update(particles=np.clip(np.round((s.particles - s.com) * 1000.0), -32767, 32767).astype(np.int16),
+                     rd=np.clip(s.rd * 255.0, 0, 255).astype(np.uint8), structures=s.structures,
+                     memories=s.memories)
         self.frames.append(f)
 
     def save_take(self, folder: str, fps: float = 30.0) -> str | None:
