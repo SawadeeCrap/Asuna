@@ -226,6 +226,7 @@ class PolyalloyEngine:
     EVENTS = ("MORPHOLOGY_SHIFT", "MASS_REBALANCE", "APPENDAGE_BURST", "COLLAPSE", "RECONSTRUCTION", "IMPULSE",
               "OBSTACLE", "PRESSURE", "TURBULENCE")
     BONY = False                 # the Osseous subclass (v5) switches on bone links, scutes, strikes
+    STYLE = 0                    # look on the wire: 0 classic · 1 osseous
     PLAN = INTENT_PLAN
     VOCAB = CLASSIC
 
@@ -318,7 +319,8 @@ class PolyalloyEngine:
                 loc += wa * (shp - shp.mean(0))            # thrust places the body, not the shape
         asym = pr["asymmetry"]
         loc[:, 1] *= 1.0 + 0.35 * asym * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + 1.0)
-        loc = self.glove.local(loc)                    # fingers / scale of a hand, if one is holding it
+        beat = self.inp.beat if self.inp.playing else 2.0 * self.t
+        loc = self.glove.local(loc, self.t, beat)      # fingers / scale / stretch ... of a hand holding it
         return loc @ R.T
 
     def _log(self, name, arg=None):
@@ -522,8 +524,9 @@ class PolyalloyEngine:
         if gc.active and gc.finger_mode == "morph":
             tau_m = 0.25                               # the form follows the fingers at once
         noise = self.nrng.standard_normal(len(ATTRACTORS)) * pr["mutation"] * 0.6
-        self.z += (self.z_goal - self.z) * min(1.0, dt / tau_m) + noise * math.sqrt(dt)
-        self.mat += (self.mat_goal - self.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"]))
+        held = 1.0 - (gc.freeze if gc.active else 0.0)  # a frozen form stops changing too
+        self.z += ((self.z_goal - self.z) * min(1.0, dt / tau_m) + noise * math.sqrt(dt)) * held
+        self.mat += (self.mat_goal - self.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"])) * held
         self.pulse = max(self.pulse * math.exp(-dt / 0.18), inp.transient)
         oss_goal = float(np.clip(0.2 + 0.55 * max(0.0, self.mat[1] - 0.3) + 0.35 * pr["aggression"] +
                                  0.25 * pr["rigidity"] - 0.9 * self.mat[5], 0.0, 1.0))
@@ -534,6 +537,9 @@ class PolyalloyEngine:
         coh *= (0.5 + pr["coherence"]) * (1.0 + 0.8 * gc.grip if gc.active else 1.0)
         stiff *= 0.4 + 1.2 * pr["rigidity"]
         disp = min(1.0, disp + 0.3 * pr["fluidity"] * pr["noise"])
+        if gc.active and gc.scatter > 0:               # the hand scatters the material into a cloud
+            coh *= 1.0 - 0.75 * gc.scatter
+            disp = max(disp, gc.scatter)
         # Flight: desired velocity (cruise along a wandering heading, altitude band), distributed thrust.
         vcom = self.v.mean(axis=0)
         self.P = (self.x * self.mass[:, None]).sum(0) / self.mass.sum()
@@ -559,6 +565,8 @@ class PolyalloyEngine:
                 v_des = aim / max(float(np.linalg.norm(aim)), 1e-6) * (cfg.size * 7.0)
             else:
                 v_des = self._R()[:, 0] * max(cruise, 1.0) * 2.5
+        else:
+            v_des = self.glove.flight(v_des, self.P, cruise)   # a leash / throttle, if a hand holds one
         a_des = (v_des - vcom) / 0.8 + np.array([0.0, 0.0, G])
         # Moment of inertia of the current body limits the turn rate (morphology changes flight).
         I = float((self.mass * ((self.x - self.P) ** 2).sum(1)).sum()) / max(cfg.size ** 2, 1e-6)
@@ -583,6 +591,7 @@ class PolyalloyEngine:
         local = self.local
         acc = (coh * (1.0 - local))[:, None] * f_t * (T - x) - (1.5 + 3.0 * damp) * (v - vcom)
         acc += a_des - np.array([0.0, 0.0, G])                 # thrust balances gravity at the CoM
+        acc += self.glove.wind_acc(x, self.P, self._R())       # the hand's wind streams the material
         # Network springs (break when over-stretched: separation; re-form later: recombination).
         e, al = self.edges, self.alive
         if al.any():
@@ -645,6 +654,7 @@ class PolyalloyEngine:
                 self.obstacles[slot] = None
         self.local = local * math.exp(-dt / 0.9)
         v += acc * dt
+        self.glove.damp(v, dt)                                 # a fist in stasis holds the motion
         spd = np.linalg.norm(v, axis=1)
         fast = spd > 30.0
         if fast.any():
@@ -659,6 +669,8 @@ class PolyalloyEngine:
             self.alive = np.ones(len(self.edges), bool)
             self.last_rebuild = self.t
         self.glow *= math.exp(-dt / 0.4)
+        if gc.active and gc.lines is not None:                 # the hand plays the light
+            self.glow = max(self.glow, gc.lines)
         self.surface += (min(1.0, pr["surface_activity"] + 0.5 * inp.high + 0.5 * disp) - self.surface) * min(1.0, dt * 3)
 
     # ------------------------------------------------------------------ state
@@ -706,7 +718,7 @@ class PolyalloyEngine:
                               np.ones((n, 3)), np.ones(n, np.int8), np.full(n, -1, np.int16), self.P.copy(),
                               self.heading, self.params.values(), {"total": float(self.mass.sum())},
                               self.surface, self.glow, self.arousal, self.instab, list(self.events[-6:]),
-                              links, obs, disp, mstate, self.fragments(), int(self.BONY))
+                              links, obs, disp, mstate, self.fragments(), self.STYLE)
 
 
 __all__ = ["PolyalloyEngine", "PolyalloyConfig", "PolyalloyState", "ATTRACTORS", "MATERIAL", "INTENTS"]

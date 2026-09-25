@@ -36,6 +36,8 @@ from .skeleton import Skeleton
 SHAPES = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN", "LEGS",
           "ENVELOP", "SPINE", "CLAW", "MANDIBLE", "SCYTHE", "THORN", "CARAPACE")
 FREE_SHAPES = tuple(x for x in SHAPES if x not in ("LEGS", "ENVELOP"))
+CYBER_SHAPES = ("HALO", "ARRAY", "PRISM")          # v8 Cyber Hive: machine forms (quantized, robotic mechanisms)
+ALL_SHAPES = SHAPES + CYBER_SHAPES
 CLASSIC_FREE = ("CORE", "SPINDLE", "RING", "SHIELD", "BLADES", "LATTICE", "WINGS", "CLOUD", "TENDRILS", "CROWN")
 INTENTS = ("CRUISE", "HOVER", "EXPLORE", "DISPLAY", "EVADE", "REFORM", "HUNT", "ENVELOP", "PERCH", "FORMATION",
            "MERGE", "PATROL", "STRUCTURE", "STRIKE")
@@ -167,8 +169,61 @@ def shape3(name: str, U: np.ndarray, s: float, elong: float, ph: dict, ground: f
         return attractor_shape("SCYTHE", U, s, elong, swing=math.sin(math.pi * ph["beat"] / 2.0))
     if name in ("THORN", "SPINE"):                          # quills jump on kicks
         return attractor_shape(name, U, s, elong, pulse=ph["pulse"])
+    if name in CYBER_SHAPES:
+        return cyber_shape(name, U, s, elong, ph)
     return attractor_shape(name if name in ("CORE", "SHIELD", "LATTICE", "CLOUD", "CARAPACE") else "CORE", U, s,
                            elong)
+
+
+def _step_ease(beat: float) -> float:
+    """Beats as robotic steps: holds, then moves in the first fifth of each beat."""
+    f = beat % 1.0
+    e = min(1.0, f / 0.2)
+    return math.floor(beat) + e * e * (3 - 2 * e)
+
+
+def cyber_shape(name: str, U: np.ndarray, s: float, elong: float, ph: dict) -> np.ndarray:
+    """Machine forms of the Cyber Hive (v8); their mechanisms move in steps on the beat."""
+    u, v, w = U[:, 0], U[:, 1], U[:, 2]
+    mech = ph["mech"]
+    step = _step_ease(ph["beat"])
+    if name == "HALO":                                      # a core inside two gyroscope rings turning apart
+        core = u < 0.3
+        P = attractor_shape("CORE", U, s * 0.62, 1.0)
+        ringB = u >= 0.65
+        a = 2 * np.pi * v + np.where(ringB, -1.0, 1.0) * (0.4 * ph["spin"] + mech * step * np.pi / 4)
+        R = np.where(ringB, 0.95 * s, 1.2 * s) * (1.0 + 0.12 * ph["pulse"])
+        th = (w - 0.5) * 0.06 * s
+        ring = np.stack([np.cos(a) * (R + th), np.sin(a) * (R + th), (w - 0.5) * 0.05 * s], 1)
+        tilt = np.where(ringB, 1.2, 0.25)                    # ring B stands up, ring A lies almost flat
+        ct, st = np.cos(tilt), np.sin(tilt)
+        ring = np.stack([ring[:, 0], ct * ring[:, 1] - st * ring[:, 2], st * ring[:, 1] + ct * ring[:, 2]], 1)
+        return np.where(core[:, None], P, ring)
+    if name == "ARRAY":                                     # a spine with two panel arrays that fold in steps
+        spine = u < 0.25
+        x0 = (u / 0.25 - 0.5) * 1.8 * s * elong
+        sp = np.stack([x0, (v - 0.5) * 0.12 * s, (w - 0.5) * 0.12 * s], 1)
+        side = np.where(v < 0.5, 1.0, -1.0)
+        fv = (v * 2.0) % 1.0
+        col = np.floor(w * 4.0)                                # four panels per side, a gap between them
+        px = (-0.75 + 0.5 * col + 0.4 * ((w * 4.0) % 1.0)) * s * elong * 0.8
+        py = side * (0.3 * s + 1.35 * s * fv)
+        fold = mech * 0.35 * (1.0 - math.cos(np.pi * step / 2.0))   # folds a notch every beat, opens again
+        P = np.stack([px, py * math.cos(fold), np.abs(py) * math.sin(fold) + (u - 0.5) * 0.02 * s], 1)
+        return np.where(spine[:, None], sp, P)
+    # PRISM: a hexagonal crystal in four rings that turn against each other like a lock
+    seg = np.floor(u * 4.0)
+    k6 = np.floor(v * 6.0)
+    f6 = (v * 6.0) % 1.0
+    R = 0.55 * s * (1.0 + 0.1 * ph["pulse"])
+    rot = np.where(seg % 2 == 0, 1.0, -1.0) * mech * step * np.pi / 6.0 + 0.2 * ph["spin"]
+    a0, a1 = k6 * np.pi / 3 + rot, (k6 + 1) * np.pi / 3 + rot
+    y = R * (np.cos(a0) + (np.cos(a1) - np.cos(a0)) * f6)
+    z = R * (np.sin(a0) + (np.sin(a1) - np.sin(a0)) * f6)
+    inner = w < 0.2                                        # a few inside: the crystal holds its volume
+    y, z = np.where(inner, y * 0.35, y), np.where(inner, z * 0.35, z)
+    x = (seg / 3.0 - 0.5) * 1.6 * s * elong * (1.0 + 0.2 * ph["pulse"]) + (u * 4.0 % 1.0 - 0.5) * 0.3 * s
+    return np.stack([x, y, z], 1)
 
 
 _SITUATIONAL = [SHAPES.index("ENVELOP"), SHAPES.index("LEGS")]
@@ -177,14 +232,15 @@ _SITUATIONAL = [SHAPES.index("ENVELOP"), SHAPES.index("LEGS")]
 class Body:
     """One autonomous part of the colony (the lead is body 0)."""
 
-    def __init__(self, heading: float = 0.0):
+    def __init__(self, heading: float = 0.0, shapes: tuple = SHAPES):
+        self.shapes = shapes                    # the latent space: one weight per form this organism knows
         self.alive = False
         self.P = np.array([0.0, 0.0, 3.0])
         self.vel = np.zeros(3)
         self.heading, self.pitch, self.yaw_rate = heading, 0.0, 0.0
         self.intent, self.intent_t, self.dwell = "CRUISE", 0.0, 6.0
-        self.z = np.zeros(len(SHAPES))
-        self.z_goal = np.zeros(len(SHAPES))
+        self.z = np.zeros(len(shapes))
+        self.z_goal = np.zeros(len(shapes))
         self.mat = np.array(MATERIAL["COHESIVE"], float)
         self.mat_goal = self.mat.copy()
         self.wander = 0.0
@@ -202,15 +258,17 @@ class Body:
         return e / e.sum()
 
     def goal_shape(self, name: str, strength: float = 2.5) -> None:
-        self.z_goal = np.zeros(len(SHAPES))
-        self.z_goal[SHAPES.index(name)] = strength
+        self.z_goal = np.zeros(len(self.shapes))
+        self.z_goal[self.shapes.index(name)] = strength
 
 
 class ColonyEngine:
     EVENTS = EVENTS
     BONY = False                 # the Osseous subclasses (v6, v7) switch on bone links, scutes, strikes
+    STYLE = 0                    # look on the wire: 0 classic · 1 osseous · 2 cyber
     PLAN = PLAN
     VOCAB = CLASSIC_FREE
+    SHAPE_SET = SHAPES           # the forms in the latent space (the Cyber Hive adds its machine forms)
 
     def __init__(self, cfg: ColonyConfig | None = None):
         self.cfg = cfg = cfg or ColonyConfig()
@@ -227,7 +285,7 @@ class ColonyEngine:
         self.mass = np.full(n, 1.0 / n)                       # finite material: fixed forever
         self.t = 0.0
         self.own = np.zeros(n, int)
-        self.bodies = [Body(r.uniform(-math.pi, math.pi)) for _ in range(cfg.max_bodies)]
+        self.bodies = [Body(r.uniform(-math.pi, math.pi), self.SHAPE_SET) for _ in range(cfg.max_bodies)]
         lead = self.bodies[0]
         lead.alive = True
         lead.goal_shape("SPINDLE", 2.0)
@@ -267,7 +325,7 @@ class ColonyEngine:
     def set_glove(self, ctrl: GloveControl | None, shapes: tuple | None = None) -> None:
         """Direct control by a hand: every flying body turns with it, fingers shape it (creature/puppet.py)."""
         self.glove.set(ctrl)
-        self.sculpt = tuple(x for x in (shapes or ()) if x in SHAPES) or None
+        self.sculpt = tuple(x for x in (shapes or ()) if x in self.SHAPE_SET) or None
 
     def trigger_event(self, name: str, arg=None) -> bool:
         if name.upper() not in self.EVENTS:
@@ -361,7 +419,7 @@ class ColonyEngine:
             d = rel[g].mean(0)
             d[2] = 0.0
             d = d / max(np.linalg.norm(d), 1e-6)
-            b.__init__(lead.heading + 0.35 * float(np.sign(d[1] or 1.0)))
+            b.__init__(lead.heading + 0.35 * float(np.sign(d[1] or 1.0)), self.SHAPE_SET)
             b.alive = True
             b.P, b.vel = self.x[g].mean(0), lead.vel.copy()
             b.slot = d * (2.8 + 1.2 * k) + np.array([0.0, 0.0, 0.4 * k])
@@ -561,13 +619,14 @@ class ColonyEngine:
         # Drops split the colony into a flock, breakdowns bring it back together.
         self.hi_t = self.hi_t + dt if inp.energy > 0.78 else 0.0
         self.lo_t = self.lo_t + dt if inp.energy < 0.3 else 0.0
+        hand = self.glove.ctrl.flock if self.glove.ctrl.active else 0      # a shepherd's hand decides instead
         if len(alive) == 1:
-            if (pr["swarm"] > 0.2 and self.hi_t > 1.5 and self.t - self.last_split > 14.0 and
+            if (pr["swarm"] > 0.2 and self.hi_t > 1.5 and self.t - self.last_split > 14.0 and not hand and
                     lead.intent not in ("ENVELOP", "PERCH", "EVADE")):
                 self._split(2 + int(pr["swarm"] * 2.99))
         else:
             self.split_t += dt
-            if (self.lo_t > 2.5 or self.split_t > 16.0 + 12.0 * pr["swarm"]) and \
+            if (self.lo_t > 2.5 or self.split_t > 16.0 + 12.0 * pr["swarm"]) and not hand and \
                     any(self.bodies[k].intent not in ("MERGE",) for k in alive[1:]):
                 self._start_merge()
         # Prey.
@@ -716,6 +775,9 @@ class ColonyEngine:
             alt_goal = float(np.clip(alt_goal + 2.2 * gc.offset[1], 0.8, 12.0))
         b.wander = b.wander * math.exp(-dt * 0.3) + self.nrng.standard_normal() * math.sqrt(dt) * (0.4 + pr["noise"])
         v_des = self._v_des(k, b, lead, dt, pr, sb, base, alt_goal)
+        if gc.active and b.intent not in ("STRIKE", "ENVELOP", "PERCH", "HUNT", "MERGE") and \
+                (k == 0 or b.intent != "FORMATION"):
+            v_des = self.glove.flight(v_des, b.P, base)       # a leash / throttle, if a hand holds one
         if b.intent != "PERCH":
             v_des[2] += max(0.0, 1.0 - b.P[2]) * 2.0
         a_des = (v_des - b.vel) / 0.8 + np.array([0.0, 0.0, G])
@@ -735,7 +797,12 @@ class ColonyEngine:
         cfg = self.cfg
         L = self.lure
         if b.intent == "FORMATION" and k > 0:
-            goal = lead.P + lead.R() @ b.slot
+            slot = b.slot
+            gc = self.glove.ctrl
+            if gc.active:                                   # the hand turns and spreads the formation
+                ct, st_ = math.cos(gc.formation_turn), math.sin(gc.formation_turn)
+                slot = np.array([ct * slot[0] - st_ * slot[1], st_ * slot[0] + ct * slot[1], slot[2]]) * gc.formation_spread
+            goal = lead.P + lead.R() @ slot
             v_des = lead.vel + np.clip(1.4 * (goal - b.P), -6.0, 6.0)
         elif b.intent == "MERGE" and k > 0:
             d = lead.P - b.P
@@ -783,7 +850,7 @@ class ColonyEngine:
         U = self.U[idx]
         loc = np.zeros((len(idx), 3))
         extra = np.zeros((len(idx), 3))
-        for a, wa in zip(SHAPES, w):
+        for a, wa in zip(self.SHAPE_SET, w):
             if wa < 0.01:
                 continue
             # Situational structures exist only in their situation (legs on the ground, the shell on prey).
@@ -800,7 +867,8 @@ class ColonyEngine:
                 shp -= shp.mean(0)
             loc += wa * shp
         loc[:, 1] *= 1.0 + 0.35 * pr["asymmetry"] * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + k)
-        loc = self.glove.local(loc)
+        beat = self.inp.beat if self.inp.playing else 2.0 * self.t
+        loc = self.glove.local(loc, self.t, beat)
         pressure = 0.25 * self.inp.bass * (0.5 + pr["expansion"]) + 0.03 * math.sin(2 * math.pi * self.inp.beat / 4.0)
         return b.P + (loc @ R.T) * (1.0 + pressure) + extra
 
@@ -872,9 +940,10 @@ class ColonyEngine:
             if gc.finger_mode == "morph" and self.sculpt:
                 tau_m = 0.25
                 for k in self._alive():
-                    zg = np.zeros(len(SHAPES))
+                    zg = np.zeros(len(self.SHAPE_SET))
                     for shp, ex in zip(self.sculpt, gc.fingers):
-                        zg[SHAPES.index(shp)] = max(zg[SHAPES.index(shp)], 0.4 + 2.4 * ex)
+                        q = self.SHAPE_SET.index(shp)
+                        zg[q] = max(zg[q], 0.4 + 2.4 * ex)
                     if self.bodies[k].intent not in ("ENVELOP", "PERCH"):
                         self.bodies[k].z_goal = zg
             if gc.material is not None:
@@ -884,6 +953,16 @@ class ColonyEngine:
                     self.bodies[k].mat_goal = (1 - f) * np.array(MATERIAL[a_]) + f * np.array(MATERIAL[b_])
             if gc.energy is not None:
                 self.arousal = max(self.arousal, gc.energy)
+            if gc.flock and self.t - getattr(self, "_flock_t", -9.0) > 1.6:   # fingers count the bodies
+                n_fly = len([k for k in self._alive() if not self._is_static(k)])
+                merging = any(self.bodies[k].intent == "MERGE" for k in self._alive())
+                if gc.flock > n_fly == 1:
+                    self._pending.append(("SPLIT", int(gc.flock)))
+                    self._flock_t = self.t
+                elif gc.flock != n_fly > 1 and not merging:  # regroup: merge first, split again after
+                    self._pending.append(("MERGE", None))
+                    self._flock_t = self.t
+        held = 1.0 - (gc.freeze if gc.active else 0.0)      # a frozen form stops changing too
         for k in self._physics_bodies():
             idx = np.nonzero(self.own == k)[0]
             if len(idx) == 0:
@@ -895,10 +974,10 @@ class ColonyEngine:
                 a_des[idx], vcom[idx], T[idx], goal[idx] = ad, b.vel, tgt, b.mat
                 b.mat += (b.mat_goal - b.mat) * min(1.0, dt / 0.6)
                 continue
-            noise = self.nrng.standard_normal(len(SHAPES)) * pr["mutation"] * 0.6 * math.sqrt(dt)
+            noise = self.nrng.standard_normal(len(self.SHAPE_SET)) * pr["mutation"] * 0.6 * math.sqrt(dt)
             noise[_SITUATIONAL] = 0.0
-            b.z += (b.z_goal - b.z) * min(1.0, dt / tau_m) + noise
-            b.mat += (b.mat_goal - b.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"]))
+            b.z += ((b.z_goal - b.z) * min(1.0, dt / tau_m) + noise) * held
+            b.mat += (b.mat_goal - b.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"])) * held
             ad, sb = self._fly(k, idx, dt, pr)
             a_des[idx] = ad
             vcom[idx] = b.vel
@@ -931,10 +1010,18 @@ class ColonyEngine:
         damp = m[:, 2]
         rep = m[:, 3]
         disp = np.minimum(1.0, m[:, 5] + 0.3 * pr["fluidity"] * pr["noise"])
+        if gc.active and gc.scatter > 0:                    # the hand scatters the material into a cloud
+            coh = coh * (1.0 - 0.75 * gc.scatter)
+            disp = np.maximum(disp, gc.scatter)
         local = self.local
         f_t = (2 * np.pi * (0.5 + 1.2 * stiff)) ** 2 * 0.25
         acc = (coh * (1.0 - local) * f_t)[:, None] * (T - x) - (1.5 + 3.0 * damp)[:, None] * (v - vcom)
         acc += a_des - np.array([0.0, 0.0, G])
+        if gc.active and np.any(np.abs(gc.wind) > 1e-4):    # the hand's wind streams every flying body
+            for k in self._alive():
+                if not self._is_static(k):
+                    idx = np.nonzero(self.own == k)[0]
+                    acc[idx] += self.glove.wind_acc(x[idx], self.bodies[k].P, self.bodies[k].R())
         # Elastic network: local stiffness, links across bodies are cut (separation).
         al &= self.own[e[:, 0]] == self.own[e[:, 1]]
         if al.any():
@@ -1005,6 +1092,7 @@ class ColonyEngine:
                     self.obstacles[slot] = None
         self.local = local * math.exp(-dt / 0.9)
         v += acc * dt
+        self.glove.damp(v, dt)                               # a fist in stasis holds the motion
         spd = np.linalg.norm(v, axis=1)
         fast = spd > 30.0
         if fast.any():
@@ -1018,6 +1106,8 @@ class ColonyEngine:
                 (~self.alive).mean() > 0.25):
             self._rebuild()
         self.glow *= math.exp(-dt / 0.4)
+        if gc.active and gc.lines is not None:              # the hand plays the light
+            self.glow = max(self.glow, gc.lines)
         self.surface += (min(1.0, pr["surface_activity"] + 0.5 * inp.high + 0.5 * float(disp.mean())) - self.surface) * \
             min(1.0, dt * 3)
 
@@ -1079,12 +1169,13 @@ class ColonyEngine:
             L = self.lure
             grow = 1.0 if L["state"] != "GONE" else max(0.0, L["until"] - self.t)
             lure = np.array([*L["pos"], L["r"] * grow])
-        return ColonyState(self.t, lead.intent, SHAPES[int(np.argmax(lead.weights()))], self.x.copy(), radius,
+        return ColonyState(self.t, lead.intent, self.SHAPE_SET[int(np.argmax(lead.weights()))], self.x.copy(), radius,
                            np.ones((n, 3)), np.ones(n, np.int8), np.full(n, -1, np.int16), self.x.mean(0),
                            lead.heading, self.params.values(),
                            {"total": float(self.mass.sum()), "bodies": len(self._alive())}, self.surface, self.glow,
                            self.arousal, self.instab, list(self.events[-6:]), links, obs, disp, mstate,
-                           self.fragments(), int(self.BONY), plate, nrm, self.own.copy(), len(self._alive()), lure)
+                           self.fragments(), self.STYLE, plate, nrm, self.own.copy(), len(self._alive()), lure)
 
 
-__all__ = ["ColonyEngine", "ColonyConfig", "ColonyState", "SHAPES", "INTENTS", "EVENTS", "PLAN", "PLAN_BONE"]
+__all__ = ["ColonyEngine", "ColonyConfig", "ColonyState", "SHAPES", "CYBER_SHAPES", "ALL_SHAPES", "INTENTS", "EVENTS",
+           "PLAN", "PLAN_BONE", "cyber_shape"]

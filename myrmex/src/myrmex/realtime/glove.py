@@ -9,14 +9,9 @@ Continuous values have no triggers, so the link derives them from motion: a fast
 clenching into a fist, spreading the fingers, pushing towards the screen, a pinch.  Everything is
 filtered with a One-Euro filter (smooth when still, instant when moving).
 
-Presets (how the hand and the organism are coupled):
-    puppet     - the body turns with the hand, fingers are five limbs, height and steering follow the hand,
-                 depth brings it closer; gestures strike / harden / burst
-    sculpt     - the hand turns the form in place, the fingers blend five forms (per organism)
-    conductor  - twisting the hand spins the body, tilting it melts or hardens the material,
-                 open fingers = energy; the hand steers and lifts; gestures as events
-    camera     - the organism stays free; the hand orbits, raises and zooms the camera
-    off
+Presets (how the hand and the organism are coupled) - 20 couplings + off, see docs/GLOVE.md:
+    puppet · sculpt · conductor · camera · marionette · harp · heartbeat · elastic · dust · stasis · storm ·
+    leash · pilot · flywheel · shepherd · swarm · neon · rhythm · echo · mandala · off
 """
 from __future__ import annotations
 
@@ -29,7 +24,9 @@ from ..creature.puppet import GloveControl, euler
 
 PARAMS = ("thumb", "index", "middle", "ring", "pinky", "roll", "pitch", "yaw", "x", "y", "z")
 FINGERS = PARAMS[:5]
-PRESETS = ("puppet", "sculpt", "conductor", "camera", "off")
+PRESETS = ("puppet", "sculpt", "conductor", "camera", "marionette", "harp", "heartbeat", "elastic", "dust", "stasis",
+           "storm", "leash", "pilot", "flywheel", "shepherd", "swarm", "neon", "rhythm", "echo", "mandala", "off")
+HIVES = ("hive", "osseous_hive", "cyber_hive")
 GESTURES = ("FLICK", "CLENCH", "SPREAD", "PUSH", "PINCH")
 # gesture -> events tried in order (the first one the organism knows is used)
 GESTURE_EVENTS = {"FLICK": ("STRIKE", "IMPULSE", "APPENDAGE_BURST"),
@@ -297,6 +294,7 @@ SCULPT_SHAPES = {   # five forms per organism, one per finger (thumb .. pinky)
     "hive": ("CORE", "TENDRILS", "WINGS", "RING", "CROWN"),
     "osseous_colony": ("CARAPACE", "SPINE", "SCYTHE", "MANDIBLE", "THORN"),
     "osseous_hive": ("CARAPACE", "SPINE", "SCYTHE", "MANDIBLE", "THORN"),
+    "cyber_hive": ("PRISM", "HALO", "ARRAY", "SCYTHE", "SPINE"),
 }
 
 
@@ -308,19 +306,35 @@ class GloveLink:
 
     def __init__(self, cfg: dict | None = None):
         self.cfg = dict(self.DEFAULTS, **(cfg or {}))
+        if self.cfg["preset"] not in PRESETS:
+            self.cfg["preset"] = "puppet"
         self.state = GloveState(self.cfg["smoothing"], self.cfg["invert_fingers"], self.cfg["sensitivity"],
                                 self.cfg["neutral"])
         self.pinches = 0
         self.last_events: list[tuple[float, str, str]] = []
+        # per-preset memory
+        self._alt = 0.0                                   # pilot: altitude integrated from climb
+        self._wheel = np.zeros(3)                         # flywheel: angular velocity thrown in
+        self._hist: list[tuple[float, np.ndarray, np.ndarray, np.ndarray]] = []   # echo: (t, angles, ext, pos)
+        self._held = (np.zeros(3), -1)                    # rhythm: quantized angles, beat index
+        self._pluck = np.zeros(5)                         # harp: ringing strings
+        self._ext_prev = None
+        self._flash = 0.0                                 # neon: a light flash from a finger tap
+        self._clock_t = 0.0
 
     def configure(self, **kw) -> None:
         self.cfg.update(kw)
+        if self.cfg["preset"] not in PRESETS:
+            self.cfg["preset"] = "puppet"
         self.state.set_smoothing(self.cfg["smoothing"])
         self.state.invert = bool(self.cfg["invert_fingers"])
         self.state.sensitivity = float(self.cfg["sensitivity"])
 
-    def tick(self, dec: GloveDecoder, now: float, dt: float, variant: str = ""):
-        """-> (GloveControl, [(gesture, [event names to try])], camera modulation dict)."""
+    def tick(self, dec: GloveDecoder, now: float, dt: float, variant: str = "", clock=None, view_yaw=None):
+        """-> (GloveControl, [(gesture, [event names to try])], camera modulation dict).
+
+        ``clock`` = (beat, bpm, playing) of the song, ``view_yaw`` = the camera's heading (rad, world):
+        presets that lead the organism to a place map the hand into the camera's view."""
         c = self.cfg
         if not dec.profile and c["preset"] != "off":         # link by itself: the glove streams 11 controls
             live = [k for k, (_, ts) in dec.src.items() if now - ts <= 1.0]
@@ -335,12 +349,39 @@ class GloveLink:
         preset = c["preset"]
         cam = {"distance": 1.0, "orbit": 0.0, "height": 0.0}
         if not st.present or preset == "off":
+            self._ext_prev = None
             return GloveControl(), [], cam
+        self._clock_t += dt
+        if clock is not None and clock[2]:
+            beat, bpm = float(clock[0]), max(40.0, float(clock[1] or 120.0))
+        else:
+            bpm = float(clock[1]) if clock is not None and clock[1] else 120.0
+            beat = self._clock_t * bpm / 60.0
         k = float(c["intensity"])
-        roll, pitch, yaw = st.ang * min(1.5, k)
-        ctrl = GloveControl(active=True, fingers=st.ext.copy(), amount=min(1.5, k), grip=min(1.0, 0.55 + 0.4 * k))
-        x, y, z = np.clip(st.pos, -1.5, 1.5)
-        if preset == "puppet":
+        amt = min(1.5, k)
+        ang = st.ang
+        ext = st.ext.copy()
+        pos = st.pos
+        if preset == "echo":                                  # the organism answers one beat later
+            self._hist.append((now, ang.copy(), ext.copy(), pos.copy()))
+            delay = 60.0 / bpm
+            while len(self._hist) > 2 and self._hist[1][0] <= now - delay:
+                self._hist.pop(0)
+            if self._hist[0][0] <= now - delay:
+                _, ang, ext, pos = self._hist[0]
+            else:
+                ang, ext, pos = np.zeros(3), np.full(5, 0.5), np.zeros(3)
+        else:
+            self._hist.clear()
+        roll, pitch, yaw = ang * amt
+        opn = float(ext.mean())                               # 0 fist .. 1 open hand
+        flex = 1.0 - opn
+        ctrl = GloveControl(active=True, fingers=ext.copy(), amount=amt, grip=min(1.0, 0.55 + 0.4 * k))
+        x, y, z = np.clip(pos, -1.5, 1.5)
+        d_ext = (ext - self._ext_prev) / max(dt, 1e-3) if self._ext_prev is not None else np.zeros(5)
+        self._ext_prev = ext.copy()
+
+        if preset in ("puppet", "echo"):
             ctrl.rot = euler(roll, pitch, yaw)
             ctrl.offset = np.array([x, y, z])
             ctrl.scale = float(np.clip(1.0 + 0.35 * z * k, 0.6, 1.6))
@@ -348,13 +389,13 @@ class GloveLink:
         elif preset == "sculpt":
             ctrl.rot = euler(roll, pitch, yaw)
             ctrl.finger_mode = "morph"
-            ctrl.scale = float(np.clip(0.85 + 0.35 * float(st.ext.mean()) * k + 0.2 * z, 0.6, 1.6))
+            ctrl.scale = float(np.clip(0.85 + 0.35 * opn * k + 0.2 * z, 0.6, 1.6))
             ctrl.grip = 1.0
         elif preset == "conductor":
             ctrl.spin = float(np.clip(roll * 2.5, -8.0, 8.0))
             ctrl.rot = euler(0.0, 0.3 * pitch, 0.0)
             ctrl.material = float(np.clip(-pitch / 0.9, -1.0, 1.0))
-            ctrl.energy = float(np.clip(st.ext.mean() * k, 0.0, 1.0))
+            ctrl.energy = float(np.clip(opn * k, 0.0, 1.0))
             ctrl.offset = np.array([float(np.clip(yaw / 1.2, -1, 1)), y, 0.0])
             ctrl.finger_mode = "none"
             cam["distance"] = float(np.clip(1.0 - 0.35 * z, 0.55, 1.5))
@@ -362,6 +403,122 @@ class GloveLink:
             ctrl = GloveControl()                               # the organism stays free
             cam = {"distance": float(np.clip(1.0 - 0.45 * z, 0.45, 1.8)), "orbit": float(yaw),
                    "height": float(np.clip(y * 1.5 + pitch, -1.0, 2.5))}
+        elif preset == "marionette":                           # fingers are strings along the body
+            ctrl.rot = euler(0.6 * roll, 0.6 * pitch, 0.0)
+            ctrl.finger_mode = "strings"
+            ctrl.offset = np.array([x, y, 0.0])
+            ctrl.grip = 0.8
+        elif preset == "harp":                                 # every finger plucks its own wave
+            self._pluck = np.maximum(self._pluck * math.exp(-dt / 1.4), np.clip(np.abs(d_ext) * 0.3, 0, 1.2))
+            ctrl.waves = np.clip(0.25 * ext + self._pluck, 0.0, 1.3) * amt
+            ctrl.wave_speed = float(np.clip(1.0 + roll / 1.5, 0.2, 3.0))
+            ctrl.finger_mode = "none"
+            ctrl.offset = np.array([x, y, 0.0])
+            ctrl.energy = float(np.clip(self._pluck.max(), 0.0, 1.0))
+        elif preset == "heartbeat":                            # it breathes on the beat, the open hand = depth
+            ctrl.pulse = float(np.clip(opn * amt, 0.0, 1.5))
+            ctrl.material = float(np.clip((flex - 0.5) * 1.8, -0.6, 1.0))
+            ctrl.energy = float(np.clip(0.3 + 0.7 * opn, 0.0, 1.0))
+            ctrl.rot = euler(0.5 * roll, 0.5 * pitch, 0.5 * yaw)
+            ctrl.grip = 0.35
+            ctrl.finger_mode = "none"
+            ctrl.scale = float(np.clip(1.0 + 0.25 * z, 0.7, 1.4))
+        elif preset == "elastic":                              # the hand's position stretches it, a twist screws it
+            ctrl.stretch = np.clip(1.0 + 0.9 * np.array([z, x, y]) * k, 0.4, 2.2)
+            ctrl.twist = float(np.clip(roll * 1.5, -5.0, 5.0))
+            ctrl.rot = euler(0.0, 0.5 * pitch, 0.5 * yaw)
+            ctrl.grip = 0.7
+            ctrl.material = float(np.clip(0.8 - 1.6 * opn, -0.8, 0.8))
+            ctrl.finger_mode = "none"
+        elif preset == "dust":                                 # open hand scatters it, the fist gathers it
+            sc = float(np.clip((opn - 0.35) / 0.5, 0.0, 1.0)) ** 1.5 * min(1.0, k)
+            ctrl.scatter = sc
+            ctrl.material = float(np.clip(-0.8 * sc + (0.6 if flex > 0.7 else 0.0), -1.0, 1.0))
+            ctrl.spin = float(np.clip(roll * 2.0, -6.0, 6.0))
+            ctrl.grip = 0.95 if flex > 0.7 else 0.4
+            ctrl.energy = float(np.clip(0.2 + 0.6 * sc, 0.0, 1.0))
+            ctrl.offset = np.array([x, y, 0.0])
+            ctrl.finger_mode = "none"
+        elif preset == "stasis":                               # the fist stops time, the hand turns the still form
+            ctrl.freeze = float(np.clip((flex - 0.35) / 0.45, 0.0, 1.0))
+            ctrl.rot = euler(roll, pitch, yaw)
+            ctrl.grip = 1.0
+            ctrl.energy = float(np.clip(opn - 0.3, 0.0, 1.0))
+            ctrl.lines = 0.25 + 0.6 * ctrl.freeze
+            ctrl.finger_mode = "none"
+        elif preset == "storm":                                # the hand is the wind: direction and strength
+            d = euler(0.0, pitch, yaw) @ np.array([-1.0, 0.0, 0.0])
+            ctrl.wind = d * 14.0 * opn * k
+            ctrl.scatter = 0.2 * opn
+            ctrl.offset = np.array([x, y, 0.0])
+            ctrl.energy = float(np.clip(opn, 0.0, 1.0))
+            ctrl.finger_mode = "none"
+        elif preset == "leash":                                # it flies where the hand points, circles there
+            fy = view_yaw if view_yaw is not None else 0.0
+            fwd, right = np.array([math.cos(fy), math.sin(fy)]), np.array([math.sin(fy), -math.cos(fy)])
+            xy = right * x * 8.0 + fwd * z * 8.0
+            ctrl.point = np.array([xy[0], xy[1], float(np.clip(3.5 + 2.5 * y, 1.0, 9.0))])
+            ctrl.orbit = float(np.clip(roll * 1.2, -2.5, 2.5))
+            ctrl.orbit_radius = 1.5 + 4.5 * opn
+            ctrl.amount = 0.6 * amt
+        elif preset == "pilot":                                # bank to turn, pitch to climb, open = throttle
+            ctrl.rot = euler(0.8 * roll, 0.8 * pitch, 0.0)
+            ctrl.grip = 0.8
+            self._alt = float(np.clip(self._alt - pitch * dt * 0.9, -1.0, 2.5))
+            ctrl.offset = np.array([float(np.clip(-roll / 0.7, -1.0, 1.0)), self._alt, 0.0])
+            ctrl.speed = 0.4 + 1.6 * opn
+            ctrl.amount = 0.5 * amt
+            cam["distance"] = float(np.clip(1.15 - 0.3 * opn, 0.7, 1.3))
+        elif preset == "flywheel":                             # throw a spin into it, the fist brakes
+            tau = 0.25 if flex > 0.75 else 4.0
+            self._wheel = self._wheel * math.exp(-dt / tau) + st.omega * amt * dt * 6.0
+            self._wheel = np.clip(self._wheel, -12.0, 12.0)
+            ctrl.angvel = self._wheel.copy()
+            ctrl.amount = 0.7 * amt
+            ctrl.energy = float(np.clip(np.abs(self._wheel).max() / 8.0, 0.0, 1.0))
+        elif preset == "shepherd":                             # extended fingers = bodies, the hand turns the flock
+            n_up = int((ext > 0.6).sum())
+            ctrl.flock = int(np.clip(n_up, 1, 4))
+            ctrl.formation_turn = float(yaw)
+            ctrl.formation_spread = 0.4 + 1.4 * opn
+            ctrl.offset = np.array([x, y, 0.0])
+            ctrl.rot = euler(0.0, 0.0, 0.4 * yaw)
+            ctrl.amount = 0.5 * amt
+        elif preset == "swarm":                                # open = the nanomachines fly out to your hand
+            ctrl.swarm_release = float(np.clip((opn - 0.4) / 0.4, 0.0, 1.0))
+            ctrl.swarm_pull = float(np.clip((flex - 0.5) / 0.3, 0.0, 1.0))
+            ctrl.cloud = np.array([2.0 + 3.0 * z, -3.0 * x, 1.2 + 2.5 * y])
+            ctrl.cloud_swirl = float(np.clip(roll * 2.0, -6.0, 6.0))
+            ctrl.scatter = 0.5 * ctrl.swarm_release if variant not in HIVES else 0.0
+            ctrl.finger_mode = "none"
+            ctrl.energy = float(np.clip(0.2 + 0.8 * ctrl.swarm_release, 0.0, 1.0))
+        elif preset == "neon":                                 # the hand plays the light, taps flash it
+            if np.any(d_ext < -2.5):
+                self._flash = 1.0
+            self._flash *= math.exp(-dt / 0.3)
+            ctrl.lines = float(np.clip((0.15 + 0.85 * opn) * k + self._flash, 0.0, 1.5))
+            ctrl.energy = float(np.clip(0.3 + y, 0.0, 1.0))
+            ctrl.rot = euler(0.5 * roll, 0.5 * pitch, 0.5 * yaw)
+            ctrl.grip = 0.25
+            ctrl.finger_mode = "none"
+        elif preset == "rhythm":                               # robotic: it snaps to the hand in steps, on the beat
+            b_idx = int(math.floor(beat))
+            if b_idx != self._held[1]:
+                step = math.pi / 4
+                self._held = (np.round(ang * amt / step) * step, b_idx)
+            ctrl.rot = euler(*self._held[0])
+            ctrl.grip = 1.0
+            ctrl.pulse = float(np.clip(opn, 0.0, 1.0))
+            ctrl.finger_mode = "none"
+            ctrl.lines = 0.3 + 0.7 * math.exp(-(beat % 1.0) / 0.15)
+        elif preset == "mandala":                              # extended fingers = rays, the twist turns them
+            n_up = int((ext > 0.55).sum())
+            ctrl.rays = 2 + n_up
+            ctrl.ray_len = float(np.clip((0.2 + 0.8 * opn) * amt, 0.0, 1.4))
+            ctrl.ray_phase = float(roll * 2.0)
+            ctrl.spin = float(np.clip(yaw * 2.0, -6.0, 6.0))
+            ctrl.rot = euler(0.0, 0.5 * pitch, 0.0)
+            ctrl.finger_mode = "none"
         events = []
         if c["gestures"] and preset != "off":
             for g in gestures:

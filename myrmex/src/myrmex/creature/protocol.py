@@ -8,6 +8,7 @@
     [FLAG_COLONY: <B bodies> <B> <H> <4f prey>, plate n*f, normal n*3f, owner n*B]
     [FLAG_HIVE: <H particles> <B structures> <B memories> <3f origin>, particles P*3h (mm from origin),
                 pattern n*B]
+    [style 2 (Cyber Hive) after the hive block: <H n> <f scan front>, light n*B]
 Frames above 8 KB travel in fragments (realtime.protocol.fragment).
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from ..realtime.protocol import _CAM, SHOT_KINDS, CameraState
 from .behavior import STATES
 from .morphology import MORPHS
 from .colony import INTENTS as COLONY_INTENTS
-from .colony import SHAPES as COLONY_SHAPES
+from .colony import ALL_SHAPES as COLONY_SHAPES
 from .polyalloy import ATTRACTORS, INTENTS, MATERIAL
 
 MATERIAL_NAMES = tuple(MATERIAL)
@@ -32,6 +33,7 @@ FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY, FLAG_HIVE = 1, 4,
 _POLY = struct.Struct("<BBHHH")
 _COL = struct.Struct("<BBH4f")          # bodies, pad, pad, prey x y z radius
 _HIVE = struct.Struct("<HBB3f")         # particles, structures, memories, origin
+_CYB = struct.Struct("<Hf")             # light count, scan front (m along the body, NaN = none)
 _LINK = np.dtype([("i", "<u2"), ("j", "<u2"), ("s", "<f4")])
 _HDR = struct.Struct("<4sBBHIddfBBHffff3ff")
 MORPH_NAMES = tuple(dict.fromkeys(tuple(MORPHS) + ATTRACTORS + COLONY_SHAPES))
@@ -61,7 +63,7 @@ class CreatureFrame:
     camera: CameraState | None = None
     material: str = ""
     fragments: int = 1
-    style: int = 0                           # 0 classic (struts, plates) · 1 osseous (bone links, scutes)
+    style: int = 0                           # 0 classic (struts, plates) · 1 osseous (bone links, scutes) · 2 cyber
     dispersion: np.ndarray | None = None
     links: np.ndarray | None = None          # (L, 3) i, j, strength
     obstacles: np.ndarray | None = None      # (O, 4) x, y, z, radius
@@ -74,6 +76,8 @@ class CreatureFrame:
     rd: np.ndarray | None = None             # hive: reaction-diffusion activator per node
     structures: int = 0
     memories: int = 0
+    light: np.ndarray | None = None          # cyber: light-line intensity per node 0..1
+    scan: float = float("nan")               # cyber: scan front along the body (m from its centre)
 
 
 def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camera: CameraState | None = None) -> bytes:
@@ -116,6 +120,10 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
         q = np.clip(np.round((st.particles - origin) * 1000.0), -32767, 32767).astype("<i2")
         out.append(_HIVE.pack(len(q), min(255, int(st.structures)), min(255, int(st.memories)), *map(float, origin)))
         out += [q.tobytes(), np.clip(np.asarray(st.rd) * 255.0, 0, 255).astype("u1").tobytes()]
+        light = getattr(st, "light", None)
+        if light is not None and int(getattr(st, "style", 0)) == 2:
+            out.append(_CYB.pack(len(light), float(getattr(st, "scan", float("nan")))))
+            out.append(np.clip(np.asarray(light) * 255.0, 0, 255).astype("u1").tobytes())
     return b"".join(out)
 
 
@@ -181,4 +189,12 @@ def decode_creature(data: bytes) -> CreatureFrame | None:
                 except ValueError:
                     return fr
                 fr.structures, fr.memories = hv[1], hv[2]
+                if style == 2 and len(data) >= off + _CYB.size:
+                    nl_, scan = _CYB.unpack_from(data, off)
+                    off += _CYB.size
+                    try:
+                        fr.light = take("u1", nl_).astype(float) / 255.0
+                    except ValueError:
+                        return fr
+                    fr.scan = scan
     return fr

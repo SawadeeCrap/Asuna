@@ -249,6 +249,10 @@ class CreatureEngine:
         if gc.active:                                      # the hand steers the goal sideways
             goal = np.asarray(goal, float).copy()
             goal[:2] += R[:2, 1] * gc.offset[0] * 1.5 * mc.size
+            if np.any(np.abs(gc.wind) > 1e-4):             # ... and its wind carries it
+                goal[:2] += (R @ gc.wind)[:2] * 0.04 * mc.size
+            if gc.point is not None:                       # a leash: it walks to where the hand points
+                goal[:2] = np.asarray(gc.point, float)[:2]
         dR = self.glove.begin(dt)
         self.glove.rigid(nd.pos, nd.vel, nd.pos[0].copy(), R @ dR @ R.T, slice(1, None))
         R = R @ self.glove.G
@@ -269,9 +273,11 @@ class CreatureEngine:
             if gc.finger_mode == "limbs":
                 ext = np.array([gc.fingers[self.finger_of[int(n)]] for n in self.i_primary])
                 local = local * (0.55 + 0.9 * ext * min(1.0, gc.amount) + 0.45 * (1 - min(1.0, gc.amount)))[:, None]
-            local = local * gc.scale
+            local = self.glove.local(local, t, inp.beat if inp.playing else 2.0 * t, limbs=False)
         local[:, 0] += lean_m * 0.3 * size * local[:, 2]
         noise_amp = (pr["noise"] * 0.6 + mnoise * 0.4 + self.beh.profile("noise") * 0.3) * 0.06 * size
+        if gc.active and gc.scatter > 0:                   # the hand scatters it
+            noise_amp *= 1.0 + 5.0 * gc.scatter
         ph_i = np.arange(len(self.dir_p)) * 1.7
         local += noise_amp * np.stack([np.sin(0.7 * t + ph_i), np.sin(0.53 * t + 2 * ph_i), np.sin(0.61 * t + 3 * ph_i)], axis=1)
         tgt = nd.pos[0] + local @ R.T
@@ -294,9 +300,12 @@ class CreatureEngine:
         # 9. appendages: follow-the-leader chains with wave, curl, gravity and high-frequency tremble
         self._appendage_targets(t, R, pr, inp)
         nd.step(dt, ph.gravity, ph.max_speed, self.i_primary, ph.repulsion * (0.5 + pr["density"]), ph.ground)
+        self.glove.damp(nd.vel, dt)                        # a fist in stasis holds the motion
         # 10. surface / energy for presentation
         self.surface += (min(1.0, pr["surface_activity"] + 0.5 * inp.high + 0.4 * inp.transient) - self.surface) * min(1.0, dt * 4)
         self.glow = max(self.glow * math.exp(-dt / 0.35), 0.8 * inp.transient * a)
+        if gc.active and gc.lines is not None:             # the hand plays the light
+            self.glow = max(self.glow, gc.lines)
 
     def _appendage_targets(self, t: float, R: np.ndarray, pr: dict, inp) -> None:
         nd, K, size = self.nodes, self.cfg.morphology.segments, self.cfg.morphology.size

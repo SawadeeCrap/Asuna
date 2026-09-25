@@ -330,7 +330,9 @@ def _clear_take_animation() -> None:
     from .creature import BONES, LATTICE, LURE, META, OBSTACLE, PLATES, SCUTES, SWARM
     take_player.detach()
     mb = bpy.data.metaballs.get(META)
+    lines = bpy.data.materials.get("MyrmexCyberLine")
     for idb in [mb, mb.materials[0].node_tree if mb is not None and mb.materials and mb.materials[0] else None,
+                lines.node_tree if lines is not None else None,
                 bpy.data.objects.get(LURE)] + [o for o in bpy.data.objects if o.name.startswith(OBSTACLE)]:
         if idb is not None and idb.animation_data is not None and idb.animation_data.action is not None:
             idb.animation_data.action = None

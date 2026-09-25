@@ -25,7 +25,7 @@ import numpy as np
 from myrmex.creature.take import CreatureTake
 
 from . import cinema, compat, preview
-from .creature import setup_creature_scene
+from .creature import setup_creature_scene, variant_style
 
 
 def _decimate(vals: np.ndarray, tol: float, stride: int) -> np.ndarray:
@@ -86,8 +86,7 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     except Exception:
         pass
     fps = int(fps or round(take.fps))
-    style = 1 if take.variant.startswith("osseous") else 0          # Osseous line: bone links + scutes
-    base = take.variant.replace("osseous_", "").replace("osseous", "polyalloy")
+    style, base = variant_style(take.variant)      # 1 Osseous: bone links + scutes · 2 Cyber: rails + panels
     sc.render.fps, sc.render.fps_base = fps, 1.0
     view = setup_creature_scene(sc, take.variant, keep_look=keep_look)
     mb = view.mb
@@ -129,7 +128,21 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
                            ("MyrmexGlow", 4.0 * glow)):
             if name in nt.nodes:
                 sch.append((f'nodes["{name}"].outputs[0].default_value', 0, vals))
+        if style == 2 and "MyrmexScan" in nt.nodes:          # Cyber Hive: the pattern rides with the body
+            scan = np.nan_to_num(take.resampled("scan", fps), nan=-1000.0) if "scan" in take.d else np.full(m, -1000.0)
+            c3 = take.resampled("com", fps) if "com" in take.d else pos.mean(1)
+            hd = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]] if "heading" in take.d else np.zeros(m)
+            sch += [('nodes["MyrmexScan"].outputs[0].default_value', 0, scan),
+                    ('nodes["MyrmexHeading"].outputs[0].default_value', 0, hd)]
+            sch += [(f'nodes["MyrmexC{a}"].outputs[0].default_value', 0, c3[:, k]) for k, a in enumerate("XYZ")]
         keys += key_channels(nt, "MyrmexTakeShader", sch, frames, tol=1e-3)
+    lm = bpy.data.materials.get("MyrmexCyberLine") if style == 2 else None
+    if lm is not None and lm.node_tree is not None and "MyrmexTime" in lm.node_tree.nodes:
+        _clear_anim(lm.node_tree)
+        ar = take.resampled("arousal", fps) if "arousal" in take.d else np.full(m, 0.5)
+        keys += key_channels(lm.node_tree, "MyrmexTakeLines",
+                             [('nodes["MyrmexTime"].outputs[0].default_value', 0, t * (0.35 + 0.5 * ar)),
+                              ('nodes["MyrmexGlow"].outputs[0].default_value', 0, 0.8 * glow)], frames, tol=1e-3)
     # Lights and floor follow the organism (and rise with it when it flies).
     com = take.resampled("com", fps) if "com" in take.d else pos.mean(1)
     heading = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]] if "heading" in take.d else np.zeros(m)
@@ -156,7 +169,7 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     # Hive: the nanomachine swarm (PC2 cache).
     parts = take.particles(fps)
     if parts is not None:
-        view.make_hive(parts.shape[1])
+        view.make_hive(parts.shape[1], style)
         pc2 = os.path.splitext(path)[0] + "_swarm.pc2"
         write_pc2(pc2, parts)
         sw = view.swarm

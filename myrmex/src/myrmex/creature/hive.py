@@ -79,7 +79,7 @@ class HiveEngine(ColonyEngine):
         super().__init__(cfg)
         self.n_fly = cfg.max_bodies
         for _ in range(cfg.max_structures):                  # structure slots after the flying bodies
-            self.bodies.append(Body(0.0))
+            self.bodies.append(Body(0.0, self.SHAPE_SET))
         self.kind_of: dict[int, str] = {}
         self.anchor: dict[int, np.ndarray] = {}
         self.born_at: dict[int, float] = {}
@@ -154,7 +154,7 @@ class HiveEngine(ColonyEngine):
         site = lead.P + fwd * self.ev_rng.uniform(6.0, 9.0) + side
         site[2] = 0.0 if kind in ("PILLAR", "ARCH") else max(2.0, lead.P[2])
         b = self.bodies[k]
-        b.__init__(lead.heading)
+        b.__init__(lead.heading, self.SHAPE_SET)
         b.alive, b.intent = True, "STRUCTURE"
         b.mat_goal = np.array(MATERIAL["HIGH_STIFFNESS"])
         self.own[donors] = k
@@ -368,6 +368,10 @@ class HiveEngine(ColonyEngine):
         # detach where the material loosens, is hit or scattered
         ns = pr["nanoswarm"]
         rate = ns * (3.0 * disp[h] + 2.5 * self.local[h] + (4.0 if self.t < self.turb_until else 0.0)) + 0.02
+        gc = self.glove.ctrl
+        rel, pull = (gc.swarm_release, gc.swarm_pull) if gc.active else (0.0, 0.0)
+        if rel > 0 or pull > 0:                          # the hand lets the machines out / calls them back
+            rate = rate * (1.0 - pull) + 5.0 * rel
         go = b & (self.nrng.random(Np) < rate * dt)
         if go.any():
             b[go] = False
@@ -399,11 +403,22 @@ class HiveEngine(ColonyEngine):
             coh = self.m[h[f], 0]
             # home once the flight is over and the material there holds together (couriers go straight)
             home = ((self.p_free_t[f] > 0.4 + 1.4 * ns) & (coh > 0.5) & (disp[h[f]] < 0.5)) | self.p_courier[f]
-            k_home = np.where(self.p_courier[f], 9.0, 6.0) * home
+            if rel > 0.5:
+                home &= self.p_courier[f]
+            if pull > 0.3:
+                home[:] = True
+            k_home = np.where(self.p_courier[f], 9.0, 6.0) * home * (1.0 + 3.0 * pull)
             swirl_k = np.where(home, 0.25, 1.0)[:, None] * (1.0 + 2.5 * inp.energy) * (0.3 + ns)
             # homing matches the host's velocity (a moving body can still catch its machines back)
             ref = np.where(home[:, None], v[h[f]], 0.0)
             acc = flow * swirl_k + (ref - pv[f]) * np.where(home, 3.0, 0.9)[:, None] + (tgt[f] - q) * k_home[:, None]
+            if rel > 0 and gc.cloud is not None:        # a cloud round the hand's point, turning
+                lead = self.bodies[0]
+                c0 = lead.P + lead.R() @ np.asarray(gc.cloud, float)
+                dq = q - c0
+                sw = np.cross(np.array([0.0, 0.0, 1.0]), dq) * gc.cloud_swirl
+                away = ~home
+                acc[away] += (rel * (2.5 * (-dq) + sw - 0.4 * pv[f]))[away]
             pv[f] += acc * dt
             back = np.linalg.norm(tgt[f] - q, axis=1) < 0.18 * cfg.size
             fi = np.nonzero(f)[0][back & home]

@@ -20,6 +20,7 @@ from .control import CreatureControlInput
 from .engine import EVENTS, CreatureEngine
 from .colony import ColonyConfig, ColonyEngine
 from .hive import HiveConfig, HiveEngine
+from .cyber import VARIANTS as CYBER
 from .osseous import VARIANTS as OSSEOUS
 from .polyalloy import PolyalloyConfig, PolyalloyEngine
 
@@ -33,7 +34,9 @@ CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 
                  # Polyalloy Hive: living architecture
                  86: "BUILD", 88: "RECALL",
                  # Osseous line (v5-v7): lunge, ossify, quill volley
-                 89: "STRIKE", 91: "OSSIFY", 93: "QUILLS"}
+                 89: "STRIKE", 91: "OSSIFY", 93: "QUILLS",
+                 # Cyber Hive (v8): light scan, digital glitch
+                 95: "SCAN", 96: "GLITCH"}
 
 
 CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
@@ -46,7 +49,7 @@ class CreatureBackend:
                  variant: str = "nanomaterial"):
         self.variant = variant
         kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine,
-                **{k: v[0] for k, v in OSSEOUS.items()}}.get(variant, CreatureEngine)
+                **{k: v[0] for k, v in OSSEOUS.items()}, **{k: v[0] for k, v in CYBER.items()}}.get(variant, CreatureEngine)
         self.engine = kind(cfg)
         self.events = getattr(kind, "EVENTS", EVENTS)
         self.fx = FeatureExtractor(MusicTimeline(source="live"))
@@ -114,6 +117,8 @@ class CreatureBackend:
             f.update(particles=np.clip(np.round((s.particles - s.com) * 1000.0), -32767, 32767).astype(np.int16),
                      rd=np.clip(s.rd * 255.0, 0, 255).astype(np.uint8), structures=s.structures,
                      memories=s.memories)
+        if getattr(s, "light", None) is not None:          # Cyber Hive: light lines per node, the scan front
+            f.update(light=np.clip(s.light * 255.0, 0, 255).astype(np.uint8), scan=float(s.scan))
         self.frames.append(f)
 
     def save_take(self, folder: str, fps: float = 30.0) -> str | None:

@@ -26,6 +26,19 @@ LURE = "ColonyPrey"
 LATTICE = "PolyLattice"          # (old strut tubes - removed when found)
 MICRO = "PolyMicro"
 OBSTACLE = "PolyObstacle"
+RAILS = "CyberRails"            # Cyber Hive (v8): hexagonal rails with light lines
+PANELS = "CyberPanels"          # Cyber Hive (v8): hex panels with a light ring
+CYBER_MAT = "MyrmexCyberWhite"
+CYBER_GREEN = (0.55, 1.0, 0.3, 1.0)   # light acid green (linear), soft: low strength, never glaring
+
+
+def variant_style(variant: str) -> tuple[int, str]:
+    """-> (look: 0 classic · 1 osseous · 2 cyber, base organism: nanomaterial / polyalloy / colony / hive)."""
+    if variant.startswith("cyber"):
+        return 2, variant.replace("cyber_", "") or "hive"
+    if variant.startswith("osseous"):
+        return 1, variant.replace("osseous_", "").replace("osseous", "polyalloy")
+    return 0, variant
 
 
 def nanomaterial(name: str = MAT, poly: bool = False) -> bpy.types.Material:
@@ -372,6 +385,345 @@ def plate_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np
     return out.reshape(-1, 3)
 
 
+# ---------------------------------------------------------------------------- Cyber Hive (v8)
+def _value(nt, name: str, value: float = 0.0):
+    n = nt.nodes.new("ShaderNodeValue")
+    n.name = n.label = name
+    n.outputs[0].default_value = value
+    return n
+
+
+def _math(nt, op: str, a, b=None, c=None, clamp: bool = False):
+    n = nt.nodes.new("ShaderNodeMath")
+    n.operation = op
+    n.use_clamp = clamp
+    for k, v in enumerate((a, b, c)):
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            n.inputs[k].default_value = float(v)
+        else:
+            nt.links.new(v, n.inputs[k])
+    return n.outputs[0]
+
+
+def _attr(nt, name: str):
+    n = nt.nodes.new("ShaderNodeAttribute")
+    n.attribute_type = "GEOMETRY"
+    n.attribute_name = name
+    return n.outputs["Fac"]
+
+
+def _principled(mat, **vals):
+    try:
+        mat.use_nodes = True
+    except Exception:
+        pass
+    b = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    for k, v in vals.items():
+        k = k.replace("_", " ")
+        if k in b.inputs:
+            b.inputs[k].default_value = v
+    return b
+
+
+def cyber_body_material() -> bpy.types.Material:
+    """White nanomaterial: ceramic gloss over microscopic cells; faint circuit seams and a scan band glow in
+    soft acid green.  The pattern rides with the body (centre + heading written every frame)."""
+    mat = bpy.data.materials.get(CYBER_MAT)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(CYBER_MAT)
+    b = _principled(mat, Base_Color=(0.84, 0.86, 0.85, 1.0), Metallic=0.0, Coat_Weight=0.6, Coat_Roughness=0.08,
+                    Specular_IOR_Level=0.5)
+    nt = mat.node_tree
+    tm, act, glow = _value(nt, "MyrmexTime"), _value(nt, "MyrmexActivity"), _value(nt, "MyrmexGlow")
+    scan, hd = _value(nt, "MyrmexScan", -1000.0), _value(nt, "MyrmexHeading")
+    com = nt.nodes.new("ShaderNodeCombineXYZ")
+    for a in "XYZ":
+        nt.links.new(_value(nt, "MyrmexC" + a).outputs[0], com.inputs[a])
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    sub = nt.nodes.new("ShaderNodeVectorMath")
+    sub.operation = "SUBTRACT"
+    nt.links.new(tc.outputs["Object"], sub.inputs[0])
+    nt.links.new(com.outputs[0], sub.inputs[1])
+    rot = nt.nodes.new("ShaderNodeVectorRotate")               # into the body frame (x = forward)
+    rot.rotation_type = "Z_AXIS"
+    rot.invert = True
+    nt.links.new(sub.outputs[0], rot.inputs["Vector"])
+    nt.links.new(hd.outputs[0], rot.inputs["Angle"])
+    P = rot.outputs[0]
+    cells = nt.nodes.new("ShaderNodeTexVoronoi")                # nano cells: fine seams (relief)
+    cells.feature = "DISTANCE_TO_EDGE"
+    cells.inputs["Scale"].default_value = 55.0
+    nt.links.new(P, cells.inputs["Vector"])
+    nz = nt.nodes.new("ShaderNodeTexNoise")
+    nz.noise_dimensions = "4D"
+    nz.inputs["Scale"].default_value = 2.5
+    nz.inputs["Detail"].default_value = 3.0
+    nt.links.new(P, nz.inputs["Vector"])
+    nt.links.new(_math(nt, "MULTIPLY", tm.outputs[0], 0.35), nz.inputs["W"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.22
+    bump.inputs["Distance"].default_value = 0.003
+    nt.links.new(cells.outputs["Distance"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    rr = nt.nodes.new("ShaderNodeMapRange")
+    rr.inputs["To Min"].default_value, rr.inputs["To Max"].default_value = 0.14, 0.3
+    nt.links.new(nz.outputs["Fac"], rr.inputs["Value"])
+    nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
+    # circuit seams: cell borders of a coarse Voronoi, only a part of them lit (a slow gate)
+    circ = nt.nodes.new("ShaderNodeTexVoronoi")
+    circ.feature = "DISTANCE_TO_EDGE"
+    circ.inputs["Scale"].default_value = 4.5
+    nt.links.new(P, circ.inputs["Vector"])
+    ln = nt.nodes.new("ShaderNodeMapRange")
+    ln.inputs["From Min"].default_value, ln.inputs["From Max"].default_value = 0.0, 0.03
+    ln.inputs["To Min"].default_value, ln.inputs["To Max"].default_value = 1.0, 0.0
+    nt.links.new(circ.outputs["Distance"], ln.inputs["Value"])
+    gate = nt.nodes.new("ShaderNodeMapRange")
+    gate.inputs["From Min"].default_value, gate.inputs["From Max"].default_value = 0.47, 0.56
+    nt.links.new(nz.outputs["Fac"], gate.inputs["Value"])
+    lines = _math(nt, "MULTIPLY", ln.outputs["Result"], gate.outputs["Result"])
+    lit = _math(nt, "MULTIPLY", lines, _math(nt, "MULTIPLY_ADD", glow.outputs[0], 0.2, 0.45))
+    # the scan band: a thin ring of light sweeping the body tail -> head
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    nt.links.new(P, sep.inputs[0])
+    q = _math(nt, "DIVIDE", _math(nt, "SUBTRACT", sep.outputs["X"], scan.outputs[0]), 0.07)
+    band = _math(nt, "EXPONENT", _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", q, q), -1.0))
+    em = _math(nt, "MULTIPLY", _math(nt, "MULTIPLY_ADD", band, 1.4, lit), 1.8)
+    if "Emission Color" in b.inputs:
+        b.inputs["Emission Color"].default_value = CYBER_GREEN
+        nt.links.new(em, b.inputs["Emission Strength"])
+    return mat
+
+
+def cyber_hull_material() -> bpy.types.Material:
+    """The rails' and panels' shell: the same white, a touch harder and smoother."""
+    mat = bpy.data.materials.get("MyrmexCyberHull")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MyrmexCyberHull")
+    _principled(mat, Base_Color=(0.8, 0.82, 0.81, 1.0), Metallic=0.1, Roughness=0.24, Coat_Weight=0.5,
+                Coat_Roughness=0.06, Specular_IOR_Level=0.5)
+    return mat
+
+
+def cyber_line_material() -> bpy.types.Material:
+    """Light lines: pale green-white, glowing by the node's light; pulses run along the body."""
+    mat = bpy.data.materials.get("MyrmexCyberLine")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MyrmexCyberLine")
+    b = _principled(mat, Base_Color=(0.72, 0.86, 0.66, 1.0), Metallic=0.0, Roughness=0.3, Coat_Weight=0.3)
+    nt = mat.node_tree
+    tm, glow = _value(nt, "MyrmexTime"), _value(nt, "MyrmexGlow")
+    light, flow = _attr(nt, "light"), _attr(nt, "flow")
+    pulse = _math(nt, "POWER", _math(nt, "FRACT", _math(nt, "MULTIPLY_ADD", flow, 1.6, tm.outputs[0])), 10.0)
+    s = _math(nt, "MULTIPLY", light, _math(nt, "MULTIPLY_ADD", pulse, 2.6, 1.0))
+    em = _math(nt, "MULTIPLY", _math(nt, "ADD", s, glow.outputs[0]), 2.2)
+    if "Emission Color" in b.inputs:
+        b.inputs["Emission Color"].default_value = CYBER_GREEN
+        nt.links.new(em, b.inputs["Emission Strength"])
+    return mat
+
+
+def cyber_mote_material() -> bpy.types.Material:
+    """The nanomachines: white chips, one in five a small green light."""
+    mat = bpy.data.materials.get("MyrmexCyberMote")
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new("MyrmexCyberMote")
+    b = _principled(mat, Base_Color=(0.82, 0.84, 0.83, 1.0), Metallic=0.1, Roughness=0.3)
+    nt = mat.node_tree
+    oi = nt.nodes.new("ShaderNodeObjectInfo")
+    em = _math(nt, "MULTIPLY", _math(nt, "GREATER_THAN", oi.outputs["Random"], 0.8), 3.0)
+    if "Emission Color" in b.inputs:
+        b.inputs["Emission Color"].default_value = CYBER_GREEN
+        nt.links.new(em, b.inputs["Emission Strength"])
+    return mat
+
+
+_RAIL_A = np.array([-0.16, 0.16, 1.2, 1.95, np.pi - 0.16, np.pi + 0.16, np.pi + 1.2, np.pi + 1.95]) + np.pi / 2
+_RAIL_LINE = (0, 4)             # faces from these columns to the next are the light lines (outside, inside)
+_RAIL_R = 7                     # rings: cap, shoulder, collar (3), shoulder, cap
+_RAIL_C = len(_RAIL_A)
+_RAIL_V = _RAIL_R * _RAIL_C + 2
+_RAIL_MUL = np.array([0.55, 1.0, 1.0, 1.35, 1.0, 1.0, 0.55])
+
+
+def rail_faces(K: int) -> tuple[list, list]:
+    R, C = _RAIL_R, _RAIL_C
+    faces, mats = [], []
+    for k in range(K):
+        b = k * _RAIL_V
+        for r in range(R - 1):
+            for q in range(C):
+                faces.append((b + r * C + q, b + r * C + (q + 1) % C, b + (r + 1) * C + (q + 1) % C, b + (r + 1) * C + q))
+                mats.append(1 if (q in _RAIL_LINE or r in (2, 3)) else 0)        # lines + the collar glow
+        for q in range(C):
+            faces.append((b + R * C, b + (q + 1) % C, b + q))
+            faces.append((b + R * C + 1, b + (R - 1) * C + q, b + (R - 1) * C + (q + 1) % C))
+            mats += [0, 0]
+    return faces, mats
+
+
+def rail_points(pos: np.ndarray, links: np.ndarray, up: np.ndarray, t: float, arousal: float = 0.5,
+                scale: float = 1.0) -> np.ndarray:
+    """Hexagonal rail modules along the skeleton (one per slot): two light lines along them, a glowing
+    collar that slides like a piston; separate modules with gaps.  Slots without a link collapse."""
+    K = len(links)
+    R, C = _RAIL_R, _RAIL_C
+    ok = links[:, 0] >= 0
+    i = np.where(ok, links[:, 0], 0).astype(int)
+    j = np.where(ok, links[:, 1], 0).astype(int)
+    st = np.where(ok, np.clip(links[:, 2], 0.0, 1.0), 0.0)
+    A, B = pos[i], pos[j]
+    d = B - A
+    L = np.linalg.norm(d, axis=1)
+    X = d / np.maximum(L, 1e-6)[:, None]
+    uh = up[i] + up[j]
+    uh = uh - (uh * X).sum(1, keepdims=True) * X
+    alt = np.cross(X, np.array([0.0, 0.0, 1.0]))
+    alt[np.linalg.norm(alt, axis=1) < 1e-5] = (0.0, 1.0, 0.0)
+    bad = np.linalg.norm(uh, axis=1) < 1e-5
+    uh[bad] = alt[bad]
+    Z = uh / np.maximum(np.linalg.norm(uh, axis=1, keepdims=True), 1e-6)
+    Y = np.cross(Z, X)
+    A2, L2 = A + d * 0.07, L * 0.86
+    ph = (np.arange(K) * 0.6180339887) % 1.0 * 2 * np.pi
+    c = 0.5 + 0.26 * np.sin((0.5 + 1.0 * float(arousal)) * t + ph)             # the collar slides
+    zero = np.zeros(K)
+    S = np.stack([zero, zero + 0.06, c - 0.05, c, c + 0.05, zero + 0.94, zero + 1.0], 1)          # (K, R)
+    r0 = st * (0.02 + 0.028 * np.minimum(1.0, L / 0.45)) * scale
+    rad = r0[:, None] * _RAIL_MUL[None, :]
+    center = A2[:, None, :] + X[:, None, :] * (S * L2[:, None])[..., None]
+    cs, sn = np.cos(_RAIL_A), np.sin(_RAIL_A)
+    offs = (Y[:, None, None, :] * cs[None, None, :, None] + Z[:, None, None, :] * sn[None, None, :, None]) * \
+        rad[:, :, None, None]
+    out = np.empty((K, _RAIL_V, 3))
+    out[:, :R * C] = (center[:, :, None, :] + offs).reshape(K, R * C, 3)
+    out[:, R * C] = A2 - X * (0.02 * L2)[:, None]
+    out[:, R * C + 1] = A2 + X * (1.02 * L2)[:, None]
+    hide = (~ok) | (st < 0.02) | (L < 1e-4)
+    if hide.any():
+        out[hide] = pos.mean(0)
+    return out.reshape(-1, 3)
+
+
+def _flow(pts: np.ndarray, com, heading: float) -> np.ndarray:
+    """Metres along the direction of travel (light pulses run along it)."""
+    h = np.array([math.cos(heading), math.sin(heading), 0.0])
+    return ((pts - np.asarray(com, float)) @ h).astype(np.float32)
+
+
+def rail_light(links: np.ndarray, light) -> np.ndarray:
+    ok = links[:, 0] >= 0
+    if light is None:
+        li = np.full(len(links), 0.35)
+    else:
+        light = np.asarray(light, float)
+        i = np.where(ok, links[:, 0], 0).astype(int)
+        j = np.where(ok, links[:, 1], 0).astype(int)
+        li = 0.5 * (light[i] + light[j])
+    return np.repeat(li, _RAIL_V).astype(np.float32)
+
+
+_PANEL_V = 25
+
+
+def panel_faces(n: int) -> tuple[list, list]:
+    faces, mats = [], []
+    for i in range(n):
+        b = _PANEL_V * i
+        for j in range(6):
+            j2 = (j + 1) % 6
+            faces += [(b, b + 1 + j, b + 1 + j2), (b + 1 + j, b + 7 + j, b + 7 + j2, b + 1 + j2),
+                      (b + 7 + j, b + 13 + j, b + 13 + j2, b + 7 + j2), (b + 13 + j, b + 19 + j, b + 19 + j2, b + 13 + j2)]
+            mats += [0, 0, 1, 0]                          # the ring between 0.7 and 0.8 of the radius glows
+    return faces, mats
+
+
+def panel_points(pos: np.ndarray, nrm: np.ndarray, plate: np.ndarray, radius: np.ndarray, heading: float,
+                 scale: float = 1.0) -> np.ndarray:
+    """Hexagonal panels tiling the surface, aligned with the direction of travel, gently domed."""
+    n = len(pos)
+    nr = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+    fwd = np.array([math.cos(heading), math.sin(heading), 0.0])
+    T = fwd[None, :] - (nr @ fwd)[:, None] * nr
+    e1 = np.cross(nr, np.array([0.0, 0.0, 1.0]))
+    e1[np.linalg.norm(e1, axis=1) < 1e-5] = (1.0, 0.0, 0.0)
+    weak = np.linalg.norm(T, axis=1) < 1e-4
+    T[weak] = e1[weak]
+    T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-6)
+    Bv = np.cross(nr, T)
+    c = pos + nr * (0.93 * radius)[:, None]
+    h = (np.clip(plate, 0.0, 1.0) * 0.085 * scale)[:, None]
+    a = np.pi / 3 * np.arange(6) + np.pi / 6
+    unit = np.cos(a)[None, :, None] * T[:, None, :] + np.sin(a)[None, :, None] * Bv[:, None, :]    # (n, 6, 3)
+    out = np.empty((n, _PANEL_V, 3))
+    out[:, 0] = c + nr * 0.1 * h
+    for k, (rr, lift) in enumerate(((0.62, 0.07), (0.7, 0.05), (0.8, 0.04), (1.0, -0.02))):
+        out[:, 1 + 6 * k:7 + 6 * k] = c[:, None, :] + unit * (rr * h)[:, :, None] + (nr * lift * h)[:, None, :]
+    return out.reshape(-1, 3)
+
+
+def panel_light(light, n: int) -> np.ndarray:
+    li = np.full(n, 0.35) if light is None else np.asarray(light, float)
+    return np.repeat(li, _PANEL_V).astype(np.float32)
+
+
+def _cyber_mesh(name: str, verts: int, faces: list, mats: list, coll) -> bpy.types.Object:
+    """A mesh with the hull + line materials and the per-vertex 'flow' / 'light' attributes."""
+    ob = bpy.data.objects.get(name)
+    if ob is not None and len(ob.data.vertices) == verts and "light" in ob.data.attributes:
+        return ob
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([(0.0, 0.0, 0.0)] * verts, [], faces)
+    me.materials.append(cyber_hull_material())
+    me.materials.append(cyber_line_material())
+    me.polygons.foreach_set("material_index", np.asarray(mats, np.int32))
+    for poly in me.polygons:
+        poly.use_smooth = True
+    for a in ("flow", "light"):
+        me.attributes.new(a, "FLOAT", "POINT")
+    if ob is None:
+        ob = bpy.data.objects.new(name, me)
+        coll.objects.link(ob)
+    else:
+        ob.data = me
+    return ob
+
+
+def set_cyber_mesh(ob: bpy.types.Object, pts: np.ndarray, flow: np.ndarray, light: np.ndarray) -> None:
+    me = ob.data
+    if len(pts) != len(me.vertices):
+        return
+    me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+    if "flow" in me.attributes:
+        me.attributes["flow"].data.foreach_set("value", flow)
+        me.attributes["light"].data.foreach_set("value", light)
+    me.update()
+
+
+def set_cyber_shading(fr_t: float, glow: float, arousal: float, scan: float, com, heading: float,
+                      body: bpy.types.Material | None) -> None:
+    """Per-frame values of the Cyber Hive's shaders (live, and keyed by the take importer)."""
+    lm = bpy.data.materials.get("MyrmexCyberLine")
+    if lm is not None and lm.node_tree is not None:
+        nd = lm.node_tree.nodes
+        if "MyrmexTime" in nd:
+            nd["MyrmexTime"].outputs[0].default_value = float(fr_t) * (0.35 + 0.5 * float(arousal))
+            nd["MyrmexGlow"].outputs[0].default_value = 0.8 * float(glow)
+    if body is not None and body.node_tree is not None:
+        nd = body.node_tree.nodes
+        if "MyrmexScan" in nd:
+            nd["MyrmexScan"].outputs[0].default_value = float(scan) if math.isfinite(scan) else -1000.0
+            nd["MyrmexHeading"].outputs[0].default_value = float(heading)
+            for k, a in enumerate("XYZ"):
+                nd["MyrmexC" + a].outputs[0].default_value = float(com[k])
+
+
 def _replace_mesh_object(name: str, verts: int, faces: list, material, coll) -> bpy.types.Object:
     ob = bpy.data.objects.get(name)
     if ob is not None and len(ob.data.vertices) == verts:
@@ -395,12 +747,14 @@ def _drop(name: str) -> None:
         bpy.data.objects.remove(ob, do_unlink=True)
 
 
-def swarm_nodes() -> bpy.types.NodeTree:
-    """Loose points -> tiny hexagonal machine plates, randomly turned and sized (the nanomachine swarm)."""
-    ng = bpy.data.node_groups.get("MyrmexNanoSwarm")
+def swarm_nodes(cyber: bool = False) -> bpy.types.NodeTree:
+    """Loose points -> tiny hexagonal machine plates, randomly turned and sized (the nanomachine swarm).
+    Cyber Hive: white chips, some of them small green lights."""
+    name = "MyrmexCyberSwarm" if cyber else "MyrmexNanoSwarm"
+    ng = bpy.data.node_groups.get(name)
     if ng is not None:
         return ng
-    ng = bpy.data.node_groups.new("MyrmexNanoSwarm", "GeometryNodeTree")
+    ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
     ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
     ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
     gi, go = _node(ng, "NodeGroupInput", (-600, 0)), _node(ng, "NodeGroupOutput", (500, 0))
@@ -409,7 +763,8 @@ def swarm_nodes() -> bpy.types.NodeTree:
     cyl.inputs["Radius"].default_value = 0.012
     cyl.inputs["Depth"].default_value = 0.003
     sm = _node(ng, "GeometryNodeSetMaterial", (-350, -250))
-    sm.inputs["Material"].default_value = _simple_material("MyrmexMicroPlate", (0.02, 0.02, 0.022), 1.0, 0.22, 0.4)
+    sm.inputs["Material"].default_value = cyber_mote_material() if cyber else \
+        _simple_material("MyrmexMicroPlate", (0.02, 0.02, 0.022), 1.0, 0.22, 0.4)
     ng.links.new(cyl.outputs["Mesh"], sm.inputs["Geometry"])
     rot = _node(ng, "FunctionNodeRandomValue", (-350, -450))
     rot.data_type = "FLOAT_VECTOR"
@@ -503,17 +858,24 @@ class CreatureView:
         """Polyalloy family: skin, frame (struts, or bone links for the Osseous line), obstacles, micro-machines."""
         self.style = style
         self.poly = True
-        pm = nanomaterial(POLY_MAT, poly=True)
+        pm = cyber_body_material() if style == 2 else nanomaterial(POLY_MAT, poly=True)
         if not self.mb.materials:
             self.mb.materials.append(pm)
-        elif self.mb.materials[0] is None or self.mb.materials[0].name == MAT:   # keep a material you chose
-            self.mb.materials[0] = pm
-        if style == 1:                                     # Osseous: articulated bone links
+        elif self.mb.materials[0] is None or self.mb.materials[0].name in (MAT, POLY_MAT, CYBER_MAT):
+            self.mb.materials[0] = pm                      # (keep a material you chose yourself)
+        if style == 2:                                     # Cyber: hexagonal rails with light lines
             _drop(LATTICE)
+            _drop(BONES)
+            faces, mats = rail_faces(n_links)
+            self.lattice = _cyber_mesh(RAILS, n_links * _RAIL_V, faces, mats, self.coll)
+        elif style == 1:                                   # Osseous: articulated bone links
+            _drop(LATTICE)
+            _drop(RAILS)
             self.lattice = _replace_mesh_object(BONES, n_links * _BONE_V, bone_faces(n_links), bone_material(),
                                                 self.coll)
         else:                                              # classic: strut tubes (Geometry Nodes)
             _drop(BONES)
+            _drop(RAILS)
             ob = bpy.data.objects.get(LATTICE)
             if ob is None or len(ob.data.vertices) != 2 * n_links:
                 me = bpy.data.meshes.new(LATTICE)
@@ -533,6 +895,14 @@ class CreatureView:
             mod = mi.modifiers.new("MicroMachines", "NODES")
             mod.node_group = micro_nodes(self.obj)
             mod.show_viewport = False                      # render detail; enable in the panel to preview
+        mod = mi.modifiers.get("MicroMachines")
+        sm = next((nd for nd in mod.node_group.nodes if nd.bl_idname == "GeometryNodeSetMaterial"), None) \
+            if mod is not None and mod.node_group is not None else None
+        if sm is not None:                                 # micro-machines: white on the Cyber Hive
+            cur = sm.inputs["Material"].default_value
+            if cur is None or cur.name in ("MyrmexMicroPlate", "MyrmexCyberHull"):
+                sm.inputs["Material"].default_value = cyber_hull_material() if style == 2 else \
+                    _simple_material("MyrmexMicroPlate", (0.02, 0.02, 0.022), 1.0, 0.22, 0.4)
         self.micro = mi
         self.obstacles = []
         for k in range(n_obstacles):
@@ -587,11 +957,18 @@ class CreatureView:
     def make_colony(self, n_nodes: int, style: int = 0) -> None:
         """Colony family: armour (hexagonal plates, or bony scutes for the Osseous line) and the prey."""
         faces = [(7 * i, 7 * i + 1 + j, 7 * i + 1 + (j + 1) % 6) for i in range(n_nodes) for j in range(6)]
-        if style == 1:
+        if style == 2:                                     # Cyber: hex panels with a light ring
             _drop(PLATES)
+            _drop(SCUTES)
+            pf, pm = panel_faces(n_nodes)
+            self.plates = _cyber_mesh(PANELS, _PANEL_V * n_nodes, pf, pm, self.coll)
+        elif style == 1:
+            _drop(PLATES)
+            _drop(PANELS)
             self.plates = _replace_mesh_object(SCUTES, 7 * n_nodes, faces, bone_material(), self.coll)
         else:
             _drop(SCUTES)
+            _drop(PANELS)
             self.plates = _replace_mesh_object(PLATES, 7 * n_nodes, faces, _simple_material(
                 "MyrmexArmor", (0.028, 0.028, 0.032), 1.0, 0.28, 0.5), self.coll)
         self.armour_style = style
@@ -616,8 +993,9 @@ class CreatureView:
         lure.scale = (0.0, 0.0, 0.0)
         self.lure = lure
 
-    def make_hive(self, n_particles: int) -> None:
+    def make_hive(self, n_particles: int, style: int | None = None) -> None:
         """Fourth organism: the nanomachine swarm (points instanced as tiny plates)."""
+        style = getattr(self, "style", 0) if style is None else style
         ob = bpy.data.objects.get(SWARM)
         if ob is None or len(ob.data.vertices) != n_particles:
             me = bpy.data.meshes.new(SWARM)
@@ -627,14 +1005,16 @@ class CreatureView:
                 self.coll.objects.link(ob)
             else:
                 ob.data = me
-        if "Swarm" not in ob.modifiers:
-            ob.modifiers.new("Swarm", "NODES").node_group = swarm_nodes()
+        mod = ob.modifiers.get("Swarm") or ob.modifiers.new("Swarm", "NODES")
+        want = swarm_nodes(cyber=style == 2)
+        if mod.node_group is None or mod.node_group.name in ("MyrmexNanoSwarm", "MyrmexCyberSwarm"):
+            mod.node_group = want                          # (keep a node group you chose yourself)
         self.swarm = ob
 
     def _apply_hive(self, fr) -> None:
         n = len(fr.particles)
         if getattr(self, "swarm", None) is None or len(self.swarm.data.vertices) != n:
-            self.make_hive(n)
+            self.make_hive(n, int(getattr(fr, "style", 0)))
         me = self.swarm.data
         me.vertices.foreach_set("co", np.asarray(fr.particles, np.float32).ravel())
         me.update()
@@ -642,32 +1022,41 @@ class CreatureView:
     def _apply_colony(self, fr) -> None:
         n = len(fr.pos)
         style = int(getattr(fr, "style", 0))
-        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != 7 * n or \
+        per = _PANEL_V if style == 2 else 7
+        if getattr(self, "plates", None) is None or len(self.plates.data.vertices) != per * n or \
                 getattr(self, "armour_style", -1) != style:
             self.make_colony(n, style)
-        pts = scute_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading)) if style == 1 else \
-            plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
-        me = self.plates.data
-        me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
-        me.update()
+        if style == 2:
+            pts = panel_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading))
+            set_cyber_mesh(self.plates, pts, _flow(pts, fr.com, float(fr.heading)),
+                           panel_light(getattr(fr, "light", None), n))
+        else:
+            pts = scute_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading)) if style == 1 else \
+                plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
+            me = self.plates.data
+            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            me.update()
         lx, ly, lz, lr = (float(v) for v in fr.lure)
         self.lure.location = (lx, ly, lz)
         self.lure.scale = (lr, lr, lr)
 
     def _apply_poly(self, fr) -> None:
         style = int(getattr(fr, "style", 0))
-        per = _BONE_V if style == 1 else 2
+        per = {1: _BONE_V, 2: _RAIL_V}.get(style, 2)
         if self.lattice is None or getattr(self, "style", -1) != style or \
                 len(self.lattice.data.vertices) != per * len(fr.links):
             self.make_polyalloy(len(fr.links), max(4, len(fr.obstacles)), style)
-        if style == 1:
-            up = fr.nrm if getattr(fr, "nrm", None) is not None else fr.pos - fr.pos.mean(0)
-            pts = bone_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal))
+        up = fr.nrm if getattr(fr, "nrm", None) is not None else fr.pos - fr.pos.mean(0)
+        if style == 2:
+            pts = rail_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal))
+            set_cyber_mesh(self.lattice, pts, _flow(pts, fr.com, float(fr.heading)),
+                           rail_light(fr.links, getattr(fr, "light", None)))
         else:
-            pts = strut_points(fr.pos, fr.links, len(fr.links))
-        me = self.lattice.data
-        me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
-        me.update()
+            pts = bone_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal)) if style == 1 else \
+                strut_points(fr.pos, fr.links, len(fr.links))
+            me = self.lattice.data
+            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            me.update()
         for k, o in enumerate(self.obstacles):
             if k < len(fr.obstacles) and fr.obstacles[k, 3] > 0:
                 o.location = fr.obstacles[k, :3]
@@ -704,6 +1093,9 @@ class CreatureView:
                 nt.nodes["MyrmexActivity"].outputs[0].default_value = 0.2 + 0.8 * float(fr.surface)
             if "MyrmexGlow" in nt.nodes:
                 nt.nodes["MyrmexGlow"].outputs[0].default_value = 4.0 * float(fr.glow)
+        if int(getattr(fr, "style", 0)) == 2:
+            set_cyber_shading(float(fr.t), float(fr.glow), float(fr.arousal), float(getattr(fr, "scan", float("nan"))),
+                              fr.com, float(fr.heading), self.mb.materials[0] if self.mb.materials else None)
         self._debug(fr, bool(fr.flags & 16))
 
 
@@ -718,15 +1110,14 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
                 bpy.data.objects.remove(ob, do_unlink=True)
     scene["myrmex_variant"] = variant
     view = CreatureView(scene)
-    style = 1 if variant.startswith("osseous") else 0
-    base = variant.replace("osseous_", "").replace("osseous", "polyalloy")
+    style, base = variant_style(variant)
     if base in ("polyalloy", "colony", "hive"):
         view.make_polyalloy((128 if base == "polyalloy" else 192) if style else (480 if base == "polyalloy" else 640),
                             4, style)
     if base in ("colony", "hive"):
         view.make_colony(128, style)
     if base == "hive":
-        view.make_hive(1536)
+        view.make_hive(1536, style)
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)
     return view

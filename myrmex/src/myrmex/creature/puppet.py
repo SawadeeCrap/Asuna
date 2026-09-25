@@ -28,7 +28,7 @@ class GloveControl:
     active: bool = False
     rot: np.ndarray = field(default_factory=lambda: np.eye(3))     # hand orientation relative to neutral
     fingers: np.ndarray = field(default_factory=lambda: np.full(5, 0.5))   # extension 0 curled .. 1 extended
-    finger_mode: str = "limbs"            # limbs | morph | none
+    finger_mode: str = "limbs"            # limbs | morph | strings | none
     amount: float = 1.0                   # intensity of the deformation
     offset: np.ndarray = field(default_factory=lambda: np.zeros(3))   # x steer, y altitude, z depth (-1..1)
     scale: float = 1.0
@@ -36,6 +36,30 @@ class GloveControl:
     spin: float = 0.0                     # rad/s about the body's vertical axis (conductor)
     material: float | None = None         # -1 fluid .. +1 hard / bone
     energy: float | None = None           # extra arousal 0..1
+    stretch: np.ndarray = field(default_factory=lambda: np.ones(3))   # length, width, height factors
+    twist: float = 0.0                    # rad over the body's length (screw)
+    waves: np.ndarray = field(default_factory=lambda: np.zeros(5))    # travelling-wave amplitude per finger
+    wave_speed: float = 1.0
+    pulse: float = 0.0                    # beat-locked breathing amplitude 0..1
+    scatter: float = 0.0                  # 0..1: the material comes apart
+    freeze: float = 0.0                   # 0..1: motion held
+    wind: np.ndarray = field(default_factory=lambda: np.zeros(3))     # flow force (m/s^2, world)
+    formation_turn: float = 0.0           # rad: a flock's formation turns round its lead
+    formation_spread: float = 1.0         # flock slot distance factor
+    swarm_release: float = 0.0            # hive: nanomachines let out 0..1
+    swarm_pull: float = 0.0               # hive: nanomachines called back 0..1
+    lines: float | None = None            # light-line / glow intensity 0..1
+    angvel: np.ndarray = field(default_factory=lambda: np.zeros(3))   # rad/s thrown into the body (its frame)
+    rays: int = 0                         # radial symmetry: number of rays round the long axis
+    ray_phase: float = 0.0
+    ray_len: float = 0.0
+    point: np.ndarray | None = None       # a place on the stage (world, m) the organism is led to
+    orbit: float = 0.0                    # rad/s: circle round ``point``
+    orbit_radius: float = 3.0
+    speed: float = 1.0                    # cruise factor
+    flock: int = 0                        # colony: how many bodies the hand wants (0 = the organism decides)
+    cloud: np.ndarray | None = None       # hive: where the released nanomachines gather (lead body frame, m)
+    cloud_swirl: float = 0.0              # rad/s round that point
 
 
 def rotvec(R: np.ndarray) -> np.ndarray:
@@ -97,6 +121,7 @@ class GloveDriver:
     def __init__(self):
         self.ctrl = GloveControl()
         self.G = np.eye(3)
+        self.W = np.eye(3)                                # orientation thrown by the hand (flywheel)
         self.spin_angle = 0.0
 
     def set(self, ctrl: GloveControl | None) -> None:
@@ -110,11 +135,19 @@ class GloveDriver:
         """Advance the body rotation; returns the increment (rotate the nodes by it)."""
         c = self.ctrl
         if c.active:
-            self.spin_angle += c.spin * dt
+            if c.spin:
+                self.spin_angle += c.spin * dt
+            else:                                        # a spin that stopped settles back (shortest way)
+                self.spin_angle = ((self.spin_angle + math.pi) % (2 * math.pi) - math.pi) * math.exp(-dt / 1.2)
+            if np.any(np.abs(c.angvel) > 1e-4):
+                self.W = self.W @ from_rotvec(np.asarray(c.angvel, float) * dt)
+            else:
+                self.W = from_rotvec(rotvec(self.W) * math.exp(-dt / 1.5))
             cz, sz = math.cos(self.spin_angle), math.sin(self.spin_angle)
-            target = c.rot @ np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1.0]])
+            target = c.rot @ np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1.0]]) @ self.W
         else:                                            # no hand: ease back to the organism's own pose
-            self.spin_angle *= math.exp(-dt / 0.8)
+            self.spin_angle = ((self.spin_angle + math.pi) % (2 * math.pi) - math.pi) * math.exp(-dt / 0.8)
+            self.W = from_rotvec(rotvec(self.W) * math.exp(-dt / 0.6))
             target = from_rotvec(rotvec(self.G) * math.exp(-dt / 0.6))
         dR = target @ self.G.T
         self.G = target
@@ -131,12 +164,73 @@ class GloveDriver:
         x[sl] = P + (x[sl] - P) @ dR.T
         v[sl] = v[sl] @ dR.T
 
-    def local(self, loc: np.ndarray) -> np.ndarray:
+    def local(self, loc: np.ndarray, t: float = 0.0, beat: float = 0.0, limbs: bool = True) -> np.ndarray:
+        """The hand's deformations of a body in its own frame (x forward)."""
         c = self.ctrl
         if not c.active:
             return loc
-        out = finger_deform(loc, c.fingers, c.amount) if c.finger_mode == "limbs" else loc
-        return out * c.scale
+        out = finger_deform(loc, c.fingers, c.amount) if (limbs and c.finger_mode == "limbs") else loc.copy()
+        span = max(float(np.ptp(out[:, 0])), 1e-3)
+        xs = (out[:, 0] - out[:, 0].mean()) / span                       # -0.5 .. 0.5 along the body
+        if c.finger_mode == "strings":                                   # five strings along the body, tail .. head
+            anchors = -0.4 + 0.2 * np.arange(5)
+            w = np.exp(-((xs[:, None] - anchors[None, :]) / 0.13) ** 2)
+            out[:, 2] += 0.55 * span * c.amount * (w * (1.0 - np.asarray(c.fingers))[None, :]).sum(1)
+        if c.rays > 0 and c.ray_len > 1e-3:                              # radial symmetry round the long axis
+            phi = np.arctan2(out[:, 2], out[:, 1])
+            lobe = np.maximum(0.0, np.cos(c.rays * phi - c.ray_phase)) ** 3
+            f = 1.0 + c.ray_len * (1.6 * lobe - 0.35)
+            out[:, 1] *= f
+            out[:, 2] *= f
+        if abs(c.twist) > 1e-4:                                          # a screw along the length
+            a = c.twist * xs
+            ca, sa = np.cos(a), np.sin(a)
+            y, z = out[:, 1].copy(), out[:, 2].copy()
+            out[:, 1], out[:, 2] = ca * y - sa * z, sa * y + ca * z
+        if np.any(c.waves > 1e-3):                                       # each finger its own wave
+            for k in range(5):
+                if c.waves[k] > 1e-3:
+                    ph = 2 * np.pi * ((k + 1) * xs) - t * c.wave_speed * (2.0 + 0.7 * k)
+                    out[:, 1 + (k % 2)] += 0.22 * span * c.waves[k] * np.sin(ph)
+        if c.pulse > 1e-3:                                               # breathing on the beat
+            out *= 1.0 + 0.28 * c.pulse * math.sin(math.pi * beat) ** 2
+        return out * c.stretch * c.scale
+
+    def damp(self, v: np.ndarray, dt: float) -> None:
+        """Freeze: the hand holds the motion (in place)."""
+        if self.ctrl.active and self.ctrl.freeze > 1e-3:
+            v *= math.exp(-self.ctrl.freeze * 7.0 * dt)
+
+    def wind_acc(self, x: np.ndarray, P: np.ndarray, R: np.ndarray) -> np.ndarray | float:
+        """A flow from the hand (``wind`` in the body frame): the outer material streams like a flag or a
+        comet's tail (zero-mean part) and the body drifts a little (the rest)."""
+        c = self.ctrl
+        if not c.active or not np.any(np.abs(c.wind) > 1e-4):
+            return 0.0
+        wv = np.asarray(R, float) @ c.wind
+        r = np.linalg.norm(x - P, axis=1)
+        w = r / max(float(r.max()), 1e-6)
+        return wv[None, :] * (1.6 * (w - w.mean()) + 0.12)[:, None]
+
+    def flight(self, v_des: np.ndarray, P: np.ndarray, cruise: float) -> np.ndarray:
+        """Leash / orbit / speed: where the hand leads the organism (desired velocity, world)."""
+        c = self.ctrl
+        if not c.active:
+            return v_des
+        v_des = v_des.copy()
+        v_des[:2] *= c.speed
+        if c.point is not None:
+            d = np.asarray(c.point, float) - P
+            ang = math.atan2(-d[1], -d[0])                               # where it is, seen from the point
+            if abs(c.orbit) > 1e-3:
+                ang += math.copysign(0.6, c.orbit)                       # lead ahead on the circle
+            goal = np.asarray(c.point, float) + np.array([math.cos(ang), math.sin(ang), 0.0]) * c.orbit_radius
+            g = goal - P
+            g[2] = np.asarray(c.point, float)[2] - P[2]
+            tang = np.array([-math.sin(ang), math.cos(ang), 0.0]) * c.orbit * c.orbit_radius
+            v = np.clip(1.2 * g, -8.0, 8.0) + tang
+            v_des = np.array([v[0], v[1], float(np.clip(v[2], -3.0, 3.0))])
+        return v_des
 
 
 __all__ = ["GloveControl", "GloveDriver", "finger_deform", "euler", "rotvec", "from_rotvec", "SECTORS"]

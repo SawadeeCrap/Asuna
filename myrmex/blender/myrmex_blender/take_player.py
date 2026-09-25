@@ -21,13 +21,15 @@ def attach(scene: bpy.types.Scene, take, frame_start: int, fps: int) -> None:
     for k in ("links",):
         if k in take.d:
             d[k] = take.resampled(k, fps).astype(np.float32)
-    for k in ("nrm", "plate", "radius", "heading", "t", "arousal", "com"):
+    for k in ("nrm", "plate", "radius", "heading", "t", "arousal", "com", "light"):
         if k in take.d:
             d[k] = take.resampled(k, fps).astype(np.float32)
+    if "light" in d:
+        d["light"] /= 255.0
     if "heading" in take.d:
         d["heading"] = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]]
-    _P.update(key=take.path, d=d, start=int(frame_start), n=len(d["pos"]),
-              style=1 if take.variant.startswith("osseous") else 0)
+    from .creature import variant_style
+    _P.update(key=take.path, d=d, start=int(frame_start), n=len(d["pos"]), style=variant_style(take.variant)[0])
     scene["myrmex_take_player"] = take.path
     scene["myrmex_take_start"] = int(frame_start)
     scene["myrmex_take_fps"] = int(fps)
@@ -49,7 +51,9 @@ def apply(scene: bpy.types.Scene) -> None:
     d = _P.get("d")
     if d is None or scene.get("myrmex_take_player") != _P.get("key"):
         return
-    from .creature import BONES, LATTICE, PLATES, SCUTES, bone_points, plate_points, scute_points, strut_points
+    from .creature import (BONES, LATTICE, PANELS, PLATES, RAILS, SCUTES, _flow, bone_points, panel_light,
+                           panel_points, plate_points, rail_light, rail_points, scute_points, set_cyber_mesh,
+                           strut_points)
     style = _P.get("style", 0)
     f = int(np.clip(scene.frame_current - _P["start"], 0, _P["n"] - 1))
     pos = d["pos"][f].astype(float)
@@ -60,6 +64,21 @@ def apply(scene: bpy.types.Scene) -> None:
         up = pos - c
     t = float(d["t"][f]) if "t" in d else f / 30.0
     ar = float(d["arousal"][f]) if "arousal" in d else 0.5
+    if style == 2:                                   # Cyber Hive: rails + panels carry their light
+        com = d["com"][f] if "com" in d else pos.mean(0)
+        hd = float(d["heading"][f]) if "heading" in d else 0.0
+        light = d["light"][f] if "light" in d else None
+        ob = bpy.data.objects.get(RAILS)
+        if ob is not None and "links" in d:
+            links = d["links"][f].astype(float)
+            pts = rail_points(pos, links, up, t, ar)
+            set_cyber_mesh(ob, pts, _flow(pts, com, hd), rail_light(links, light))
+        ob = bpy.data.objects.get(PANELS)
+        if ob is not None and "plate" in d:
+            rad = d["radius"][f].astype(float) if "radius" in d else np.full(len(pos), 0.3)
+            pts = panel_points(pos, up, d["plate"][f].astype(float), rad, hd)
+            set_cyber_mesh(ob, pts, _flow(pts, com, hd), panel_light(light, len(pos)))
+        return
     ob = bpy.data.objects.get(BONES if style == 1 else LATTICE)
     if ob is not None and "links" in d:
         links = d["links"][f].astype(float)

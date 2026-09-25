@@ -34,6 +34,7 @@ class OsseousPolyalloyConfig(PolyalloyConfig):
 
 class OsseousPolyalloyEngine(PolyalloyEngine):
     BONY = True
+    STYLE = 1
     PLAN = INTENT_PLAN_BONE
     VOCAB = ATTRACTORS
     EVENTS = PolyalloyEngine.EVENTS + ("STRIKE", "OSSIFY")
@@ -49,6 +50,7 @@ class OsseousColonyConfig(ColonyConfig):
 
 class OsseousColonyEngine(ColonyEngine):
     BONY = True
+    STYLE = 1
     PLAN = PLAN_BONE
     VOCAB = FREE_SHAPES
     EVENTS = COLONY_EVENTS + ("STRIKE", "OSSIFY")
@@ -64,6 +66,7 @@ class OsseousHiveConfig(HiveConfig):
 
 class OsseousHiveEngine(HiveEngine):
     BONY = True
+    STYLE = 1
     PLAN = PLAN_BONE
     VOCAB = FREE_SHAPES
     EVENTS = HIVE_EVENTS + ("STRIKE", "OSSIFY", "QUILLS")

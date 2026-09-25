@@ -484,3 +484,57 @@ def test_osseous_colony_and_hive():
     h.set_parameter("aggression", 0.8)
     states = _run(h, 6, events=((2.0, "QUILLS"),))
     assert "QUILLS" in {n for _, n, _ in h.events} and np.isfinite(states[-1].particles).all()
+
+
+# ---------------------------------------------------------------------------- Cyber Hive (v8)
+def test_cyber_hive_machine_forms_light_scan_and_glitch():
+    from myrmex.creature.colony import CYBER_SHAPES
+    from myrmex.creature.cyber import CyberHiveEngine
+    e = CyberHiveEngine()
+    assert e.trigger_event("SCAN") and e.trigger_event("GLITCH") and e.trigger_event("STRIKE")
+    states = _run(e, 14, events=((4.0, "SCAN"), (7.0, "GLITCH"), (9.0, "OSSIFY")))
+    s = states[-1]
+    assert s.style == 2 and len(s.links) == 192 and s.light.shape == (len(s.pos),) and np.isfinite(s.pos).all()
+    assert {"SCAN", "GLITCH"} <= {n for _, n, _ in e.events}
+    scans = [st for st in states if math.isfinite(st.scan)]
+    assert scans and max(float(np.ptp(st.light)) for st in scans) > 0.4           # a bright band, not uniform
+    from myrmex.creature.puppet import GloveControl
+    from myrmex.realtime.glove import SCULPT_SHAPES
+    f = CyberHiveEngine()                                   # the machine forms exist: a sculpting hand holds each
+    shapes = SCULPT_SHAPES["cyber_hive"]
+    for name in CYBER_SHAPES:
+        ext = np.array([1.0 if s_ == name else 0.0 for s_ in shapes])
+        f.set_glove(GloveControl(active=True, fingers=ext, finger_mode="morph", grip=1.0), shapes)
+        assert _run(f, 2.0)[-1].morphology == name
+    # the classic and bony organisms never take the machine forms
+    from myrmex.creature.osseous import OsseousHiveEngine
+    assert all(st.morphology not in CYBER_SHAPES for st in _run(OsseousHiveEngine(), 4))
+
+
+def test_cyber_hive_protocol_session_and_take(tmp_path):
+    from myrmex.creature.cyber import CyberHiveEngine
+    from myrmex.creature.take import CreatureTake
+    e = CyberHiveEngine()
+    e.trigger_event("SCAN")
+    s = _run(e, 0.3)[-1]
+    fr = decode_creature(encode_creature(s, 1, 0.0, 120.0, 1))
+    assert fr.style == 2 and np.abs(fr.light - s.light).max() < 0.01 and fr.particles is not None
+    assert (math.isnan(fr.scan) and math.isnan(s.scan)) or abs(fr.scan - s.scan) < 1e-4
+
+    class Sink:
+        def send_raw(self, b):
+            pass
+
+        def close(self):
+            pass
+    ses = LiveSession(LiveConfig(backend="cyber_hive", clock="internal", record=str(tmp_path), out=[]),
+                      start_inputs=False, sink=Sink(), now=0.0)
+    now = 0.0
+    for _ in range(240):
+        now += 1 / 120
+        ses.step(now)
+    assert ses.creature.trigger("GLITCH")
+    take = CreatureTake(ses.save_take())
+    assert take.variant == "cyber_hive" and take.d["light"].shape[1] == 128 and "scan" in take.d
+    from myrmex.app import controllers as C
+    assert C.take_variant(take.path) == "cyber_hive" and "cyber_hive" in C.CREATURE_BACKENDS

@@ -104,7 +104,7 @@ class PoseSink:
         self.sock.close()
 
 
-CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive")
+CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive")
 FLYING = CREATURES[1:]
 
 
@@ -129,6 +129,10 @@ class LiveSession:
             elif cfg.backend.startswith("osseous"):             # the bony line (v5-v7)
                 from ..creature.osseous import VARIANTS
                 self.creature = CreatureBackend(VARIANTS[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                                                variant=cfg.backend)
+            elif cfg.backend == "cyber_hive":                    # v8: white nanomaterial, light lines
+                from ..creature.cyber import VARIANTS as CYBER
+                self.creature = CreatureBackend(CYBER[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
                                                 variant=cfg.backend)
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
@@ -270,7 +274,13 @@ class LiveSession:
         from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
         cfg = self.cfg
         # The hand first: the organism is moved by it in this very tick.
-        ctrl, gestures, cam_mod = self.glove.tick(self.inputs.glove, now, dt, self.creature.variant)
+        view = None
+        cs = self.camera.state if self.camera is not None else None
+        if cs is not None:
+            dv = np.asarray(cs.target, float) - np.asarray(cs.position, float)
+            view = math.atan2(dv[1], dv[0]) if abs(dv[0]) + abs(dv[1]) > 1e-6 else None
+        ctrl, gestures, cam_mod = self.glove.tick(self.inputs.glove, now, dt, self.creature.variant,
+                                                  clock=(st.beat, st.bpm, st.playing), view_yaw=view)
         self.inputs.glove_owns = ctrl.active or self.glove.cfg["preset"] == "camera"
         self.creature.engine.set_glove(ctrl, self.glove.sculpt_shapes(self.creature.variant))
         for g, names in gestures:

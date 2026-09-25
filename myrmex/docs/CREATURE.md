@@ -166,6 +166,32 @@ Control notes (in addition to v2-v4): 89 strike · 91 ossify · 93 quill volley.
 organism rebuild their struts / bone links and plates / scutes each frame from the recorded skeleton
 (no big caches); open them through the app so the Myrmex add-on is active.
 
+# Cyber Hive (backend `cyber_hive`, creature v8)
+
+The Osseous Hive (v7) rebuilt as a hi-tech machine organism: same physics and behaviour (flock,
+structures, nanomachine swarm, pattern, phrase memory, strikes, quill volleys), a different material.
+
+* **White nanomaterial** body (ceramic gloss over microscopic cells) with faint *circuit seams* and a
+  *scan band* in soft light acid green (low contrast: the lines glow, they don't glare).  The pattern
+  rides with the body (its centre and heading are written to the shader every frame).
+* **Rails** instead of bones: the skeleton through each body is drawn as white hexagonal modules with
+  two light lines along them and a glowing collar that slides like a piston (`CyberRails`).
+* **Hex panels** instead of scutes: white tiles aligned with the direction of travel, each with a
+  light ring (`CyberPanels`).
+* **Light per node** (sent in the stream, recorded in takes): a scan front sweeps the body tail → head
+  every second bar, hardening waves and hits light up, the reaction-diffusion pattern glows, pulses of
+  light run along the rails and panels in the direction of travel.
+* **Machine forms**: HALO (a core in two gyroscope rings turning apart), ARRAY (two panel arrays that
+  fold notch by notch), PRISM (a hexagonal crystal whose rings turn against each other like a lock) -
+  their mechanisms move in robotic steps on the beat.
+* Events **SCAN** (note 95) and **GLITCH** (note 96: parts of the body jump in quantized steps and
+  flicker; also by itself on hard transients), plus STRIKE / OSSIFY (= lock) / QUILLS from v7.
+* Swarm: white chips, one in five a small green light.
+
+Colours live in the materials `MyrmexCyberWhite` (body), `MyrmexCyberHull`, `MyrmexCyberLine` (the
+light: *Emission Color*, strength = light x pulses) and `MyrmexCyberMote` - change them in Blender and
+**Save Look** keeps them.
+
 # Your look in Blender (saved between sessions)
 
 Tune materials, lights, world, colour management and render settings, then *Myrmex panel → Save Look*.

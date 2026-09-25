@@ -17,13 +17,15 @@ POLY_EVENTS = tuple(e for e in PolyalloyEngine.EVENTS if e not in EVENTS)   # ob
 COLONY_EVENTS = tuple(e for e in ColonyEngine.EVENTS if e not in EVENTS + POLY_EVENTS)   # split, merge, wave, hunt, perch
 HIVE_EVENTS = tuple(e for e in HiveEngine.EVENTS if e not in EVENTS + POLY_EVENTS + COLONY_EVENTS)  # build, recall
 OSSEOUS_EVENTS = ("STRIKE", "OSSIFY", "QUILLS")
+CYBER_EVENTS = ("SCAN", "GLITCH")
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
-           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS] +
+           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +
+                                                                  CYBER_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -32,8 +34,9 @@ def creature_tab(win) -> QWidget:
     w = QWidget()
     v = QVBoxLayout(w)
     v.addWidget(QLabel("Choose the organism on the Character page: Black Nanomaterial (v1), Mimetic Polyalloy (v2, "
-                       "flying), Polyalloy Colony (v3, flock), Polyalloy Hive (v4) or their bony Osseous versions "
-                       "(v5–v7: bone-link skeletons, scutes, claws, blades, strikes). Auto = the organism decides "
+                       "flying), Polyalloy Colony (v3, flock), Polyalloy Hive (v4), their bony Osseous versions "
+                       "(v5–v7: bone-link skeletons, scutes, claws, blades, strikes) or the Cyber Hive (v8: white "
+                       "nanomaterial, rails and panels with light lines, machine forms). Auto = the organism decides "
                        "from its behaviour and the music; any knob can also be a MIDI CC. kick mode · obstacle rate · "
                        "altitude: v2–v4; swarm · armor · mechanism · hunt: v3–v4; architecture · pattern · nanoswarm · "
                        "memory: v4."))
@@ -55,9 +58,11 @@ def creature_tab(win) -> QWidget:
     v.addWidget(box)
     for title, events in (("Physical events (v2, v3) — the kick does one of these by itself (kick mode)", POLY_EVENTS),
                           ("Colony (v3, v4) — flock, hardening wave, prey, landing", COLONY_EVENTS),
-                          ("Hive (v4, v7) — living architecture: build a structure, call the material back", HIVE_EVENTS),
-                          ("Osseous (v5–v7) — lunge and knock away · ossify in a wave · quill volley (v7)",
-                           OSSEOUS_EVENTS)):
+                          ("Hive (v4, v7, v8) — living architecture: build a structure, call the material back",
+                           HIVE_EVENTS),
+                          ("Osseous (v5–v8) — lunge and knock away · ossify / lock in a wave · quill volley (v7, v8)",
+                           OSSEOUS_EVENTS),
+                          ("Cyber Hive (v8) — a scan of light sweeps the body · a digital glitch", CYBER_EVENTS)):
         box = QGroupBox(title)
         row = QHBoxLayout(box)
         for e in events:
@@ -233,13 +238,45 @@ def refresh_midi(win) -> None:
 
 
 # ============================================================================ Hand Glove
-GLOVE_PRESETS = [("puppet", "Puppet", "The body turns with your hand, fingers are its limbs; raise / lower = height, "
-                                       "left / right = steering, towards the screen = bigger and closer."),
-                 ("sculpt", "Sculpt", "The hand turns the form in place; each finger blends in one of five forms."),
-                 ("conductor", "Conductor", "Twist to spin it, tilt to melt or harden it, open fingers = energy; "
-                                            "the hand steers and lifts."),
-                 ("camera", "Camera", "The organism stays free; your hand orbits, raises and zooms the camera."),
-                 ("off", "Off", "The glove's MIDI goes to the parameters (MIDI page) as before.")]
+GLOVE_PRESETS = [
+    ("puppet", "Puppet", "The body turns with your hand, fingers are its limbs; raise / lower = height, "
+                         "left / right = steering, towards the screen = bigger and closer."),
+    ("sculpt", "Sculpt", "The hand turns the form in place; each finger blends in one of five forms."),
+    ("conductor", "Conductor", "Twist to spin it, tilt to melt or harden it, open fingers = energy; "
+                               "the hand steers and lifts."),
+    ("camera", "Camera", "The organism stays free; your hand orbits, raises and zooms the camera."),
+    ("marionette", "Marionette", "Five strings along the body, tail to head: curl a finger and its part is "
+                                 "pulled up; tilt the hand to tilt it, raise it to lift it."),
+    ("harp", "Harp", "Every finger plucks its own wave along the body - the faster you move it, the stronger it "
+                     "rings; twist = wave speed."),
+    ("heartbeat", "Heartbeat", "It breathes on the beat: the open hand = how deep, the fist = hard contractions; "
+                               "it loosely follows your hand's turn."),
+    ("elastic", "Elastic", "Your hand's position stretches it: forward / back = length, left / right = width, "
+                           "up / down = height; twist screws it; open = soft, fist = stiff."),
+    ("dust", "Dust", "Open the hand and it falls apart into a cloud; close it and the cloud gathers back into a "
+                     "body; twist to swirl it."),
+    ("stasis", "Stasis", "A fist stops time: it freezes mid-motion and you turn the still form like a sculpture; "
+                         "open the hand to let it live again."),
+    ("storm", "Storm", "Your hand is the wind: where it points is where the flow comes from, how open it is - its "
+                       "strength; the body streams like a flag."),
+    ("leash", "Leash", "It flies to the place your hand points at (seen from the camera) and circles there; twist = "
+                       "circle direction and speed, open = wider circle."),
+    ("pilot", "Pilot", "Fly it like an aircraft: bank to turn, tilt to climb or dive, open hand = throttle."),
+    ("flywheel", "Flywheel", "Throw a spin into it with a quick turn of the hand - it keeps spinning by itself; a fist "
+                             "brakes it."),
+    ("shepherd", "Shepherd", "Flocks (v3, v4, v6-v8): the number of extended fingers = the number of bodies; the "
+                             "hand turns the formation, openness spreads it."),
+    ("swarm", "Swarm", "Hives (v4, v7, v8): open the hand and the nanomachines fly out to it, close it and they "
+                       "come back; twist = swirl. Others scatter their material."),
+    ("neon", "Neon", "The hand plays the light: open = brighter light lines, quick finger taps flash them, "
+                     "height = energy."),
+    ("rhythm", "Rhythm", "Robotic: the body snaps to your hand's angle in 45° steps, only on the beat, and pulses "
+                         "with the open hand."),
+    ("echo", "Echo", "Puppet, one beat later: the organism answers your hand like a canon."),
+    ("mandala", "Mandala", "Radial symmetry: extended fingers = the number of rays, openness = their length, "
+                           "twist turns them, turning the hand spins the body."),
+    ("off", "Off", "The glove's MIDI goes to the parameters (MIDI page) as before."),
+]
 
 
 def glove_tab(win) -> QWidget:

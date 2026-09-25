@@ -11,7 +11,7 @@ import os
 
 import bpy
 
-CREATURES = ("nanomaterial", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive")
+CREATURES = ("nanomaterial", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive")
 
 
 def looks_dir() -> str:
@@ -25,6 +25,8 @@ def look_kind(scene: bpy.types.Scene | None = None) -> str:
         return v
     if bpy.data.objects.get("CreatureBody") is not None:
         bone = bpy.data.objects.get("PolyBones") is not None
+        if bpy.data.objects.get("CyberRails") is not None:
+            return "cyber_hive"
         if bpy.data.objects.get("HiveSwarm") is not None:
             return "osseous_hive" if bone else "hive"
         if bpy.data.objects.get("ColonyScutes") or bpy.data.objects.get("ColonyPlates"):
