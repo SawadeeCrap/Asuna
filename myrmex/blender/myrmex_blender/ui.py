@@ -57,6 +57,107 @@ class MyrmexLiveSettings(bpy.types.PropertyGroup):
     style: EnumProperty(name="Style", items=STYLES, default="catwalk")
     latency_ms: FloatProperty(name="Latency comp. (ms)", default=60.0, min=0.0, max=300.0)
     record_dir: StringProperty(name="Record takes to", subtype="DIR_PATH", default="")
+    take_audio: StringProperty(name="Song", subtype="FILE_PATH", default="",
+                               description="The track you played (export it from Ableton from bar 1): lined up "
+                                           "with the take by the recorded song position")
+    render_size: EnumProperty(name="Size", items=[
+        ("1920x1080", "1920×1080", "Landscape HD"), ("1080x1920", "1080×1920", "Vertical (reels / stories)"),
+        ("1080x1080", "1080×1080", "Square"), ("3840x2160", "3840×2160", "4K"), ("1280x720", "1280×720", "Draft")],
+        default="1920x1080")
+    render_quality: EnumProperty(name="Quality", items=[
+        ("eevee_preview", "Draft (EEVEE fast)", ""), ("eevee", "Final (EEVEE)", ""),
+        ("cycles", "Cinema (Cycles, slow)", "")], default="eevee")
+    micro_viewport: BoolProperty(name="Micro-machines in viewport", default=False,
+                                 description="Show the micro-machine surface layer in the viewport (always rendered)",
+                                 update=lambda self, ctx: _micro_viewport(self.micro_viewport))
+
+
+def _micro_viewport(on: bool) -> None:
+    ob = bpy.data.objects.get("PolyMicro")
+    if ob is not None and "MicroMachines" in ob.modifiers:
+        ob.modifiers["MicroMachines"].show_viewport = on
+
+
+def import_any_take(context, path: str, audio: str | None = None, use_camera: bool = True) -> str:
+    """Creature (v1 / v2) or humanoid take -> animation, cameras, music.  Returns a summary line."""
+    from myrmex.creature.take import is_creature_take
+    path = bpy.path.abspath(path)
+    if is_creature_take(path):
+        from . import creature_take
+        info = creature_take.import_take(path, audio=audio or None, use_camera=use_camera)
+        return (f"{info['variant']} take: {info['frames']} frames @ {info['fps']} fps, {info['cameras']} shots"
+                + (f", song offset {info['audio_offset']:.2f} s" if info["audio_offset"] is not None else ""))
+    from myrmex.performance.performance import Performance
+    from myrmex.performance.takes import recorded_camera_track, take_audio_offset
+
+    from . import bake, cinema, preview
+    s = context.scene.myrmex_live
+    arm = s.armature or next((o for o in bpy.data.objects if o.type == "ARMATURE" and o.get("myrmex_rig")), None) \
+        or next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
+    if arm is None:
+        raise ValueError("a humanoid take needs the character: open its .blend first")
+    _stop_link()
+    perf = Performance.load(path)
+    sc = context.scene
+    sc.render.fps, sc.render.fps_base = int(round(perf.fps)), 1.0
+    bake.bake(arm, perf, 1)
+    shots = 0
+    if use_camera:
+        track = recorded_camera_track(perf)
+        if track is not None:
+            shots = len(cinema.apply_camera_track(track, 1))
+    off = take_audio_offset(perf)
+    if audio:
+        preview.add_audio(bpy.path.abspath(audio), int(round(1 - (off or 0.0) * perf.fps)))
+    sc["myrmex_take"] = path
+    return f"humanoid take: {perf.frames} frames, {shots} shots"
+
+
+class MYRMEX_OT_import_take(bpy.types.Operator):
+    bl_idname = "myrmex.import_take"
+    bl_label = "Import Take"
+    bl_description = "Turn a recorded take (creature or humanoid .npz) into a Blender animation with its cameras and music"
+
+    filepath: StringProperty(subtype="FILE_PATH")
+    filter_glob: StringProperty(default="*.npz", options={"HIDDEN"})
+    use_camera: BoolProperty(name="Recorded camera", default=True)
+
+    def invoke(self, context, event):
+        d = context.scene.myrmex_live.record_dir or os.path.expanduser("~/Myrmex/takes/")
+        self.filepath = bpy.path.abspath(d) if os.path.isdir(bpy.path.abspath(d)) else ""
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        s = context.scene.myrmex_live
+        try:
+            msg = import_any_take(context, self.filepath, s.take_audio, self.use_camera)
+        except Exception as e:
+            self.report({"ERROR"}, f"Import failed: {e}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, msg)
+        return {"FINISHED"}
+
+
+class MYRMEX_OT_render_take(bpy.types.Operator):
+    bl_idname = "myrmex.render_take"
+    bl_label = "Render Video"
+    bl_description = "Render the imported take to an .mp4 next to it (H.264 + AAC, with the song)"
+
+    def execute(self, context):
+        from . import creature_take
+        sc = context.scene
+        s = sc.myrmex_live
+        take = sc.get("myrmex_take")
+        if not take:
+            self.report({"ERROR"}, "Import a take first")
+            return {"CANCELLED"}
+        w, h = (int(x) for x in s.render_size.split("x"))
+        out = os.path.splitext(take)[0] + f"_{w}x{h}.mp4"
+        creature_take.configure_video_output(out, (w, h), s.render_quality)
+        bpy.ops.render.render("INVOKE_DEFAULT", animation=True)
+        self.report({"INFO"}, f"Rendering to {out}")
+        return {"FINISHED"}
 
 
 def _rig_json_for(settings, arm) -> str | None:
@@ -248,10 +349,27 @@ class MYRMEX_PT_live(bpy.types.Panel):
                 box.label(text=f"waiting for poses on :{s.port} …", icon="TIME")
             else:
                 box.label(text=f"{st['fps']:.0f} fps  beat {fr.beat:.1f}  {fr.bpm:.1f} BPM", icon="SOUND")
-                box.label(text=("playing" if fr.playing else "stopped") + (" · pose" if fr.flags & 8 else " · walking")
-                               + (f" · {fr.camera.kind}" if fr.camera else ""))
+                if hasattr(fr, "morphology"):              # creature stream
+                    box.label(text=f"{fr.behavior.lower()} · {fr.morphology.lower()}"
+                                   + (f" · {fr.material.lower()}" if getattr(fr, "material", "") else "")
+                                   + (f" · {fr.camera.kind}" if fr.camera else ""))
+                else:
+                    box.label(text=("playing" if fr.playing else "stopped") + (" · pose" if fr.flags & 8 else " · walking")
+                                   + (f" · {fr.camera.kind}" if fr.camera else ""))
             if st.get("error"):
                 box.label(text=st["error"], icon="ERROR")
+        box = L.box()
+        box.label(text="Takes → video", icon="RENDER_ANIMATION")
+        box.prop(s, "take_audio")
+        box.operator("myrmex.import_take", icon="IMPORT")
+        row = box.row(align=True)
+        row.prop(s, "render_size", text="")
+        row.prop(s, "render_quality", text="")
+        box.operator("myrmex.render_take", icon="RENDER_ANIMATION")
+        if bpy.data.objects.get("PolyMicro") is not None:
+            box.prop(s, "micro_viewport")
+        if context.scene.get("myrmex_take"):
+            box.label(text=os.path.basename(context.scene["myrmex_take"]), icon="FILE_MOVIE")
         eng = live.embedded_session()
         if eng is not None:
             es = eng.status()
@@ -262,7 +380,8 @@ class MYRMEX_PT_live(bpy.types.Panel):
 
 
 CLASSES = (MyrmexLiveSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop, MYRMEX_OT_live_camera_view,
-           MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_PT_live)
+           MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take, MYRMEX_OT_render_take,
+           MYRMEX_PT_live)
 
 
 def register():

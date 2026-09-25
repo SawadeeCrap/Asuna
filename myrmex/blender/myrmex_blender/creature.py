@@ -17,13 +17,17 @@ COLL = "MyrmexCreature"
 META = "CreatureBody"
 DEBUG = "CreatureDebug"
 MAT = "MyrmexNanomaterial"
+POLY_MAT = "MyrmexPolyalloy"
+LATTICE = "PolyLattice"
+MICRO = "PolyMicro"
+OBSTACLE = "PolyObstacle"
 
 
-def nanomaterial() -> bpy.types.Material:
-    mat = bpy.data.materials.get(MAT)
+def nanomaterial(name: str = MAT, poly: bool = False) -> bpy.types.Material:
+    mat = bpy.data.materials.get(name)
     if mat is not None:
         return mat
-    mat = bpy.data.materials.new(MAT)
+    mat = bpy.data.materials.new(name)
     try:
         mat.use_nodes = True
     except Exception:
@@ -46,6 +50,9 @@ def nanomaterial() -> bpy.types.Material:
     nt.links.new(val.outputs[0], nz.inputs["W"])
     vor = nt.nodes.new("ShaderNodeTexVoronoi")
     vor.inputs["Scale"].default_value = 90.0
+    if poly:                                   # microscopic segmentation: cell borders become fine grooves
+        vor.feature = "DISTANCE_TO_EDGE"
+        vor.inputs["Scale"].default_value = 160.0
     nt.links.new(tc.outputs["Object"], vor.inputs["Vector"])
     mix = nt.nodes.new("ShaderNodeMath")
     mix.operation = "MULTIPLY_ADD"
@@ -62,8 +69,15 @@ def nanomaterial() -> bpy.types.Material:
     rr.inputs["To Max"].default_value = 0.34
     nt.links.new(nz.outputs["Fac"], rr.inputs["Value"])
     nt.links.new(rr.outputs["Result"], b.inputs["Roughness"])
-    for k, v in (("Base Color", (0.006, 0.006, 0.007, 1.0)), ("Metallic", 0.85), ("Coat Weight", 0.45),
-                 ("Coat Roughness", 0.06), ("Anisotropic", 0.35), ("Specular IOR Level", 0.6)):
+    if poly:
+        rr.inputs["To Min"].default_value = 0.16
+        rr.inputs["To Max"].default_value = 0.42
+        bump.inputs["Strength"].default_value = 0.5
+    look = ((("Base Color", (0.004, 0.004, 0.0045, 1.0)), ("Metallic", 0.7), ("Coat Weight", 0.25),
+             ("Coat Roughness", 0.1), ("Anisotropic", 0.5), ("Specular IOR Level", 0.55)) if poly else
+            (("Base Color", (0.006, 0.006, 0.007, 1.0)), ("Metallic", 0.85), ("Coat Weight", 0.45),
+             ("Coat Roughness", 0.06), ("Anisotropic", 0.35), ("Specular IOR Level", 0.6)))
+    for k, v in look:
         if k in b.inputs:
             b.inputs[k].default_value = v
     # Internal energy traces: a thin fresnel-masked, noise-gated, very dark amber emission.
@@ -84,6 +98,100 @@ def nanomaterial() -> bpy.types.Material:
         b.inputs["Emission Color"].default_value = (1.0, 0.32, 0.08, 1.0)
         nt.links.new(em2.outputs[0], b.inputs["Emission Strength"])
     return mat
+
+
+def _simple_material(name: str, color, metallic: float, rough: float, coat: float = 0.0) -> bpy.types.Material:
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    try:
+        mat.use_nodes = True
+    except Exception:
+        pass
+    b = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    for k, v in (("Base Color", (*color, 1.0)), ("Metallic", metallic), ("Roughness", rough), ("Coat Weight", coat)):
+        if k in b.inputs:
+            b.inputs[k].default_value = v
+    return mat
+
+
+def _node(ng, kind, loc=(0, 0)):
+    n = ng.nodes.new(kind)
+    n.location = loc
+    return n
+
+
+def tube_nodes(radius: float = 0.016) -> bpy.types.NodeTree:
+    """Edges -> dark mechanical struts (zero-length edges = retracted links are dropped)."""
+    ng = bpy.data.node_groups.get("MyrmexStruts")
+    if ng is not None:
+        return ng
+    ng = bpy.data.node_groups.new("MyrmexStruts", "GeometryNodeTree")
+    ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gi, go = _node(ng, "NodeGroupInput", (-800, 0)), _node(ng, "NodeGroupOutput", (600, 0))
+    ev = _node(ng, "GeometryNodeInputMeshEdgeVertices", (-800, -200))
+    dist = _node(ng, "ShaderNodeVectorMath", (-600, -200))
+    dist.operation = "DISTANCE"
+    ng.links.new(ev.outputs["Position 1"], dist.inputs[0])
+    ng.links.new(ev.outputs["Position 2"], dist.inputs[1])
+    cmp = _node(ng, "FunctionNodeCompare", (-400, -200))
+    cmp.data_type, cmp.operation = "FLOAT", "LESS_THAN"
+    cmp.inputs[1].default_value = 1e-3
+    ng.links.new(dist.outputs["Value"], cmp.inputs[0])
+    dele = _node(ng, "GeometryNodeDeleteGeometry", (-400, 0))
+    dele.domain = "EDGE"
+    ng.links.new(gi.outputs[0], dele.inputs["Geometry"])
+    ng.links.new(cmp.outputs["Result"], dele.inputs["Selection"])
+    m2c = _node(ng, "GeometryNodeMeshToCurve", (-200, 0))
+    ng.links.new(dele.outputs["Geometry"], m2c.inputs["Mesh"])
+    circ = _node(ng, "GeometryNodeCurvePrimitiveCircle", (-200, -200))
+    circ.inputs["Resolution"].default_value = 6
+    circ.inputs["Radius"].default_value = radius
+    c2m = _node(ng, "GeometryNodeCurveToMesh", (0, 0))
+    ng.links.new(m2c.outputs["Curve"], c2m.inputs["Curve"])
+    ng.links.new(circ.outputs["Curve"], c2m.inputs["Profile Curve"])
+    sm = _node(ng, "GeometryNodeSetMaterial", (300, 0))
+    sm.inputs["Material"].default_value = _simple_material("MyrmexPolyStrut", (0.012, 0.012, 0.013), 0.9, 0.3, 0.3)
+    ng.links.new(c2m.outputs["Mesh"], sm.inputs["Geometry"])
+    ng.links.new(sm.outputs["Geometry"], go.inputs[0])
+    return ng
+
+
+def micro_nodes(body: bpy.types.Object, density: float = 2500.0) -> bpy.types.NodeTree:
+    """Millions-of-machines look: tiny hexagonal plates scattered over the body surface (render detail)."""
+    ng = bpy.data.node_groups.get("MyrmexMicroMachines")
+    if ng is None:
+        ng = bpy.data.node_groups.new("MyrmexMicroMachines", "GeometryNodeTree")
+        ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        go = _node(ng, "NodeGroupOutput", (800, 0))
+        oi = _node(ng, "GeometryNodeObjectInfo", (-600, 0))
+        oi.name = "Body"
+        oi.transform_space = "RELATIVE"
+        dp = _node(ng, "GeometryNodeDistributePointsOnFaces", (-350, 0))
+        dp.inputs["Density"].default_value = density
+        ng.links.new(oi.outputs["Geometry"], dp.inputs["Mesh"])
+        cyl = _node(ng, "GeometryNodeMeshCylinder", (-350, -250))
+        cyl.inputs["Vertices"].default_value = 6
+        cyl.inputs["Radius"].default_value = 0.007
+        cyl.inputs["Depth"].default_value = 0.0018
+        sm = _node(ng, "GeometryNodeSetMaterial", (-100, -250))
+        sm.inputs["Material"].default_value = _simple_material("MyrmexMicroPlate", (0.02, 0.02, 0.022), 1.0, 0.22, 0.4)
+        ng.links.new(cyl.outputs["Mesh"], sm.inputs["Geometry"])
+        rnd = _node(ng, "FunctionNodeRandomValue", (-100, -450))
+        rnd.data_type = "FLOAT"
+        rnd.inputs["Min"].default_value = 0.45
+        rnd.inputs["Max"].default_value = 1.35
+        iop = _node(ng, "GeometryNodeInstanceOnPoints", (200, 0))
+        ng.links.new(dp.outputs["Points"], iop.inputs["Points"])
+        ng.links.new(sm.outputs["Geometry"], iop.inputs["Instance"])
+        ng.links.new(dp.outputs["Rotation"], iop.inputs["Rotation"])
+        ng.links.new(rnd.outputs["Value"], iop.inputs["Scale"])
+        ng.links.new(iop.outputs["Instances"], go.inputs[0])
+    ng.nodes["Body"].inputs["Object"].default_value = body
+    return ng
 
 
 def dark_studio(scene: bpy.types.Scene) -> None:
@@ -151,6 +259,56 @@ class CreatureView:
         self.mb = mb
         self.debug_obj = None
         self.t0 = None
+        self.poly = False
+        self.lattice = self.micro = None
+        self.obstacles: list = []
+
+    def make_polyalloy(self, n_links: int, n_obstacles: int = 4) -> None:
+        """Second organism: polyalloy skin, internal strut lattice, obstacles, micro-machine layer."""
+        self.poly = True
+        pm = nanomaterial(POLY_MAT, poly=True)
+        if self.mb.materials:
+            self.mb.materials[0] = pm
+        else:
+            self.mb.materials.append(pm)
+        ob = bpy.data.objects.get(LATTICE)
+        if ob is None or len(ob.data.vertices) != 2 * n_links:
+            me = bpy.data.meshes.new(LATTICE)
+            me.from_pydata([(0.0, 0.0, 0.0)] * (2 * n_links), [(2 * k, 2 * k + 1) for k in range(n_links)], [])
+            if ob is None:
+                ob = bpy.data.objects.new(LATTICE, me)
+                self.coll.objects.link(ob)
+            else:
+                ob.data = me
+        if "Struts" not in ob.modifiers:
+            ob.modifiers.new("Struts", "NODES").node_group = tube_nodes()
+        self.lattice = ob
+        mi = bpy.data.objects.get(MICRO)
+        if mi is None:
+            mi = bpy.data.objects.new(MICRO, bpy.data.meshes.new(MICRO))
+            self.coll.objects.link(mi)
+            mod = mi.modifiers.new("MicroMachines", "NODES")
+            mod.node_group = micro_nodes(self.obj)
+            mod.show_viewport = False                      # render detail; enable in the panel to preview
+        self.micro = mi
+        self.obstacles = []
+        for k in range(n_obstacles):
+            name = f"{OBSTACLE}_{k}"
+            o = bpy.data.objects.get(name)
+            if o is None:
+                import bmesh
+                me = bpy.data.meshes.new(name)
+                bm = bmesh.new()
+                bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, radius=1.0)
+                bm.to_mesh(me)
+                bm.free()
+                for poly in me.polygons:
+                    poly.use_smooth = True
+                me.materials.append(_simple_material("MyrmexObstacle", (0.03, 0.03, 0.032), 0.0, 0.08, 1.0))
+                o = bpy.data.objects.new(name, me)
+                self.coll.objects.link(o)
+            o.scale = (0.0, 0.0, 0.0)
+            self.obstacles.append(o)
 
     def _ensure(self, n: int) -> None:
         els = self.mb.elements
@@ -183,9 +341,44 @@ class CreatureView:
         ob.data.update()
         self.debug_obj = ob
 
+    @staticmethod
+    def strut_points(pos: np.ndarray, links: np.ndarray, n_links: int) -> np.ndarray:
+        """Segment endpoints for every link slot; weak links retract into their midpoint (invisible)."""
+        out = np.zeros((n_links, 2, 3))
+        m = min(n_links, len(links))
+        lk = links[:m]
+        ok = lk[:, 0] >= 0
+        i = np.where(ok, lk[:, 0], 0).astype(int)
+        j = np.where(ok, lk[:, 1], 0).astype(int)
+        s = np.where(ok, np.clip(lk[:, 2], 0, 1), 0.0)[:, None]
+        mid = 0.5 * (pos[i] + pos[j])
+        half = 0.5 * (pos[j] - pos[i]) * s
+        out[:m, 0], out[:m, 1] = mid - half, mid + half
+        if m < n_links:
+            out[m:] = pos.mean(0)
+        return out.reshape(-1, 3)
+
+    def _apply_poly(self, fr) -> None:
+        n_links = len(self.lattice.data.vertices) // 2 if self.lattice else 0
+        if self.lattice is None or (fr.links is not None and len(fr.links) > n_links):
+            self.make_polyalloy(max(480, len(fr.links)), max(4, len(fr.obstacles)))
+            n_links = len(self.lattice.data.vertices) // 2
+        pts = self.strut_points(fr.pos, fr.links, n_links)
+        me = self.lattice.data
+        me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+        me.update()
+        for k, o in enumerate(self.obstacles):
+            if k < len(fr.obstacles) and fr.obstacles[k, 3] > 0:
+                o.location = fr.obstacles[k, :3]
+                o.scale = (float(fr.obstacles[k, 3]),) * 3
+            else:
+                o.scale = (0.0, 0.0, 0.0)
+
     def apply(self, fr) -> None:
         n = len(fr.pos)
         self._ensure(n)
+        if getattr(fr, "links", None) is not None:
+            self._apply_poly(fr)
         els = self.mb.elements
         for i, e in enumerate(els):
             r = float(fr.radius[i])
@@ -209,12 +402,17 @@ class CreatureView:
         self._debug(fr, bool(fr.flags & 16))
 
 
-def setup_creature_scene(scene: bpy.types.Scene | None = None) -> CreatureView:
+def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "nanomaterial",
+                         keep_look: bool = False) -> CreatureView:
+    """Build (or reuse) the creature scene.  ``keep_look`` keeps an existing studio / materials as they are."""
     scene = scene or bpy.context.scene
     for name in ("Cube", "Light", "Camera"):                  # Blender's default startup objects
         ob = bpy.data.objects.get(name)
         if ob is not None:
             bpy.data.objects.remove(ob, do_unlink=True)
     view = CreatureView(scene)
-    dark_studio(scene)
+    if variant == "polyalloy":
+        view.make_polyalloy(480, 4)
+    if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
+        dark_studio(scene)
     return view

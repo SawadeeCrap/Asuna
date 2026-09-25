@@ -58,9 +58,9 @@ def go_live():
     _register()
     scene = bpy.context.scene
     s = scene.myrmex_live
-    if os.environ.get("MYRMEX_MODE") == "creature":
+    if os.environ.get("MYRMEX_MODE") in ("creature", "polyalloy"):
         from myrmex_blender import creature, live, ui
-        creature.setup_creature_scene(scene)
+        creature.setup_creature_scene(scene, "polyalloy" if os.environ["MYRMEX_MODE"] == "polyalloy" else "nanomaterial")
         s.port = int(os.environ.get("MYRMEX_POSE_PORT", s.port))
         _viewport_settings(scene)
         link = live.LiveLink(None, port=s.port)

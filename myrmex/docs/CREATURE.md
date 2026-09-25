@@ -59,5 +59,51 @@ Events: MORPHOLOGY_SHIFT, MASS_REBALANCE, APPENDAGE_BURST, COLLAPSE, RECONSTRUCT
 
 *Creature* tab → Debug shows the control network (nodes + links) in Blender.  The same seed gives
 the same performance for the same input.  With recording on, stopping the engine writes
-`creature_take_*.npz` (per-frame node positions, radii, surface, glow).  Viewport speed: metaball
+`nanomaterial_take_*.npz` (see *Takes → video* below).  Viewport speed: metaball
 *Resolution Viewport* (default 0.03) on the CreatureBody data; render resolution 0.02 or finer.
+
+
+# Mimetic Polyalloy (backend `polyalloy`, creature v2)
+
+An airborne, finite, self-reconfiguring material - not a robot that transforms, a material that can
+temporarily become robot-like structures.  Procedural (no learning); only the visual logic of the
+"carbon-based mimetic polyalloy" brief is used.
+
+* **Finite material**: 96 structural nodes with fixed mass; nothing is ever created.  Dispersion,
+  splitting and reassembly move the same material around.
+* **Adaptive elastic network**: k-nearest-neighbour springs; over-stretched links break (separation),
+  cohesive material rebuilds its network (recombination).  Fragments = connected components.
+* **Material states** FLUID / ELASTIC / COHESIVE / STRUCTURED / HIGH_STIFFNESS / DISPERSED are blends of
+  cohesion, stiffness, damping, repulsion, persistence, dispersion - physics, not visual modes.
+  Hardened material thins into beads along its internal strut lattice: the skeleton shows.
+* **Morphological attractors** CORE, SPINDLE, RING, SHIELD, BLADES, LATTICE, WINGS, CLOUD: every node owns
+  a fixed material coordinate, each attractor maps it to a place, so the body flows between
+  configurations.  A latent vector with inertia blends them (formation → stability → use → reconfiguration).
+* **Flight**: distributed thrust against gravity, cruise / hover / altitude band; the turn rate comes from
+  the body's actual moment of inertia (spread-out shapes turn slower).
+* **Kick = physical event** (knob *kick mode*): impulse · obstacle (a sphere flies at it) · pressure wave ·
+  turbulence · mix.  Obstacles are answered by a varied strategy (never the same three times):
+  local split and flow-around, shield + stiffen, full dispersion, or a dodge - then reassembly.
+  *obstacle rate* also spawns obstacles by itself; *altitude* sets the flight band.
+* **Aerial camera** (9 modes, also the app's shot buttons 1-9): observe · follow · approach · retreat ·
+  orbit · lock · track · impact (shake + reframe on big events) · recovery.
+* **Blender**: one metaball body with the polyalloy shader (near-black, microscopic cell segmentation),
+  an internal strut lattice (Geometry Nodes tubes that appear as the material hardens), obstacle spheres,
+  and a render-time micro-machine layer (tiny hexagonal plates instanced over the surface; panel toggle
+  *Micro-machines in viewport*).
+
+Control notes (Myrmex track / control channel): 60 morphology shift, 62 blades, 65 collapse (disperse),
+67 reconstruction, 69 rebalance, 71 obstacle, 72 impulse, 74 pressure, 76 turbulence; 64 = camera cut.
+
+# Takes → video (both organisms, and the humanoid)
+
+1. *Camera & Output* → tick **Record**, play your set, stop the engine (or *Save take now*).
+   A take stores the body every frame, the live camera and the song position.
+2. Export the track from Ableton **from bar 1** and pick it as *Song for renders*.
+3. **Open last take in Blender** - the scene is rebuilt as ordinary animation (metaball keyframes,
+   strut lattice as a Point Cache, obstacles, lights, one camera per shot + markers, the song lined up
+   by the recorded song position).  Change the look if you like, then *Myrmex → Render Video*
+   (or F12 / Render Animation).  Or **Render last take → .mp4** renders in the background (H.264 + AAC,
+   next to the take; sizes 1920×1080, 1080×1920 for reels, square, 4K).
+4. In Blender: *Myrmex* panel → *Takes → video* → **Import Take** works for any take
+   (`nanomaterial_take_*`, `polyalloy_take_*`, humanoid `take_*` with the character's .blend open).

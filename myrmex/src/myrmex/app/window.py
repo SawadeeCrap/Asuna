@@ -281,7 +281,8 @@ class MainWindow(QMainWindow):
         self.cmb_backend = QComboBox()
         self.cmb_backend.addItem("Humanoid (rigged character)", "humanoid")
         self.cmb_backend.addItem("Black Nanomaterial Creature (procedural organism)", "creature")
-        self.cmb_backend.setCurrentIndex(1 if self.s.backend == "creature" else 0)
+        self.cmb_backend.addItem("Mimetic Polyalloy (flying, self-reconfiguring material)", "polyalloy")
+        self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         row = QHBoxLayout()
         self.ed_blender = QLineEdit(self.s.blender or (C.find_blender() or ""))
@@ -367,6 +368,33 @@ class MainWindow(QMainWindow):
         b = QPushButton("Save take now")
         b.clicked.connect(self._save_take)
         form.addRow(b)
+        row = QHBoxLayout()
+        self.ed_song = QLineEdit(self.s.take_audio)
+        self.ed_song.setPlaceholderText("the track exported from Ableton (from bar 1) — lined up automatically")
+        b = QPushButton("…")
+        b.clicked.connect(lambda: self._pick_file(self.ed_song, "Song", "Audio (*.wav *.aif *.aiff *.mp3 *.flac)"))
+        row.addWidget(self.ed_song, 1)
+        row.addWidget(b)
+        form.addRow("Song for renders", row)
+        row = QHBoxLayout()
+        self.cmb_rsize = QComboBox()
+        self.cmb_rsize.addItems(["1920x1080", "1080x1920", "1080x1080", "3840x2160", "1280x720"])
+        self.cmb_rsize.setCurrentText(self.s.render_size)
+        self.cmb_rquality = QComboBox()
+        for label, key in (("Draft (EEVEE fast)", "eevee_preview"), ("Final (EEVEE)", "eevee"),
+                           ("Cinema (Cycles, slow)", "cycles")):
+            self.cmb_rquality.addItem(label, key)
+        self.cmb_rquality.setCurrentIndex(max(0, self.cmb_rquality.findData(self.s.render_quality)))
+        row.addWidget(self.cmb_rsize)
+        row.addWidget(self.cmb_rquality, 1)
+        form.addRow("Video", row)
+        row = QHBoxLayout()
+        for label, render, choose in (("Open last take in Blender", False, False), ("Render last take → .mp4", True, False),
+                                      ("Choose take…", False, True)):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, r=render, c=choose: self.open_take(r, c))
+            row.addWidget(b)
+        form.addRow(row)
         self.chk_autostart = QCheckBox("Start the engine when the app starts")
         self.chk_autostart.setChecked(self.s.start_engine_on_launch)
         form.addRow(self.chk_autostart)
@@ -409,6 +437,9 @@ class MainWindow(QMainWindow):
         s.start_engine_on_launch = self.chk_autostart.isChecked()
         s.style = self.cmb_style.currentText()
         s.backend = self.cmb_backend.currentData()
+        s.take_audio = self.ed_song.text().strip()
+        s.render_size = self.cmb_rsize.currentText()
+        s.render_quality = self.cmb_rquality.currentData()
         s.midi_bindings = T.read_bindings(self)
         for k, kb in self.knobs.items():
             setattr(s, k, kb.value())
@@ -551,6 +582,32 @@ class MainWindow(QMainWindow):
         p.start(cmd[0], cmd[1:])
         self.blender_proc = p
         self.log(f"opening {os.path.basename(self.s.character)} in Blender (live link on port {self.s.pose_port})")
+
+    def open_take(self, render: bool = False, choose: bool = False) -> None:
+        """A recorded take -> Blender: opened ready to render, or rendered to .mp4 in the background."""
+        self._collect()
+        blender = C.find_blender(self.s.blender)
+        if not blender:
+            QMessageBox.warning(self, "Myrmex", "Blender not found. Install Blender 5.2 or set its path on the Character tab.")
+            return
+        take = C.last_take(self.s.record_dir)
+        if choose or not take:
+            take = QFileDialog.getOpenFileName(self, "Take", os.path.expanduser(self.s.record_dir or "~"),
+                                               "Takes (*.npz)")[0]
+        if not take:
+            return
+        cmd = C.take_command(blender, take, self.s.character, self.s.take_audio, render, self.s.render_size,
+                             self.s.render_quality)
+        p = QProcess(self)
+        p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        p.readyReadStandardOutput.connect(lambda: self._pipe(p, "render", ("Myrmex", "rror")) if render
+                                          else self._pipe(p, "blender"))
+        p.finished.connect(lambda *_: self.log("render finished" if render else "Blender (take) closed"))
+        p.start(cmd[0], cmd[1:])
+        self.take_procs = [q for q in getattr(self, "take_procs", []) if q.state() != QProcess.ProcessState.NotRunning]
+        self.take_procs.append(p)
+        self.log(("rendering " if render else "opening ") + os.path.basename(take) +
+                 (" (video next to the take)" if render else " in Blender"))
 
     def prepare_character(self) -> None:
         self._collect()

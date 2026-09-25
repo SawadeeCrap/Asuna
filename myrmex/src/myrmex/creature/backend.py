@@ -1,7 +1,10 @@
-"""CreatureBackend: plugs the creature engine into the live session (the character backend switch).
+"""CreatureBackend: plugs a creature engine into the live session (the character backend switch).
 
-The session keeps its input layer (InputHub, ClockHub); this backend turns the generic
-music features into CreatureControlInput, applies parameters / events and records takes.
+Two organisms share it: ``nanomaterial`` (v1, ground-bound Black Nanomaterial Creature) and
+``polyalloy`` (v2, airborne Mimetic Polyalloy).  The session keeps its input layer (InputHub,
+ClockHub); this backend turns the generic music features into CreatureControlInput, applies
+parameters / events and records takes (everything needed to render them later in Blender:
+the body, the live camera, the song position for the audio).
 """
 from __future__ import annotations
 
@@ -15,21 +18,33 @@ from ..music.timeline import MusicTimeline
 from .config import PARAMS, CreatureConfig
 from .control import CreatureControlInput
 from .engine import EVENTS, CreatureEngine
+from .polyalloy import PolyalloyConfig, PolyalloyEngine
 
 # Notes on the control track / channel: choreography events for the creature.
 CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 67: "RECONSTRUCTION",
-                 69: "MASS_REBALANCE"}
+                 69: "MASS_REBALANCE",
+                 # Mimetic Polyalloy: physical events (kick = impulse / obstacle / pressure / turbulence)
+                 71: "OBSTACLE", 72: "IMPULSE", 74: "PRESSURE", 76: "TURBULENCE"}
+
+
+CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
 
 
 class CreatureBackend:
     height = 1.4
 
-    def __init__(self, cfg: CreatureConfig | None = None, record: bool = False):
-        self.engine = CreatureEngine(cfg)
+    def __init__(self, cfg: CreatureConfig | PolyalloyConfig | None = None, record: bool = False,
+                 variant: str = "nanomaterial"):
+        self.variant = variant
+        self.engine = PolyalloyEngine(cfg) if variant == "polyalloy" else CreatureEngine(cfg)
+        self.events = PolyalloyEngine.EVENTS if variant == "polyalloy" else EVENTS
         self.fx = FeatureExtractor(MusicTimeline(source="live"))
         self.debug = False
         self.frames: list | None = [] if record else None
         self.state = self.engine.state()
+        self._ev_seen = -1.0
+        self.fresh: list = []                      # events of the last tick
+        self.ev_log: list = []
 
     def controls(self, c: dict) -> None:
         for p in PARAMS:
@@ -38,32 +53,69 @@ class CreatureBackend:
 
     def trigger(self, name: str) -> bool:
         ev = name.split(":", 1)[1] if ":" in name else name
-        return self.engine.trigger_event(ev.upper()) if ev.upper() in EVENTS else False
+        return self.engine.trigger_event(ev.upper()) if ev.upper() in self.events else False
 
     def control_note(self, pitch: float) -> None:
         ev = CONTROL_NOTES.get(int(round(pitch)))
-        if ev:
+        if ev and ev in self.events:
             self.engine.trigger_event(ev)
 
     def tick(self, t: float, dt: float, notes, st):
         fr = self.fx.update(t, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar)
         self.engine.set_input(CreatureControlInput.from_frame(fr, notes, st.playing))
         self.state = self.engine.update(dt)
+        self.fresh = self.new_events()
+        if self.frames is not None:
+            self.ev_log.extend(self.fresh)
         return self.state
 
-    def record(self, fps_due: bool) -> None:
-        if self.frames is not None and fps_due:
-            s = self.state
-            self.frames.append((s.t, s.pos.astype(np.float32), s.radius.astype(np.float32),
-                                s.stretch.astype(np.float32), s.surface, s.glow))
+    def new_events(self) -> list:
+        """Engine events since the last call (the aerial camera reacts to impacts)."""
+        out = [e for e in self.engine.events if e[0] > self._ev_seen]
+        if out:
+            self._ev_seen = out[-1][0]
+        return out
 
-    def save_take(self, folder: str) -> str | None:
+    def record(self, fps_due: bool, st=None, cam=None) -> None:
+        """One take frame: body, material, music position (audio alignment) and the live camera."""
+        if self.frames is None or not fps_due:
+            return
+        s = self.state
+        f = {"t": s.t, "pos": s.pos.astype(np.float32), "radius": s.radius.astype(np.float32),
+             "stretch": s.stretch.astype(np.float16), "surface": s.surface, "glow": s.glow, "arousal": s.arousal,
+             "com": np.asarray(s.com, np.float32), "heading": s.heading, "behavior": s.behavior,
+             "morphology": s.morphology}
+        if st is not None:
+            f.update(beat=st.beat, bpm=st.bpm, playing=float(st.playing),
+                     song_beat=st.song_beat if st.song_beat is not None else np.nan)
+        if cam is not None:
+            for i, a in enumerate("xyz"):
+                f["cam_p" + a], f["cam_t" + a] = float(cam.position[i]), float(cam.target[i])
+            f.update(cam_lens=cam.lens, cam_focus=cam.focus, cam_fstop=cam.fstop, cam_shot=float(cam.shot_id),
+                     cam_kind=cam.kind)
+        if getattr(s, "links", None) is not None:
+            f.update(dispersion=s.dispersion.astype(np.float16), links=s.links.astype(np.float16),
+                     obstacles=s.obstacles.astype(np.float32), material=s.material, fragments=s.fragments)
+        self.frames.append(f)
+
+    def save_take(self, folder: str, fps: float = 30.0) -> str | None:
         if not self.frames:
             return None
         os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, time.strftime("creature_take_%Y%m%d_%H%M%S.npz"))
-        np.savez_compressed(path, t=np.array([f[0] for f in self.frames]), pos=np.stack([f[1] for f in self.frames]),
-                            radius=np.stack([f[2] for f in self.frames]), stretch=np.stack([f[3] for f in self.frames]),
-                            surface=np.array([f[4] for f in self.frames]), glow=np.array([f[5] for f in self.frames]),
-                            kind=self.state.kind, anchor=self.state.anchor, seed=self.engine.cfg.seed)
+        path = os.path.join(folder, time.strftime(f"{self.variant}_take_%Y%m%d_%H%M%S.npz"))
+        fr = self.frames
+        keys = list(dict.fromkeys(k for f in fr for k in f))
+        data = {}
+        for k in keys:
+            v0 = next(f[k] for f in fr if k in f)          # e.g. the camera starts a few frames late
+            if isinstance(v0, str):
+                data[k] = np.array([f.get(k, "") for f in fr])
+            elif isinstance(v0, np.ndarray):
+                data[k] = np.stack([f[k] if k in f else np.zeros_like(v0) for f in fr])
+            else:
+                data[k] = np.array([f.get(k, np.nan) for f in fr], float)
+        ev = self.ev_log
+        np.savez_compressed(path, **data, kind=self.state.kind, anchor=self.state.anchor, seed=self.engine.cfg.seed,
+                            variant=self.variant, fps=float(fps), format="myrmex-creature-take-2",
+                            ev_t=np.array([e[0] for e in ev], float), ev_name=np.array([str(e[1]) for e in ev]))
         return path

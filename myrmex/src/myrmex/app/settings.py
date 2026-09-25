@@ -67,7 +67,10 @@ class AppSettings:
     record: bool = False
     record_dir: str = ""
     start_engine_on_launch: bool = True
-    backend: str = "humanoid"               # humanoid | creature
+    backend: str = "humanoid"               # humanoid | creature | polyalloy
+    take_audio: str = ""                    # song for take renders
+    render_size: str = "1920x1080"
+    render_quality: str = "eevee"
     creature_params: dict = field(default_factory=dict)   # manual overrides (missing = automatic)
     midi_bindings: list = field(default_factory=list)
     camera_controls: dict = field(default_factory=dict)

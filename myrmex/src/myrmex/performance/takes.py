@@ -34,12 +34,16 @@ def take_audio_offset(perf: Performance) -> float | None:
     ch = perf.channels
     if "song_beat" not in ch or "playing" not in ch:
         return None
-    sb, bpm, playing = (np.asarray(ch[k], float) for k in ("song_beat", "bpm", "playing"))
+    return audio_offset(ch["song_beat"], ch["bpm"], ch["playing"], perf.fps)
+
+
+def audio_offset(song_beat, bpm, playing, fps: float) -> float | None:
+    sb, bpm, playing = (np.asarray(a, float) for a in (song_beat, bpm, playing))
     ok = np.nonzero(np.isfinite(sb) & (playing > 0.5))[0]
     if not len(ok):
         return None
     i = int(ok[0])
-    return float(sb[i] * 60.0 / bpm[i] - i / perf.fps)
+    return float(sb[i] * 60.0 / bpm[i] - i / fps)
 
 
-__all__ = ["recorded_camera_track", "take_audio_offset"]
+__all__ = ["recorded_camera_track", "take_audio_offset", "audio_offset"]

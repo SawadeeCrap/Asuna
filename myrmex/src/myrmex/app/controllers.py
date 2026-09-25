@@ -18,6 +18,7 @@ REMOTE_SCRIPT_SRC = os.path.join(REPO, "ableton", "remote_script", "Myrmex")
 REMOTE_SCRIPTS_DIR = os.path.expanduser("~/Music/Ableton/User Library/Remote Scripts")
 AUTOSTART = os.path.join(REPO, "blender", "scripts", "live_autostart.py")
 PREPARE = os.path.join(REPO, "blender", "scripts", "prepare_character.py")
+OPEN_TAKE = os.path.join(REPO, "blender", "scripts", "open_take.py")
 
 
 class EngineController:
@@ -36,7 +37,7 @@ class EngineController:
         from ..realtime.inputs import InputConfig
         from ..realtime.session import LiveConfig, LiveSession
         s = self.s
-        creature = s.backend == "creature"
+        creature = s.backend in ("creature", "polyalloy")
         if not creature and not os.path.exists(s.rig_json):
             self.log(f"! no rig description next to the character: {s.rig_json}")
             return False
@@ -54,7 +55,8 @@ class EngineController:
             self.session = None
             self.log(f"! engine failed to start: {type(e).__name__}: {e}")
             return False
-        who = "Black Nanomaterial Creature" if creature else os.path.basename(s.character)
+        who = {"creature": "Black Nanomaterial Creature", "polyalloy": "Mimetic Polyalloy"}.get(s.backend) \
+            or os.path.basename(s.character)
         self.log(f"engine started: {who} | OSC :{s.osc_port} | -> {', '.join(out)}")
         for e in self.session.status()["errors"]:
             self.log(f"  ! {e}")
@@ -132,9 +134,27 @@ def find_blender(hint: str = "") -> str | None:
 
 def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid") -> tuple[list[str], dict]:
     env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend)
-    if backend == "creature":                  # no .blend: the creature scene is built procedurally
+    if backend in ("creature", "polyalloy"):   # no .blend: the creature scene is built procedurally
         return [blender, "--python", AUTOSTART], env
     return [blender, character, "--python", AUTOSTART], env
+
+
+def take_command(blender: str, take: str, character: str = "", audio: str = "", render: bool = False,
+                 size: str = "1920x1080", quality: str = "eevee") -> list[str]:
+    """Open (or render, headless) a recorded take in Blender."""
+    creature = os.path.basename(take).startswith(("nanomaterial_take", "polyalloy_take", "creature_take"))
+    cmd = [blender] + (["-b"] if render else []) + ([] if creature or not character else [character])
+    cmd += ["--python", OPEN_TAKE, "--", "--take", take, "--size", size, "--quality", quality]
+    if audio:
+        cmd += ["--audio", audio]
+    if render:
+        cmd.append("--render")
+    return cmd
+
+
+def last_take(folder: str) -> str:
+    files = sorted(glob.glob(os.path.join(os.path.expanduser(folder or ""), "*take_*.npz")), key=os.path.getmtime)
+    return files[-1] if files else ""
 
 
 def prepare_command(blender: str, glb: str, out: str, height: float, material: str, smooth: int) -> list[str]:

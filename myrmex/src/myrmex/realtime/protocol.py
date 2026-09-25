@@ -37,7 +37,9 @@ _CAM = struct.Struct("<3f3ffffHH")
 _SUBJ = struct.Struct("<3ffff")
 
 SHOT_KINDS = ("front_dolly", "front_low", "side_track", "three_quarter", "rear_follow", "feet_close",
-              "hips_close", "face_close", "wide_orbit", "free")
+              "hips_close", "face_close", "wide_orbit", "free",
+              # aerial camera (Mimetic Polyalloy)
+              "observe", "follow", "approach", "retreat", "orbit", "lock", "track", "impact", "recovery")
 
 
 def rig_id(names: list[str]) -> int:

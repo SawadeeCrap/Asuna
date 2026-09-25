@@ -221,11 +221,17 @@ class LiveLink:
         if self.use_camera and fr.camera is not None:
             self._apply_camera(fr.camera)
         if self.use_lights or self.use_floor:
-            class _F:                                      # the follow code only needs these two
+            class _F:                                      # the follow code only needs these
                 subject_pos, heading = fr.com, fr.heading
+                lift = max(0.0, float(fr.com[2]) - 1.2) if fr.links is not None else 0.0   # flying: lights rise too
             self._follow(_F)
         self.last = fr
         self.stats["applied"] += 1
+        self._fps_n += 1
+        now = time.perf_counter()
+        if now - self._fps_t >= 1.0:
+            self.stats["fps"] = self._fps_n / (now - self._fps_t)
+            self._fps_t, self._fps_n = now, 0
         return True
 
     def _apply_camera(self, c) -> None:
@@ -254,7 +260,7 @@ class LiveLink:
             if rig is not None:
                 if rig.animation_data is not None and rig.animation_data.action is not None:
                     rig.animation_data.action = None      # offline keys would fight the live follow
-                rig.location = (float(p[0]), float(p[1]), 0.0)
+                rig.location = (float(p[0]), float(p[1]), float(getattr(fr, "lift", 0.0)))
                 rig.rotation_euler = (0.0, 0.0, float(fr.heading))
         if self.use_floor:
             floor = bpy.data.objects.get("MyrmexFloor")

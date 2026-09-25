@@ -9,13 +9,16 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 
 from ..creature.config import PARAMS
 from ..creature.engine import EVENTS
+from ..creature.polyalloy import PolyalloyEngine
+
+POLY_EVENTS = tuple(e for e in PolyalloyEngine.EVENTS if e not in EVENTS)   # obstacle, impulse, pressure, turbulence
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
-           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS] +
+           [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -23,8 +26,9 @@ def creature_tab(win) -> QWidget:
     from .window import Knob
     w = QWidget()
     v = QVBoxLayout(w)
-    v.addWidget(QLabel("Black Nanomaterial Creature — choose it on the Character tab (Character type).\n"
-                       "Auto = the organism decides (behaviour + music). Any knob can also be a MIDI CC (MIDI tab)."))
+    v.addWidget(QLabel("Organisms — choose one on the Character tab (Character type): Black Nanomaterial Creature (v1) "
+                       "or Mimetic Polyalloy (v2, flying).\nAuto = the organism decides (behaviour + music). Any knob "
+                       "can also be a MIDI CC (MIDI tab). kick mode / obstacle rate / altitude: Polyalloy only."))
     box = QGroupBox("Parameters")
     grid = QGridLayout(box)
     win.cknobs = {}
@@ -38,6 +42,13 @@ def creature_tab(win) -> QWidget:
     row = QHBoxLayout(box)
     for e in EVENTS:
         b = QPushButton(e.replace("_", " ").title())
+        b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
+        row.addWidget(b)
+    v.addWidget(box)
+    box = QGroupBox("Physical events (Mimetic Polyalloy) — the kick does one of these by itself (kick mode knob)")
+    row = QHBoxLayout(box)
+    for e in POLY_EVENTS:
+        b = QPushButton(e.title())
         b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
         row.addWidget(b)
     v.addWidget(box)

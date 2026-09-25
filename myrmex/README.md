@@ -38,6 +38,14 @@ B3 плечо, C4 стоять, пока звучит нота.
 Для терминала: `myrmex live --rig …`, `myrmex simulate` (виртуальный Ableton), `myrmex monitor`, `myrmex ports`.
 **Подробно: [docs/REALTIME.md](docs/REALTIME.md).**
 
+## Существа и рендер дублей
+
+* **Character type** в приложении: Humanoid · Black Nanomaterial Creature · **Mimetic Polyalloy** (летающий
+  самоперестраивающийся материал: щиты, лезвия, кольца, решётки-скелеты, распад и сборка, кик = удар /
+  препятствие / давление / турбулентность, воздушная камера с 9 режимами).
+* **Дубль → видео**: Record → сыграть → стоп → *Open last take in Blender* (сцена, камеры, песня по позиции
+  в Ableton) → *Render Video*; или *Render last take → .mp4* в фоне.  Подробно: `docs/CREATURE.md`.
+
 ## Что умеет
 
 - **Живой режим**: часы из Ableton Link, транспорта Remote Script, MIDI clock или по самим кикам.

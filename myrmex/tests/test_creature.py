@@ -165,3 +165,83 @@ def test_stress_long_performance_stays_stable():
     st = e.state()
     assert np.isfinite(st.pos).all() and abs(st.volumes["total"] - 1.0) < 1e-9
     assert np.abs(st.com[:2]).max() < 3 * e.cfg.stage_radius
+
+
+# ---------------------------------------------------------------------------- Mimetic Polyalloy (v2) + takes
+def _poly_run(seed=1, seconds=12.0, dt=1 / 60):
+    from myrmex.creature.polyalloy import PolyalloyConfig, PolyalloyEngine
+    e = PolyalloyEngine(PolyalloyConfig(seed=seed))
+    out = []
+    for i in range(int(seconds / dt)):
+        beat = i * dt * 2
+        kick = 1.0 if (beat % 1.0) < dt * 2.5 else 0.0
+        e.set_input(CreatureControlInput(bass=0.6, high=0.3, energy=0.8, transient=kick, spectral_flux=0.3,
+                                         amplitude=0.7, tempo=120, beat=beat, playing=True))
+        out.append(e.update(dt))
+    return e, out
+
+
+def test_polyalloy_flies_conserves_material_and_answers_kicks():
+    e, states = _poly_run()
+    s = states[-1]
+    assert np.isfinite(s.pos).all() and abs(s.volumes["total"] - 1.0) < 1e-9
+    alts = np.array([st.com[2] for st in states[120:]])
+    assert alts.min() > 0.8                                   # airborne
+    names = {n for _, n, _ in e.events}
+    assert names & {"IMPULSE", "OBSTACLE", "PRESSURE", "TURBULENCE"}
+    assert len({st.material for st in states}) >= 3           # the material changes state
+
+
+def test_polyalloy_is_deterministic():
+    _, a = _poly_run(seed=5, seconds=3)
+    _, b = _poly_run(seed=5, seconds=3)
+    assert np.allclose(a[-1].pos, b[-1].pos)
+
+
+def test_polyalloy_protocol_roundtrip():
+    from myrmex.creature.protocol import decode_creature, encode_creature
+    from myrmex.realtime.protocol import CameraState
+    _, states = _poly_run(seconds=2)
+    s = states[-1]
+    cam = CameraState(np.array([1.0, 2, 3]), np.zeros(3), 35.0, 4.0, 2.8, 7, "orbit")
+    fr = decode_creature(encode_creature(s, 3, 1.5, 124.0, 1, cam))
+    assert fr.material == s.material and fr.camera.kind == "orbit"
+    assert fr.links.shape[0] == int((s.links[:, 0] >= 0).sum()) and fr.obstacles.shape == s.obstacles.shape
+    assert np.allclose(fr.pos, s.pos, atol=1e-5)
+
+
+def test_aerial_camera_modes_and_app_buttons():
+    from myrmex.camera.aerial import MODES, AerialCinematographer
+    c = AerialCinematographer(1.6, 0)
+    c.mode = "manual"
+    c.request_cut("front_low")                                  # app button 2 -> follow
+    st = c.update(0.0, 1 / 60, np.array([0.0, 0, 3]), 0.0, 0.0, 4.0)
+    assert st.kind == MODES[1] and np.isfinite(st.position).all()
+
+
+def test_creature_take_roundtrip(tmp_path):
+    from myrmex.creature.take import CreatureTake
+    from myrmex.realtime.session import LiveConfig, LiveSession
+
+    class Sink:
+        sent = 0
+
+        def send_raw(self, b):
+            pass
+
+        def close(self):
+            pass
+    cfg = LiveConfig(backend="polyalloy", clock="internal", bpm=120, record=str(tmp_path), out=[])
+    s = LiveSession(cfg, start_inputs=False, sink=Sink(), now=0.0)
+    now = 0.0
+    for _ in range(int(3 * cfg.rate)):
+        now += 1.0 / cfg.rate
+        s.step(now)
+    take = CreatureTake(s.save_take())
+    assert take.variant == "polyalloy" and take.n > 80 and take.nodes == 96
+    tr = take.camera_track(24)
+    assert tr is not None and len(tr.positions) == round(take.duration * 24) and np.isfinite(tr.positions).all()
+    # song position: 8 beats in at 120 BPM when the take started -> the audio starts 4 s before frame 0
+    take.d["song_beat"] = 8.0 + take.d["t"] * 2.0
+    take.d["playing"] = np.ones(take.n)
+    assert abs(take.audio_offset() - 4.0) < 0.1

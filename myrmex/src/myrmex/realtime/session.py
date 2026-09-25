@@ -52,7 +52,7 @@ class LiveConfig:
     camera: bool = True
     auto_hold: bool = True                  # stand and pose when the music stops
     record: str | None = None               # directory for recorded takes
-    backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial Creature)
+    backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial) | polyalloy (Mimetic Polyalloy)
     creature: dict = field(default_factory=dict)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
@@ -99,11 +99,16 @@ class LiveSession:
                  sink: PoseSink | None = None, now: float | None = None):
         self.cfg = cfg
         self.creature = None
-        if cfg.backend == "creature":
+        if cfg.backend in ("creature", "polyalloy"):
             from ..creature.backend import CreatureBackend
             from ..creature.config import CreatureConfig
-            extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
-            self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
+            if cfg.backend == "polyalloy":
+                from ..creature.polyalloy import PolyalloyConfig
+                self.creature = CreatureBackend(PolyalloyConfig(seed=cfg.seed), record=bool(cfg.record),
+                                                variant="polyalloy")
+            else:
+                extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
+                self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
             self.plan, self.names, self.rig_id = None, [], 0
             self.core = self.motor = self.engine = None
             height = CreatureBackend.height
@@ -126,7 +131,11 @@ class LiveSession:
         self.t0 = now
         self.clock = ClockHub(cfg.clock, cfg.bpm, link=cfg.link, now=now)
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
-        self.camera = LiveCinematographer(height, cfg.seed) if cfg.camera else None
+        if cfg.camera and cfg.backend == "polyalloy":
+            from ..camera.aerial import AerialCinematographer
+            self.camera = AerialCinematographer(self.creature.engine.cfg.size, cfg.seed)
+        else:
+            self.camera = LiveCinematographer(height, cfg.seed) if cfg.camera else None
         self.sink = sink if sink is not None else (PoseSink(cfg.out, self.names) if cfg.out else None)
         self.dt = 1.0 / cfg.rate
         self.t = 0.0
@@ -231,15 +240,26 @@ class LiveSession:
         from ..creature.protocol import FLAG_DEBUG, FLAG_PLAYING, encode_creature
         cfg = self.cfg
         s = self.creature.tick(t, dt, notes, st)
+        aerial = self.creature.variant == "polyalloy"
+        if aerial and self.camera is not None:
+            for _, name, _a in self.creature.fresh:
+                if name in ("IMPULSE", "PRESSURE", "TURBULENCE"):
+                    self.camera.impact(0.5, t)
+                elif name in ("RESPONSE", "COLLAPSE"):
+                    self.camera.impact(1.0, t, reframe=True)
         due = t + 1e-9 >= self.next_rec
         if due:
             self.next_rec += 1.0 / cfg.record_fps
-        self.creature.record(due)
+        self.creature.record(due, st, self.camera.state if self.camera is not None else None)
         if t + 1e-9 < self.next_send:
             return None
         self.next_send = max(self.next_send + 1.0 / cfg.out_rate, t)
         cam = None
-        if self.camera is not None:
+        if self.camera is not None and aerial:
+            extent = float(np.sqrt(((s.pos - s.com) ** 2).sum(1).mean())) / max(self.creature.engine.cfg.size * 0.45, 1e-3)
+            cam = self.camera.update(t, 1.0 / cfg.out_rate, s.com, s.heading, st.beat, st.beats_per_bar,
+                                     s.behavior, extent)
+        elif self.camera is not None:
             top = s.com + np.array([0.0, 0.0, 0.5])
             cam = self.camera.update(t, 1.0 / cfg.out_rate, s.com, top, s.com * np.array([1.0, 1.0, 0.0]), s.heading,
                                      st.beat, st.beats_per_bar, "groove", s.arousal, False)
@@ -370,7 +390,7 @@ class LiveSession:
 
     def save_take(self) -> str | None:
         if self.creature is not None:
-            return self.creature.save_take(self.cfg.record) if self.cfg.record else None
+            return self.creature.save_take(self.cfg.record, self.cfg.record_fps) if self.cfg.record else None
         if self.recorder is None or not self.cfg.record or not self.recorder._deltas:
             return None
         os.makedirs(self.cfg.record, exist_ok=True)
