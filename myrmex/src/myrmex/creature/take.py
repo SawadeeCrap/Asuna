@@ -54,7 +54,7 @@ class CreatureTake:
     def resampled(self, key: str, fps: float) -> np.ndarray:
         a = self.d[key]
         i0, i1, w = self.sample_index(fps)
-        if a.dtype.kind in "US" or key in ("links", "anchor", "kind", "fragments"):
+        if a.dtype.kind in "US" or key in ("links", "anchor", "kind", "fragments", "members", "bkind"):
             return a[np.where(w < 0.5, i0, i1)]
         a = a.astype(float)
         w = w.reshape((-1,) + (1,) * (a.ndim - 1))

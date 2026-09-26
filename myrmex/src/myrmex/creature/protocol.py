@@ -9,6 +9,9 @@
     [FLAG_HIVE: <H particles> <B structures> <B memories> <3f origin>, particles P*3h (mm from origin),
                 pattern n*B]
     [style 2 (Cyber Hive) after the hive block: <H n> <f scan front>, light n*B]
+    [FLAG_STRUCT (Bionic line, after the camera block): <B kind> <B obstacles> <H members> <H extra>,
+                members M*(h i, h j, B kind, B pad, e radius, e stress, e phase) (i < 0 = empty slot),
+                extra E*f (creature-specific), obstacles O*4f]
 Frames above 8 KB travel in fragments (realtime.protocol.fragment).
 """
 from __future__ import annotations
@@ -20,6 +23,7 @@ import numpy as np
 
 from ..realtime.protocol import _CAM, SHOT_KINDS, CameraState
 from .behavior import STATES
+from .bionic import REGIMES as BIONIC_REGIMES
 from .morphology import MORPHS
 from .colony import INTENTS as COLONY_INTENTS
 from .colony import ALL_SHAPES as COLONY_SHAPES
@@ -29,14 +33,16 @@ MATERIAL_NAMES = tuple(MATERIAL)
 
 MAGIC = b"MYRC"
 VERSION = 1
-FLAG_PLAYING, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY, FLAG_HIVE = 1, 4, 16, 32, 64, 128
+FLAG_PLAYING, FLAG_STRUCT, FLAG_CAMERA, FLAG_DEBUG, FLAG_POLY, FLAG_COLONY, FLAG_HIVE = 1, 2, 4, 16, 32, 64, 128
 _POLY = struct.Struct("<BBHHH")
 _COL = struct.Struct("<BBH4f")          # bodies, pad, pad, prey x y z radius
 _HIVE = struct.Struct("<HBB3f")         # particles, structures, memories, origin
 _CYB = struct.Struct("<Hf")             # light count, scan front (m along the body, NaN = none)
 _LINK = np.dtype([("i", "<u2"), ("j", "<u2"), ("s", "<f4")])
+_STRUCT = struct.Struct("<BBHH")        # kind, obstacles, members, extra floats
+_MEMBER = np.dtype([("i", "<i2"), ("j", "<i2"), ("k", "u1"), ("x", "u1"), ("r", "<f2"), ("s", "<f2"), ("p", "<f2")])
 _HDR = struct.Struct("<4sBBHIddfBBHffff3ff")
-MORPH_NAMES = tuple(dict.fromkeys(tuple(MORPHS) + ATTRACTORS + COLONY_SHAPES))
+MORPH_NAMES = tuple(dict.fromkeys(tuple(MORPHS) + ATTRACTORS + COLONY_SHAPES + BIONIC_REGIMES))
 BEHAVIOR_NAMES = tuple(dict.fromkeys(tuple(STATES) + INTENTS + COLONY_INTENTS))
 
 
@@ -63,7 +69,7 @@ class CreatureFrame:
     camera: CameraState | None = None
     material: str = ""
     fragments: int = 1
-    style: int = 0                           # 0 classic · 1 osseous · 2 cyber · 3-7 mimetic (swarm .. crawler)
+    style: int = 0                           # 0 classic · 1 osseous · 2 cyber · 3-7 mimetic · 8-12 bionic
     dispersion: np.ndarray | None = None
     links: np.ndarray | None = None          # (L, 3) i, j, strength
     obstacles: np.ndarray | None = None      # (O, 4) x, y, z, radius
@@ -78,6 +84,9 @@ class CreatureFrame:
     memories: int = 0
     light: np.ndarray | None = None          # cyber: light-line intensity per node 0..1
     scan: float = float("nan")               # cyber: scan front along the body (m from its centre)
+    members: np.ndarray | None = None        # bionic: (M, 6) i, j, kind, radius, stress, phase (i < 0: empty)
+    extra: np.ndarray | None = None          # bionic: creature-specific floats
+    bkind: int = -1                          # bionic: 0 tensor · 1 fold · 2 arbor · 3 ferro · 4 truss
 
 
 def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camera: CameraState | None = None) -> bytes:
@@ -85,8 +94,9 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
     poly = getattr(st, "links", None) is not None
     colony = poly and getattr(st, "plate", None) is not None
     hive = colony and getattr(st, "particles", None) is not None
+    bionic = getattr(st, "members", None) is not None
     fl = flags | (FLAG_CAMERA if camera is not None else 0) | (FLAG_POLY if poly else 0) | \
-        (FLAG_COLONY if colony else 0) | (FLAG_HIVE if hive else 0)
+        (FLAG_COLONY if colony else 0) | (FLAG_HIVE if hive else 0) | (FLAG_STRUCT if bionic else 0)
     out = [_HDR.pack(MAGIC, VERSION, fl, n, seq & 0xFFFFFFFF, st.t, beat, bpm,
                      BEHAVIOR_NAMES.index(st.behavior) if st.behavior in BEHAVIOR_NAMES else 0,
                      MORPH_NAMES.index(st.morphology) if st.morphology in MORPH_NAMES else 0, 0, st.surface, st.glow,
@@ -99,6 +109,17 @@ def encode_creature(st, seq: int, beat: float, bpm: float, flags: int = 0, camer
         k = SHOT_KINDS.index(c.kind) if c.kind in SHOT_KINDS else len(SHOT_KINDS) - 1
         out.append(_CAM.pack(*map(float, c.position), *map(float, c.target), float(c.lens), float(c.focus),
                              float(c.fstop), c.shot_id & 0xFFFF, k))
+    if bionic:
+        M = np.asarray(st.members, float).reshape(-1, 6)
+        E = np.ascontiguousarray(np.asarray(st.extra, float).ravel(), "<f4")
+        ob = np.ascontiguousarray(st.obstacles, "<f4").reshape(-1, 4)
+        ma = np.zeros(len(M), _MEMBER)
+        ma["i"] = np.where(M[:, 0] >= 0, M[:, 0], -1)
+        ma["j"] = np.where(M[:, 0] >= 0, M[:, 1], -1)
+        ma["k"] = np.clip(M[:, 2], 0, 255)
+        ma["r"], ma["s"], ma["p"] = M[:, 3], M[:, 4], M[:, 5]
+        out += [_STRUCT.pack(int(getattr(st, "bkind", 0)), len(ob), len(M), len(E)), ma.tobytes(), E.tobytes(),
+                ob.tobytes()]
     if poly:
         lk = st.links                                       # every slot (the renderer keeps link identity)
         ob = st.obstacles                                   # fixed slots (radius 0 = empty)
@@ -155,6 +176,22 @@ def decode_creature(data: bytes) -> CreatureFrame | None:
     fr = CreatureFrame(v[4], v[5], v[6], v[7], BEHAVIOR_NAMES[v[8]] if v[8] < len(BEHAVIOR_NAMES) else "REST",
                        MORPH_NAMES[v[9]] if v[9] < len(MORPH_NAMES) else "COMPACT", v[11], v[12], v[13], v[14],
                        np.array(v[15:18]), v[18], pos, rad, stretch, kind, anchor, flags, cam)
+    if flags & FLAG_STRUCT and len(data) >= off + _STRUCT.size:
+        bk, no, nm, ne = _STRUCT.unpack_from(data, off)
+        off += _STRUCT.size
+        try:
+            ma = np.frombuffer(data, _MEMBER, count=nm, offset=off)
+            off += ma.nbytes
+            M = np.stack([ma["i"].astype(float), ma["j"].astype(float), ma["k"].astype(float), ma["r"].astype(float),
+                          ma["s"].astype(float), ma["p"].astype(float)], 1) if nm else np.zeros((0, 6))
+            fr.members = M
+            fr.extra = take("<f4", ne, (ne,)) if ne else np.zeros(0)
+            fr.obstacles = take("<f4", 4 * no, (no, 4)) if no else np.zeros((0, 4))
+        except ValueError:
+            fr.members = None
+            return fr
+        fr.bkind, fr.style = bk, 8 + bk
+        return fr
     if flags & FLAG_POLY and len(data) >= off + _POLY.size:
         m, frag, nl, no, style = _POLY.unpack_from(data, off)
         off += _POLY.size

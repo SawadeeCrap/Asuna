@@ -105,7 +105,7 @@ class PoseSink:
 
 
 CREATURES = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive",
-             "swarm", "spear", "cloud", "blade", "crawler")
+             "swarm", "spear", "cloud", "blade", "crawler", "tensor", "fold", "arbor", "ferro", "truss")
 FLYING = CREATURES[1:]
 
 
@@ -138,6 +138,10 @@ class LiveSession:
             elif cfg.backend in ("swarm", "spear", "cloud", "blade", "crawler"):     # v9-v13: the Mimetic line
                 from ..creature.mimetic import VARIANTS as MIMETIC
                 self.creature = CreatureBackend(MIMETIC[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                                                variant=cfg.backend)
+            elif cfg.backend in ("tensor", "fold", "arbor", "ferro", "truss"):       # v14-v18: the Bionic line
+                from ..creature.bionic import VARIANTS as BIONIC
+                self.creature = CreatureBackend(BIONIC[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
                                                 variant=cfg.backend)
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
@@ -304,9 +308,10 @@ class LiveSession:
         aerial = self.creature.variant in FLYING
         if aerial and self.camera is not None:
             for _, name, _a in self.creature.fresh:
-                if name in ("IMPULSE", "PRESSURE", "TURBULENCE", "SURGE", "DASH", "SLASH", "POUNCE"):
+                if name in ("IMPULSE", "PRESSURE", "TURBULENCE", "SURGE", "DASH", "SLASH", "POUNCE", "LASH", "CLAP",
+                            "BLOW", "OVERLOAD"):
                     self.camera.impact(0.5, t)
-                elif name in ("RESPONSE", "COLLAPSE", "HIT", "QUILLS"):
+                elif name in ("RESPONSE", "COLLAPSE", "HIT", "QUILLS", "SHED"):
                     self.camera.impact(1.0, t, reframe=True)
                 elif name in self.AERIAL_SUGGEST:
                     self.camera.suggest(self.AERIAL_SUGGEST[name], t)
@@ -319,7 +324,10 @@ class LiveSession:
         self.next_send = max(self.next_send + 1.0 / cfg.out_rate, t)
         cam = None
         if self.camera is not None and aerial:
-            extent = float(np.sqrt(((s.pos - s.com) ** 2).sum(1).mean())) / max(self.creature.engine.cfg.size * 0.45, 1e-3)
+            rms = getattr(s, "rms", None)                    # (the Bionic line says how far it reaches)
+            if rms is None:
+                rms = float(np.sqrt(((s.pos - s.com) ** 2).sum(1).mean()))
+            extent = rms / max(self.creature.engine.cfg.size * 0.45, 1e-3)
             cam = self.camera.update(t, 1.0 / cfg.out_rate, s.com, s.heading, st.beat, st.beats_per_bar,
                                      s.behavior, extent)
         elif self.camera is not None:

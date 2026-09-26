@@ -442,6 +442,11 @@ class MainWindow(QMainWindow):
         self.cmb_backend.addItem("Mimetic Cloud (v11: dispersion, camouflage, reassembly)", "cloud")
         self.cmb_backend.addItem("Mimetic Blade (v12: swept blades, high-velocity cutting)", "blade")
         self.cmb_backend.addItem("Mimetic Crawler (v13: many legs on rough terrain)", "crawler")
+        self.cmb_backend.addItem("Bionic Tensor (v14: tensegrity spine, struts and muscle cables)", "tensor")
+        self.cmb_backend.addItem("Bionic Fold (v15: folding Miura-ori sheet, wing / tube / bell)", "fold")
+        self.cmb_backend.addItem("Bionic Arbor (v16: vessels that grow, pulse and retract)", "arbor")
+        self.cmb_backend.addItem("Bionic Ferro (v17: ferrofluid led by an invisible magnet)", "ferro")
+        self.cmb_backend.addItem("Bionic Truss (v18: flying truss that remodels like bone)", "truss")
         self.cmb_backend.setCurrentIndex(max(0, self.cmb_backend.findData(self.s.backend)))
         form.addRow("Character type", self.cmb_backend)
         for cb in (self.cmb_char, self.cmb_backend):                # long names must not widen the page

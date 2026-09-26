@@ -78,6 +78,7 @@ class BionicState:
     links: None = None                        # (none of the blob-line blocks)
     plate: None = None
     particles: None = None
+    rms: float = 0.0                          # how far the body reaches from its centre (m, rms) - camera framing
 
 
 class BionicEngine:
@@ -350,13 +351,17 @@ class BionicEngine:
         raise NotImplementedError
 
     def _state(self, pos: np.ndarray, radius: np.ndarray, members: np.ndarray, extra, volumes: dict | None = None,
-               material: str = "STRUCTURED", fragments: int = 1) -> BionicState:
+               material: str = "STRUCTURED", fragments: int = 1, com: np.ndarray | None = None,
+               rms: float | None = None) -> BionicState:
         n = len(pos)
+        c = (pos.mean(0) if n else self.P.copy()) if com is None else np.asarray(com, float)
+        if rms is None:
+            rms = float(np.sqrt(((pos - c) ** 2).sum(1).mean())) if n else 0.0
         return BionicState(self.t, self.intent, self.regime(), pos.copy(), radius.copy(), np.ones((n, 3)),
-                           np.ones(n, np.int8), np.full(n, -1, np.int16), pos.mean(0) if n else self.P.copy(),
-                           self.heading, self.params.values(), volumes or {}, self.surface, self.glow, self.arousal,
-                           self.instab, list(self.events[-6:]), members, np.asarray(extra, float),
-                           self._obstacle_array(), self.KIND, STYLE0 + self.KIND, material, fragments)
+                           np.ones(n, np.int8), np.full(n, -1, np.int16), c, self.heading, self.params.values(),
+                           volumes or {}, self.surface, self.glow, self.arousal, self.instab, list(self.events[-6:]),
+                           members, np.asarray(extra, float), self._obstacle_array(), self.KIND, STYLE0 + self.KIND,
+                           material, fragments, rms=rms)
 
 
 __all__ = ["BionicEngine", "BionicConfig", "BionicState", "KINDS", "STYLE0", "INTENTS", "G"]

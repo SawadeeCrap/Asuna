@@ -212,6 +212,36 @@ The Crawler's ground is `creature/mimetic.py: terrain_height(x, y)`; Blender bui
 (`CrawlerTerrain`) instead of the flat floor.  Materials: `MyrmexLiquidBlack` (body, tendons),
 `MyrmexLiquidFin` (fins; the red edge is the `glint` attribute), `MyrmexLiquidMote` (swarm shards).
 
+# The Bionic line (backends `tensor`, `fold`, `arbor`, `ferro`, `truss` - creatures v14-v18)
+
+Why the earlier organisms end up as balls and DNA: they are all drawn as an implicit surface, one
+metaball per node, so any hard material reads as beads on a string.  The Bionic organisms have **no
+blob at all** - what you see is the structure itself, and each one lives by its own law of form
+(`creature/bionic/`).  They share the latent regime space with morphological inertia, the intents
+(cruise, hover, explore, display, evade, reform, strike), flight, obstacles and the Hand Glove.
+
+| organism | law of form | regimes | events (MIDI note) | new visual property |
+|---|---|---|---|---|
+| **Tensor** (v14) | tensegrity (Snelson's needle tower): rigid struts that never touch, held by cables that can only pull; the cables are muscles (actuated rest length) | SWIM · COIL · HELIX · SPRING · REACH · WHIP | LASH (110) · COIL (112) · UNFURL (113) | cables glow with the tension they carry - the force network is visible |
+| **Fold** (v15) | exact rigid-foldable Miura-ori (Schenk & Guest): one fold angle moves every panel, panels never bend; air pressure on every panel | GLIDER · PLEAT · TUBE · SHELL · BELL · RIBBON | CLAP (115) · FURL (117) · BLOOM (118) | carbon outside with light in the creases, **structural colour** inside (thin-film, like a beetle) |
+| **Arbor** (v16) | space colonisation (Runions): a vascular tree grows into the envelope of the form; pipe model r^2.5 = Σ r_child^2.5 from a fixed volume; starving tips retract (pruned in silence); hydraulic stiffening | SPHERE · FAN · SPIRAL · HALO · CROWN · COMET | SPROUT (119) · SHED (120) · PULSE (121) | heartbeats run as light through a dark translucent skin, growth cones glow, dropped branches fall and dissolve |
+| **Ferro** (v17) | a ferrofluid led by an invisible magnet: Rosensweig spikes above Bc (height √(B/Bc−1), hysteresis), spikes repel into hexagons, underdamped capillary spikes, Swift-Hohenberg labyrinth, droplets torn off the tips (volume exact) | CROWN · URCHIN · TONGUE · LABYRINTH · FIN · STAR | SPLIT (77) · SURGE (98) · CALM (122) | black mirror with an oily sheen, needle tips flush red, **iron filings** show the invisible field lines |
+| **Truss** (v18) | variable-geometry truss (every strut an actuator) + **Wolff's law**: struts loaded above average thicken, idle ones are resorbed, fixed bone volume; buckling drives compression struts | FUSELAGE · WING · ARCH · RING · TRIPOD · SPINE | BLOW (123) · ANNEAL (124) · OVERLOAD (125) | **temper colours** follow the stress (thin-film oxide), buckled struts bow, ion plumes at the thrusters, blows flash red |
+
+Parameters that matter here: `rigidity` (stiffness / slower morphing), `fluidity`, `coherence`
+(damping), `mechanism` (muscle / pressure / arm speed), `tendril_activity` (growth, spike height),
+`surface_activity` (the magnet's field, pulse brightness), `density` (the material budget),
+`architecture` (Truss: how fast bone remodels), `expansion` (the size of the envelopes).  Glove sculpting
+(finger mode *morph*) blends five regimes per organism (`realtime/glove.py: SCULPT_SHAPES`).
+
+Blender (`blender/myrmex_blender/bionic.py`): the geometry comes from `creature/bionic/meshes.py` (pure
+numpy, the same for live and takes) - machined struts, tapered vessels, panels with a Solidify
+thickness, a displaced sphere with sharp spikes, filings along the dipole field.  Materials:
+`MyrmexBionicStrut`, `MyrmexTensionCable`, `MyrmexBionicJoint`, `MyrmexFoldOuter / Inner / Rim`,
+`MyrmexVessel`, `MyrmexFerrofluid`, `MyrmexIronFilings`, `MyrmexBoneMetal`, `MyrmexTrussHub`,
+`MyrmexIonPlume` (per-vertex attributes: `stress`, `act`, `row`, `clap`, `glow`, `dist`, `shed`, `spike`,
+`field`, `thrust`, `hit`, `dying`).  On the wire: the `FLAG_STRUCT` block (members + creature floats).
+
 # Your look in Blender (saved between sessions)
 
 *Open in Blender* from the app, tune materials, lights, world, colour management and render settings there,

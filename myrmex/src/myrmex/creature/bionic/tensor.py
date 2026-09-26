@@ -248,7 +248,7 @@ class TensorEngine(BionicEngine):
         M[:ns, 3] = 0.032 * s
         M[:ns, 4] = 0.0
         M[:ns, 5] = np.arange(ns) / max(ns, 1)
-        T_ref = 0.25 + float(np.percentile(self.tension, 90))
+        T_ref = max(float(np.percentile(self.tension, 90)), 0.004 * s)                  # the busiest cables ~1
         M[ns:, 0:2] = self.cables
         M[ns:, 2] = 1 + (self.c_kind == 0)                                            # 1 muscle cable, 2 ring
         M[ns:, 3] = 0.0035 * s

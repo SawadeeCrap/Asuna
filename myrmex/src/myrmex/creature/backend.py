@@ -20,6 +20,7 @@ from .control import CreatureControlInput
 from .engine import EVENTS, CreatureEngine
 from .colony import ColonyConfig, ColonyEngine
 from .hive import HiveConfig, HiveEngine
+from .bionic import VARIANTS as BIONIC
 from .cyber import VARIANTS as CYBER
 from .mimetic import VARIANTS as MIMETIC
 from .osseous import VARIANTS as OSSEOUS
@@ -40,7 +41,11 @@ CONTROL_NOTES = {60: "MORPHOLOGY_SHIFT", 62: "APPENDAGE_BURST", 65: "COLLAPSE", 
                  95: "SCAN", 96: "GLITCH",
                  # Mimetic line (v9-v13): surge, dash, scatter / gather, slash, reconfigure, pounce
                  98: "SURGE", 100: "DASH", 101: "SCATTER", 103: "GATHER", 105: "SLASH", 107: "RECONFIGURE",
-                 108: "POUNCE"}
+                 108: "POUNCE",
+                 # Bionic line (v14-v18): tensegrity, fold, vessels, ferrofluid, bone truss
+                 # (77 SPLIT and 98 SURGE also throw off droplets / surge the magnet on Ferro)
+                 110: "LASH", 112: "COIL", 113: "UNFURL", 115: "CLAP", 117: "FURL", 118: "BLOOM", 119: "SPROUT",
+                 120: "SHED", 121: "PULSE", 122: "CALM", 123: "BLOW", 124: "ANNEAL", 125: "OVERLOAD"}
 
 
 CAM_KEYS = ("cam_px", "cam_py", "cam_pz", "cam_tx", "cam_ty", "cam_tz", "cam_lens", "cam_focus", "cam_fstop", "cam_shot")
@@ -54,7 +59,8 @@ class CreatureBackend:
         self.variant = variant
         kind = {"polyalloy": PolyalloyEngine, "colony": ColonyEngine, "hive": HiveEngine,
                 **{k: v[0] for k, v in OSSEOUS.items()}, **{k: v[0] for k, v in CYBER.items()},
-                **{k: v[0] for k, v in MIMETIC.items()}}.get(variant, CreatureEngine)
+                **{k: v[0] for k, v in MIMETIC.items()}, **{k: v[0] for k, v in BIONIC.items()}}.get(variant,
+                                                                                               CreatureEngine)
         self.engine = kind(cfg)
         self.events = getattr(kind, "EVENTS", EVENTS)
         self.fx = FeatureExtractor(MusicTimeline(source="live"))
@@ -124,6 +130,10 @@ class CreatureBackend:
                      memories=s.memories)
         if getattr(s, "light", None) is not None:          # Cyber Hive: light lines per node, the scan front
             f.update(light=np.clip(s.light * 255.0, 0, 255).astype(np.uint8), scan=float(s.scan))
+        if getattr(s, "members", None) is not None:        # Bionic line: the structure + the creature's floats
+            f.update(members=np.asarray(s.members, np.float32).astype(np.float16),
+                     extra=np.asarray(s.extra, np.float32), obstacles=np.asarray(s.obstacles, np.float32),
+                     bkind=float(s.bkind))
         self.frames.append(f)
 
     def save_take(self, folder: str, fps: float = 30.0) -> str | None:

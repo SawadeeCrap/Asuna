@@ -21,7 +21,10 @@ def attach(scene: bpy.types.Scene, take, frame_start: int, fps: int) -> None:
     for k in ("links",):
         if k in take.d:
             d[k] = take.resampled(k, fps).astype(np.float32)
-    for k in ("nrm", "plate", "radius", "heading", "t", "arousal", "com", "light"):
+    for k in ("nrm", "plate", "radius", "heading", "t", "arousal", "com", "light", "extra", "obstacles", "glow"):
+        if k in take.d:
+            d[k] = take.resampled(k, fps).astype(np.float32)
+    for k in ("members", "bkind"):                                   # Bionic line: the recorded structure
         if k in take.d:
             d[k] = take.resampled(k, fps).astype(np.float32)
     if "light" in d:
@@ -29,6 +32,7 @@ def attach(scene: bpy.types.Scene, take, frame_start: int, fps: int) -> None:
     if "heading" in take.d:
         d["heading"] = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]]
     from .creature import variant_style
+    _P.pop("view", None)                                         # (a view of an older scene is stale)
     _P.update(key=take.path, d=d, start=int(frame_start), n=len(d["pos"]), style=variant_style(take.variant)[0])
     scene["myrmex_take_player"] = take.path
     scene["myrmex_take_start"] = int(frame_start)
@@ -57,6 +61,20 @@ def apply(scene: bpy.types.Scene) -> None:
     style = _P.get("style", 0)
     f = int(np.clip(scene.frame_current - _P["start"], 0, _P["n"] - 1))
     pos = d["pos"][f].astype(float)
+    if style >= 8 and "members" in d:                # Bionic line: struts / panels / vessels / liquid / truss
+        from .creature import CreatureView
+        view = _P.get("view")
+        if view is None:
+            view = _P["view"] = CreatureView(scene)
+        kind = int(round(float(d["bkind"][f]))) if "bkind" in d else style - 8
+        if view.bionic is None or view.bionic.kind != kind:
+            view.make_bionic(kind)
+        view.bionic.apply_arrays(kind, pos, d["radius"][f].astype(float), d["members"][f].astype(float),
+                                 d["extra"][f].astype(float) if "extra" in d else None,
+                                 d["obstacles"][f].astype(float) if "obstacles" in d else None,
+                                 float(d["t"][f]) if "t" in d else f / 30.0,
+                                 float(d["glow"][f]) if "glow" in d else 0.0)
+        return
     if "nrm" in d:
         up = d["nrm"][f].astype(float)
     else:

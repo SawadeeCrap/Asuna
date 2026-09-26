@@ -276,7 +276,8 @@ class LiveLink:
         if self.use_lights or self.use_floor:
             class _F:                                      # the follow code only needs these
                 subject_pos, heading = fr.com, fr.heading
-                lift = max(0.0, float(fr.com[2]) - 1.2) if fr.links is not None else 0.0   # flying: lights rise too
+                lift = max(0.0, float(fr.com[2]) - 1.2) if (fr.links is not None or fr.members is not None) \
+                    else 0.0                                   # flying: lights rise too
             self._follow(_F)
         self.last = fr
         self.stats["applied"] += 1

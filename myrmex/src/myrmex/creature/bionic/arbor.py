@@ -74,7 +74,7 @@ class ArborEngine(BionicEngine):
         self.N = N = getattr(cfg, "max_nodes", NMAX)
         self.NA = getattr(cfg, "attractors", N_ATTR)
         self.grng = np.random.default_rng(stable_hash64("arbor-growth", cfg.seed) & 0xFFFFFFFF)
-        self.seg, self.d_inf, self.d_kill, self.d_feed = 0.13 * s, 0.9 * s, 0.22 * s, 0.45 * s
+        self.seg, self.d_inf, self.d_kill, self.d_feed = 0.13 * s, 0.9 * s, 0.22 * s, 0.3 * s
         self.r_tip, self.r_ref = 0.011 * s, 0.04 * s
         self.alive = np.zeros(N, bool)
         self.parent = np.full(N, -1)
@@ -120,7 +120,7 @@ class ArborEngine(BionicEngine):
 
     # ------------------------------------------------------------------ the envelope
     def _env_scale(self) -> float:
-        return 0.6 + 0.5 * self.env_e + 0.3 * (self.params["expansion"] - 0.5) + 0.4 * self.boost
+        return 0.5 + 0.65 * self.env_e + 0.3 * (self.params["expansion"] - 0.5) + 0.4 * self.boost
 
     def _sample(self, n: int) -> np.ndarray:
         """n attraction points from the current blend of envelopes (body frame, x forward, z up)."""
@@ -220,7 +220,7 @@ class ArborEngine(BionicEngine):
         infl = dmin < self.d_inf
         # vigor: attraction points close enough to feed each subtree (a tip outside the form starves)
         served = np.zeros(N)
-        feed = dmin < self.d_feed
+        feed = dmin < self.d_feed * min(1.0, self.env)                      # a smaller form feeds less far
         np.add.at(served, nodes[near[feed]], 1.0)
         sub = self.Anc.T @ served
         self.vigor = np.where(att, 0.8 * self.vigor + 0.2 * sub, 0.0)
@@ -486,9 +486,12 @@ class ArborEngine(BionicEngine):
         M[k, 5] = np.clip(self.dist[k] / dmax, 0.0, 1.0)
         pos = np.where(al[:, None], self.x, self.x[0])
         n_alive = int(al.sum())
+        live = self.x[al]
+        com = live.mean(0)
         return self._state(pos, r_draw, M, [n_alive, dmax, self.V_used / max(self.V_max, 1e-9), self.env,
                                             self.kick, len(self.pulses)],
-                           {"total": self.V_used, "budget": self.V_max, "nodes": n_alive}, "STRUCTURED")
+                           {"total": self.V_used, "budget": self.V_max, "nodes": n_alive}, "STRUCTURED", com=com,
+                           rms=float(np.sqrt(((live - com) ** 2).sum(1).mean())))
 
 
 __all__ = ["ArborEngine", "ArborConfig", "NMAX"]

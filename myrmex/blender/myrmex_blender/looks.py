@@ -16,7 +16,7 @@ import re
 import bpy
 
 CREATURES = ("nanomaterial", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive", "cyber_hive",
-             "swarm", "spear", "cloud", "blade", "crawler")
+             "swarm", "spear", "cloud", "blade", "crawler", "tensor", "fold", "arbor", "ferro", "truss")
 DEFAULT_NAME = "My look"          # the older single look per type (<variant>.blend)
 AUTOSAVE = "Autosave"             # what Blender showed before another look was loaded
 
@@ -30,6 +30,10 @@ def look_kind(scene: bpy.types.Scene | None = None) -> str:
     v = scene.get("myrmex_variant")
     if v in CREATURES:
         return v
+    for name, kind in (("BionicStruts", "tensor"), ("BionicPanels", "fold"), ("BionicVessels", "arbor"),
+                       ("BionicFerro", "ferro"), ("BionicTruss", "truss")):
+        if bpy.data.objects.get(name) is not None:                     # (normally the scene says which)
+            return kind
     if bpy.data.objects.get("CreatureBody") is not None:
         bone = bpy.data.objects.get("PolyBones") is not None
         if bpy.data.objects.get("CyberRails") is not None:

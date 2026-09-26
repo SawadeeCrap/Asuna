@@ -89,6 +89,8 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
     style, base = variant_style(take.variant)      # 1 Osseous: bone links + scutes · 2 Cyber: rails + panels
     sc.render.fps, sc.render.fps_base = fps, 1.0
     view = setup_creature_scene(sc, take.variant, keep_look=keep_look)
+    if base == "bionic":                                   # v14-v18: the structure is rebuilt per frame
+        return _import_bionic(take, sc, path, audio, frame_start, fps, use_camera)
     mb = view.mb
     pos = take.resampled("pos", fps)
     radius = take.resampled("radius", fps)
@@ -193,6 +195,41 @@ def import_take(path: str, audio: str | None = None, frame_start: int = 1, fps: 
         if track is not None:
             cams = cinema.apply_camera_track(track, frame_start)
     # Music.
+    off = take.audio_offset()
+    if audio:
+        audio = os.path.expanduser(audio)
+        preview.add_audio(audio, int(round(frame_start - (off or 0.0) * fps)))
+    sc.frame_start, sc.frame_end = frame_start, frame_start + m - 1
+    from . import take_player
+    take_player.attach(sc, take, frame_start, fps)
+    sc.frame_set(frame_start)
+    sc["myrmex_take"] = path
+    return {"variant": take.variant, "frames": m, "fps": fps, "keys": keys, "cameras": len(cams),
+            "audio_offset": off, "duration": m / fps}
+
+
+def _import_bionic(take, sc, path: str, audio, frame_start: int, fps: int, use_camera: bool) -> dict:
+    """Bionic takes: no metaballs - the take player draws the recorded structure every frame."""
+    t = take.resampled("t", fps)
+    m = len(t)
+    frames = np.arange(m, dtype=float) + frame_start
+    keys = 0
+    com = take.resampled("com", fps) if "com" in take.d else take.resampled("pos", fps).mean(1)
+    heading = np.unwrap(take.d["heading"])[take.sample_index(fps)[0]] if "heading" in take.d else np.zeros(m)
+    lift = np.maximum(0.0, com[:, 2] - 1.2)
+    rig, floor = bpy.data.objects.get("MyrmexLightRig"), bpy.data.objects.get("MyrmexFloor")
+    if rig is not None:
+        _clear_anim(rig)
+        keys += key_channels(rig, "MyrmexTakeLights", [("location", 0, com[:, 0]), ("location", 1, com[:, 1]),
+                                                      ("location", 2, lift), ("rotation_euler", 2, heading)], frames)
+    if floor is not None:
+        _clear_anim(floor)
+        keys += key_channels(floor, "MyrmexTakeFloor", [("location", 0, com[:, 0]), ("location", 1, com[:, 1])], frames)
+    cams = []
+    if use_camera:
+        track = take.camera_track(fps)
+        if track is not None:
+            cams = cinema.apply_camera_track(track, frame_start)
     off = take.audio_offset()
     if audio:
         audio = os.path.expanduser(audio)

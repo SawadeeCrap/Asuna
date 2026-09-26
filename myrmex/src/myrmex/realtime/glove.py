@@ -300,6 +300,11 @@ SCULPT_SHAPES = {   # five forms per organism, one per finger (thumb .. pinky)
     "cloud": ("SHARDS", "CLOUD", "STREAM", "SHIELD", "CORE"),
     "blade": ("SWEEP", "SCYTHE", "WINGS", "CLAW", "CORE"),
     "crawler": ("CRAWL", "SPINE", "CLAW", "THORN", "CORE"),
+    "tensor": ("SWIM", "COIL", "HELIX", "SPRING", "REACH"),
+    "fold": ("GLIDER", "PLEAT", "TUBE", "SHELL", "BELL"),
+    "arbor": ("SPHERE", "FAN", "SPIRAL", "HALO", "COMET"),
+    "ferro": ("CROWN", "URCHIN", "TONGUE", "LABYRINTH", "STAR"),
+    "truss": ("FUSELAGE", "WING", "ARCH", "RING", "TRIPOD"),
 }
 
 

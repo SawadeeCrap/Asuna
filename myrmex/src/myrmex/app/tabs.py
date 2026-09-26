@@ -19,6 +19,8 @@ HIVE_EVENTS = tuple(e for e in HiveEngine.EVENTS if e not in EVENTS + POLY_EVENT
 OSSEOUS_EVENTS = ("STRIKE", "OSSIFY", "QUILLS")
 CYBER_EVENTS = ("SCAN", "GLITCH")
 MIMETIC_EVENTS = ("SURGE", "DASH", "SCATTER", "GATHER", "SLASH", "RECONFIGURE", "POUNCE")
+BIONIC_EVENTS = ("LASH", "COIL", "UNFURL", "CLAP", "FURL", "BLOOM", "SPROUT", "SHED", "PULSE", "CALM", "BLOW", "ANNEAL",
+                 "OVERLOAD")
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
 
@@ -26,7 +28,7 @@ CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
            [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +
-                                                                  CYBER_EVENTS + MIMETIC_EVENTS] +
+                                                                  CYBER_EVENTS + MIMETIC_EVENTS + BIONIC_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"])
 
 
@@ -38,7 +40,9 @@ def creature_tab(win) -> QWidget:
                        "flying), Polyalloy Colony (v3, flock), Polyalloy Hive (v4), their bony Osseous versions "
                        "(v5–v7: bone-link skeletons, scutes, claws, blades, strikes) or the Cyber Hive (v8: white "
                        "nanomaterial, rails and panels with light lines, machine forms) or the Mimetic line (v9–v13: "
-                       "Swarm, Spear, Cloud, Blade, Crawler — black liquid metal). Auto = the organism decides "
+                       "Swarm, Spear, Cloud, Blade, Crawler — black liquid metal) or the Bionic line (v14–v18: "
+                       "Tensor, Fold, Arbor, Ferro, Truss — forms made by structural physics, no blobs). "
+                       "Auto = the organism decides "
                        "from its behaviour and the music; any knob can also be a MIDI CC. kick mode · obstacle rate · "
                        "altitude: v2–v4; swarm · armor · mechanism · hunt: v3–v4; architecture · pattern · nanoswarm · "
                        "memory: v4."))
@@ -67,7 +71,11 @@ def creature_tab(win) -> QWidget:
              OSSEOUS_EVENTS),
             ("Cyber Hive (v8)", "a scan of light sweeps the body · a digital glitch", CYBER_EVENTS),
             ("Mimetic (v9–v13)", "Swarm surge · Spear dash · Cloud scatter / gather · Blade slash · Crawler legs / "
-                                 "pounce", MIMETIC_EVENTS)):
+                                 "pounce", MIMETIC_EVENTS),
+            ("Bionic (v14–v18)", "Tensor lash / coil / unfurl · Fold clap / furl / bloom · Arbor sprout / shed / "
+                                 "pulse · Ferro split / surge / calm · Truss blow / anneal / overload",
+             ("LASH", "COIL", "UNFURL", "CLAP", "FURL", "BLOOM", "SPROUT", "SHED", "PULSE", "SPLIT", "SURGE", "CALM",
+              "BLOW", "ANNEAL", "OVERLOAD"))):
         box = QGroupBox(title)
         grid = QGridLayout(box)                               # wraps: the page stays narrow
         lab = QLabel(note)

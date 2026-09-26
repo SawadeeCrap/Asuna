@@ -37,11 +37,14 @@ LIQUID_MAT = "MyrmexLiquidBlack"
 DEEP_RED = (0.5, 0.012, 0.006, 1.0)     # very dark red internal glints, never dominant
 MIMETIC = {"swarm": (3, "hive"), "spear": (4, "colony"), "cloud": (5, "hive"), "blade": (6, "colony"),
            "crawler": (7, "colony")}
+BIONIC = {"tensor": 8, "fold": 9, "arbor": 10, "ferro": 11, "truss": 12}     # v14-v18: style 8 + kind
 
 
 def variant_style(variant: str) -> tuple[int, str]:
-    """-> (look: 0 classic · 1 osseous · 2 cyber · 3-7 mimetic, base organism: nanomaterial / polyalloy / colony /
-    hive)."""
+    """-> (look: 0 classic · 1 osseous · 2 cyber · 3-7 mimetic · 8-12 bionic, base organism: nanomaterial /
+    polyalloy / colony / hive / bionic)."""
+    if variant in BIONIC:
+        return BIONIC[variant], "bionic"
     if variant in MIMETIC:
         return MIMETIC[variant]
     if variant.startswith("cyber"):
@@ -1163,6 +1166,19 @@ class CreatureView:
         self.lattice = self.micro = None
         self.plates = self.lure = self.swarm = None
         self.obstacles: list = []
+        self.bionic = None
+
+    def make_bionic(self, kind: int) -> None:
+        """Bionic line: the organism is its structure (struts, panels, vessels, liquid) - no metaballs."""
+        from . import bionic
+        for name in (LATTICE, BONES, RAILS, TENDONS, FINS, PLATES, SCUTES, PANELS, SWARM, LURE, MICRO):
+            _drop(name)
+        crawler_terrain(False, self.coll)
+        self._ensure(0)
+        if self.bionic is None:
+            self.bionic = bionic.BionicView(self.coll)
+        if self.bionic.kind != kind:
+            self.bionic.make(kind)
 
     def make_polyalloy(self, n_links: int, n_obstacles: int = 4, style: int = 0) -> None:
         """Polyalloy family: skin, frame (struts, or bone links for the Osseous line), obstacles, micro-machines."""
@@ -1433,6 +1449,18 @@ class CreatureView:
                 o.scale = (0.0, 0.0, 0.0)
 
     def apply(self, fr) -> None:
+        if getattr(fr, "members", None) is not None:          # Bionic line (v14-v18)
+            if self.bionic is None or self.bionic.kind != int(fr.bkind):
+                self.make_bionic(int(fr.bkind))
+            if len(self.mb.elements):
+                self._ensure(0)
+            self.bionic.apply(fr)
+            self._debug(fr, bool(fr.flags & 16))
+            return
+        if self.bionic is not None:                           # another organism now: the structure goes
+            from . import bionic
+            bionic.drop_all()
+            self.bionic = None
         n = len(fr.pos)
         self._ensure(n)
         self._push_hist(fr)
@@ -1482,6 +1510,11 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
     scene["myrmex_variant"] = variant
     view = CreatureView(scene)
     style, base = variant_style(variant)
+    if base == "bionic":
+        view.make_bionic(style - 8)
+    else:
+        from . import bionic
+        bionic.drop_all()
     if base in ("polyalloy", "colony", "hive"):
         view.make_polyalloy((128 if base == "polyalloy" else 192) if style else (480 if base == "polyalloy" else 640),
                             4, style)
