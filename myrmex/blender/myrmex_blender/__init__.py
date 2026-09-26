@@ -43,12 +43,14 @@ _ensure_engine_path()
 
 
 def register():
-    from . import take_player, ui
+    from . import fx, take_player, ui
     ui.register()
     take_player.register()
+    fx.register()
 
 
 def unregister():
-    from . import take_player, ui
+    from . import fx, take_player, ui
+    fx.unregister()
     take_player.unregister()
     ui.unregister()

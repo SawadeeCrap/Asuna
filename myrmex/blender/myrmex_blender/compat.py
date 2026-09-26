@@ -28,7 +28,10 @@ def new_action_for(obj: bpy.types.ID, name: str) -> bpy.types.Action:
 
 def ensure_fcurve(act: bpy.types.Action, owner: bpy.types.ID, data_path: str, index: int, group: str):
     if hasattr(act, "fcurve_ensure_for_datablock"):
-        return act.fcurve_ensure_for_datablock(owner, data_path, index=index, group_name=group)
+        try:
+            return act.fcurve_ensure_for_datablock(owner, data_path, index=index, group_name=group)
+        except TypeError:                                 # 4.4 / 4.5: no group name yet
+            return act.fcurve_ensure_for_datablock(owner, data_path, index=index)
     fc = act.fcurves.find(data_path, index=index)
     if fc is None:
         fc = act.fcurves.new(data_path, index=index, action_group=group)

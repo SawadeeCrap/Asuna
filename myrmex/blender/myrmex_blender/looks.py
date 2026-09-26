@@ -115,6 +115,10 @@ def _without_take(scene: bpy.types.Scene):
         if coll is not None and coll.name in scene.collection.children:
             scene.collection.children.unlink(coll)
             undo.append(lambda: scene.collection.children.link(coll))
+        fxc = bpy.data.collections.get("MyrmexFX")              # afterimages / ribbons: of the moment
+        if fxc is not None and fxc.name in scene.collection.children:
+            scene.collection.children.unlink(fxc)
+            undo.append(lambda: scene.collection.children.link(fxc))
         marks = [(m.name, m.frame, m.camera) for m in scene.timeline_markers if m.name.startswith("Shot")]
         for m in [m for m in scene.timeline_markers if m.name.startswith("Shot")]:
             scene.timeline_markers.remove(m)

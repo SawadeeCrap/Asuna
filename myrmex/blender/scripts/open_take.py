@@ -41,19 +41,28 @@ def main():
     s.render_size = a.size if a.size in {i.identifier for i in s.bl_rna.properties["render_size"].enum_items} else "1920x1080"
     s.render_quality = a.quality if a.quality != "look" else s.render_quality
     s.keep_settings = a.keep_settings or a.quality == "look"
+    from myrmex_blender import fx
+    st = fx.from_env()                     # Myrmex FX (afterimages, ribbons, picture effects) as set in the app
     msg = ui.import_any_take(bpy.context, a.take, a.audio or None, not a.no_camera)
     print("Myrmex:", msg, flush=True)
+    if st is not None:
+        print("Myrmex: FX", "on" if st.get("on") else "off", st.get("cfg", {}).get("preset", ""), flush=True)
     w, h = (int(x) for x in a.size.split("x"))
     out = a.out or os.path.splitext(os.path.abspath(os.path.expanduser(a.take)))[0] + f"_{w}x{h}.mp4"
     if a.render:
-        creature_take.configure_video_output(out, (w, h), s.render_quality, keep=s.keep_settings)
         sc = bpy.context.scene
         total = sc.frame_end - sc.frame_start + 1
 
         def progress(scene, *_):
             print(f"Myrmex: frame {scene.frame_current - scene.frame_start + 1}/{total}", flush=True)
         bpy.app.handlers.render_post.append(progress)
-        bpy.ops.render.render(animation=True)
+        if fx.active():
+            from myrmex_blender import fx_render
+            fx_render.render(out, (w, h), s.render_quality, keep=s.keep_settings,
+                             progress=lambda m: print(m, flush=True))
+        else:
+            creature_take.configure_video_output(out, (w, h), s.render_quality, keep=s.keep_settings)
+            bpy.ops.render.render(animation=True)
         print("Myrmex: video written:", out, flush=True)
         return
     if not bpy.app.background:
@@ -69,6 +78,7 @@ def main():
                             if sp.type == "VIEW_3D":
                                 sp.shading.type = "MATERIAL"
                                 sp.region_3d.view_perspective = "CAMERA"
+            fx.look_through_camera()           # Myrmex FX: the camera view becomes its monitor (Solid underneath)
             return None
         bpy.app.timers.register(look, first_interval=1.0)
 

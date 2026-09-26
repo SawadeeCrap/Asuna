@@ -202,7 +202,7 @@ class LiveLink:
         """Drain the socket, apply the newest pose.  Returns True if something changed."""
         if self.sock is None:
             return False
-        newest = None
+        newest = newest_data = None
         creature = None
         while True:
             try:
@@ -235,12 +235,17 @@ class LiveLink:
             self.stats["packets"] += 1
             if newest is not None:
                 self.stats["dropped"] += 1
-            newest = fr
+            newest, newest_data = fr, data
         if creature is not None:
             return self._apply_creature(creature)
         if newest is None or self.solver is None or newest.rig != self.rig:
             return False
         self.apply(newest)
+        try:
+            from . import fx                                   # afterimages of the character, picture effects
+            fx.live_pose(newest, fx.decode_trailer(newest_data))
+        except Exception as e:
+            self.stats["error"] = f"FX: {type(e).__name__}: {e}"
         return True
 
     def apply(self, fr) -> None:
@@ -273,6 +278,11 @@ class LiveLink:
         self.creature_view.apply(fr)
         if self.use_camera and fr.camera is not None:
             self._apply_camera(fr.camera)
+        try:
+            from . import fx                                   # afterimages, ribbons, picture effects
+            fx.live_frame(fr, fx.decode_trailer(data))
+        except Exception as e:
+            self.stats["error"] = f"FX: {type(e).__name__}: {e}"
         if self.use_lights or self.use_floor:
             class _F:                                      # the follow code only needs these
                 subject_pos, heading = fr.com, fr.heading

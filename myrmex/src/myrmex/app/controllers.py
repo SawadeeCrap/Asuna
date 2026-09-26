@@ -109,6 +109,37 @@ def td_env(s: AppSettings) -> dict:
     return env
 
 
+def fx_settings(s: AppSettings) -> dict:
+    """Myrmex FX settings with every default filled in (the app keeps them in s.fx)."""
+    from ..realtime.fx import DEFAULT_RACK, DEFAULTS, rack_from_preset
+    d = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
+    d["replay"] = True
+    got = s.fx or {}
+    d.update({k: v for k, v in got.items() if k in d and k != "rack"})
+    base = rack_from_preset(d["preset"]) if d.get("preset") else dict(DEFAULT_RACK)
+    d["rack"] = {**base, **{k: float(v) for k, v in (got.get("rack") or {}).items() if k in DEFAULT_RACK}}
+    return d
+
+
+def fx_engine(s: AppSettings) -> dict:
+    """What the engine's FX rack takes (LiveConfig.fx)."""
+    d = fx_settings(s)
+    return {"enabled": bool(d["enabled"]), "preset": d.get("preset", ""), "rack": dict(d["rack"]),
+            "vertical": bool(d["vertical"]), "preview": float(d["preview"])}
+
+
+def fx_blender(s: AppSettings) -> dict:
+    """What a Blender needs (the "fx" control command / MYRMEX_FX): takes have no engine stream."""
+    d = fx_settings(s)
+    return {"on": bool(d["enabled"]), "preset": d.get("preset", ""), "rack": dict(d["rack"]),
+            "vertical": bool(d["vertical"]), "preview": float(d["preview"]), "replay": bool(d.get("replay", True))}
+
+
+def fx_env(s: AppSettings) -> dict:
+    import json
+    return {"MYRMEX_FX": json.dumps(fx_blender(s))}
+
+
 def install_td_files() -> str:
     """Copy the TD network builder next to the user's TD project; returns its path."""
     os.makedirs(TD_HOME, exist_ok=True)
@@ -168,7 +199,7 @@ class EngineController:
             cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
                              camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs,
-                             glove=dict(s.glove or {}), touch=td_settings(s))
+                             glove=dict(s.glove or {}), touch=td_settings(s), fx=fx_engine(s))
             self.session = LiveSession(cfg)
             self.session.start()
         except Exception as e:
@@ -233,6 +264,11 @@ class EngineController:
         """Change the TouchDesigner link live (effects, recording, the output window ...)."""
         if self.session is not None:
             self.session.touch.configure(**kw)
+
+    def fx_config(self, **kw) -> None:
+        """Change Myrmex FX live (it travels to Blender with every frame)."""
+        if self.session is not None:
+            self.session.fx.configure(**kw)
 
     def glove_calibrate(self) -> dict:
         return self.session.glove.state.calibrate() if self.session is not None else {}

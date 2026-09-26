@@ -276,7 +276,7 @@ def copy_app_sources(dst: str) -> None:
     shutil.copytree(os.path.join(REPO, "characters"), os.path.join(dst, "characters"), ignore=ign)
     shutil.copytree(os.path.join(REPO, "touchdesigner"), os.path.join(dst, "touchdesigner"), ignore=ign)
     os.makedirs(os.path.join(dst, "docs"), exist_ok=True)
-    for f in ("docs/REALTIME.md", "docs/TOUCHDESIGNER.md", "README.md"):
+    for f in ("docs/REALTIME.md", "docs/TOUCHDESIGNER.md", "docs/FX.md", "README.md"):
         shutil.copy2(os.path.join(REPO, f), os.path.join(dst, f))
 
 

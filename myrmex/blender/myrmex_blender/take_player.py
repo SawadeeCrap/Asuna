@@ -30,6 +30,17 @@ def attach(scene: bpy.types.Scene, take, frame_start: int, fps: int) -> None:
     if "td" in take.d and "td_names" in take.d:                      # what TouchDesigner saw live
         d["td"] = take.resampled("td", fps).astype(np.float32)
         d["td_names"] = [str(n) for n in take.d["td_names"]]
+    if "fx" in take.d and "fx_names" in take.d:                      # what Blender's effects did live
+        d["fx"] = take.resampled("fx", fps).astype(np.float32)
+        d["fx_names"] = [str(n) for n in take.d["fx_names"]]
+    if "stretch" in take.d:                                          # (afterimages copy the body per frame)
+        d["stretch"] = take.resampled("stretch", fps).astype(np.float32)
+    if "ev_t" in take.d and "t" in d and len(take.d["ev_t"]):         # engine events -> frames (hits)
+        d["ev_frames"] = np.searchsorted(d["t"], np.asarray(take.d["ev_t"], float)).astype(float)
+    if all(k in take.d for k in ("cam_px", "cam_py", "cam_pz")):     # (ribbons face the recorded camera)
+        d["cam_p"] = np.stack([take.resampled(k, fps) for k in ("cam_px", "cam_py", "cam_pz")], 1).astype(np.float32)
+    d["fps"] = float(fps)
+    d["variant"] = str(take.variant)
     if "light" in d:
         d["light"] /= 255.0
     if "heading" in take.d:
@@ -58,6 +69,12 @@ def apply(scene: bpy.types.Scene) -> None:
     d = _P.get("d")
     if d is None or scene.get("myrmex_take_player") != _P.get("key"):
         return
+    _build(scene, d)
+    from . import fx                                          # afterimages, ribbons, picture effects
+    fx.take_frame(scene, int(np.clip(scene.frame_current - _P["start"], 0, _P["n"] - 1)), d)
+
+
+def _build(scene: bpy.types.Scene, d: dict) -> None:
     from .creature import (BONES, FINS, LATTICE, PANELS, PLATES, RAILS, SCUTES, TENDON_THICK, TENDONS, _flow,
                            bone_points, fin_points, panel_light, panel_points, plate_points, rail_light, rail_points,
                            scute_points, set_cyber_mesh, strut_points, tendon_points)

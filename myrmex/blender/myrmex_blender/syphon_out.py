@@ -98,6 +98,8 @@ class SyphonOut:
         now = time.perf_counter()
         if now - self.last < 0.9 / self.fps:               # one publish per frame (several 3D views)
             return
+        if _fx_on() and self.metal:                         # Myrmex FX publishes its finished picture
+            return
         ctx = bpy.context
         scene, space, region = ctx.scene, ctx.space_data, ctx.region
         cam = scene.camera if scene is not None else None
@@ -148,6 +150,46 @@ class SyphonOut:
         self.srv = self.tex = self.off = None
 
 
+    def publish(self, tex, w: int, h: int) -> None:
+        """A finished picture (Myrmex FX) instead of the plain camera view."""
+        if not self.metal or self.srv is None:
+            return
+        now = time.perf_counter()
+        if now - self.last < 0.9 / self.fps:
+            return
+        self.last = now
+        try:
+            from syphon.utils.raw import copy_bytes_to_mtl_texture, create_mtl_texture
+            if getattr(self, "fx_size", None) != (w, h):
+                self.fx_tex = create_mtl_texture(self.srv.device, w, h)
+                self.fx_size = (w, h)
+            copy_bytes_to_mtl_texture(tex.read(), self.fx_tex)
+            self.srv.publish_frame_texture(self.fx_tex, size=(w, h), is_flipped=self.flip)
+            self.frames += 1
+            self.error = ""
+        except Exception as e:
+            self.error = f"{type(e).__name__}: {e}"
+
+
+def _fx_on() -> bool:
+    try:
+        from . import fx, fx_post
+        return fx.active() and fx_post.enabled()
+    except Exception:
+        return False
+
+
+def wants_fx() -> bool:
+    """A Syphon server is running: Myrmex FX draws even when no 3D view looks through the camera."""
+    return _S.get("out") is not None
+
+
+def publish_texture(tex, w: int, h: int) -> None:
+    out = _S.get("out")
+    if out is not None:
+        out.publish(tex, w, h)
+
+
 def status() -> dict:
     out = _S.get("out")
     if out is None:
@@ -192,4 +234,4 @@ def from_env() -> dict | None:
     return configure(d) if isinstance(d, dict) and d.get("on") else None
 
 
-__all__ = ["configure", "status", "available", "from_env", "SyphonOut"]
+__all__ = ["configure", "status", "available", "from_env", "SyphonOut", "publish_texture", "wants_fx"]

@@ -110,8 +110,16 @@ def _touch(p: QPainter) -> None:
     p.drawLine(QPointF(9, 20.5), QPointF(15, 20.5))
 
 
+def _fx(p: QPainter) -> None:
+    """Myrmex FX: a shape and the fading copies it leaves behind."""
+    p.drawEllipse(QPointF(16.5, 12), 4.6, 4.6)
+    for x, r in ((10.2, 3.7), (5.0, 2.8)):
+        p.drawArc(QRectF(x - r, 12 - r, 2 * r, 2 * r), 70 * 16, 220 * 16)
+    p.drawLine(QPointF(14.5, 19.8), QPointF(20.5, 19.8))
+
+
 DRAW = {"Live": _live, "Character": _character, "Creature": _creature, "Camera": _camera, "Glove": _glove,
-        "TouchDesigner": _touch, "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Log": _log}
+        "FX": _fx, "TouchDesigner": _touch, "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Log": _log}
 
 
 def _pixmap(draw, color: str, size: int = 22, ratio: float = 2.0) -> QPixmap:

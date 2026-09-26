@@ -36,6 +36,7 @@ from . import controllers as C
 from . import icons
 from . import tabs as T
 from . import theme
+from . import fx_tab as FT
 from . import touch_tab as TT
 from .settings import AppSettings, characters_dir
 
@@ -126,6 +127,7 @@ class MainWindow(QMainWindow):
              ("Creature", "The organisms' parameters and events"),
              ("Camera", "Automatic director or your own shots"),
              ("Glove", "Hand Glove: the organism moves with your hand"),
+             ("FX", "Afterimages, light trails and picture effects - drawn by Blender, horizontal or vertical"),
              ("TouchDesigner", "Effects in TouchDesigner, in sync with the music, the organism and Blender"),
              ("Inputs", "Ableton, VCV Rack, MIDI, audio and the clock"),
              ("MIDI", "Every incoming CC and note, and where it goes"),
@@ -183,7 +185,7 @@ class MainWindow(QMainWindow):
         self.btn_blender.clicked.connect(self.open_blender)
         builders = {"Live": self._live_tab, "Character": self._character_tab, "Creature": lambda: T.creature_tab(self),
                     "Camera": self._camera_tab, "Glove": lambda: T.glove_tab(self), "Inputs": self._inputs_tab,
-                    "TouchDesigner": lambda: TT.td_tab(self),
+                    "FX": lambda: FT.fx_tab(self), "TouchDesigner": lambda: TT.td_tab(self),
                     "MIDI": lambda: T.midi_tab(self),
                     "Takes": self._output_tab, "Log": lambda: self.logbox}
         self.page_index = {}
@@ -919,7 +921,8 @@ class MainWindow(QMainWindow):
         if not self.engine.running:
             self.start_engine()
         cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend,
-                                          self.s.keep_blender_settings, self.s.looks, C.td_env(self.s))
+                                          self.s.keep_blender_settings, self.s.looks,
+                                          {**C.td_env(self.s), **C.fx_env(self.s)})
         look = C.look_file(self.s.backend, self.s.looks) if self.s.backend in C.CREATURE_BACKENDS else ""
         if look:
             self.log(f"using your saved look: {look}")
@@ -952,14 +955,16 @@ class MainWindow(QMainWindow):
         cmd = C.take_command(blender, take, self.s.character, self.s.take_audio, render, self.s.render_size,
                              self.s.render_quality, self.s.keep_blender_settings, self.s.looks)
         p = QProcess(self)
+        qenv = QProcessEnvironment.systemEnvironment()
+        for k, val in C.fx_env(self.s).items():                # Myrmex FX: live view and renders alike
+            qenv.insert(k, val)
         if not render:                                     # the app can save / load looks in this Blender
-            qenv = QProcessEnvironment.systemEnvironment()
             qenv.insert("MYRMEX_CONTROL", "stdin")
             qenv.insert("MYRMEX_LOOKS", C.looks_dir())
             for k, val in C.td_env(self.s).items():            # TouchDesigner follows the take
                 qenv.insert(k, val)
-            p.setProcessEnvironment(qenv)
             p.setProperty("myrmex_variant", C.take_variant(take) or "humanoid")
+        p.setProcessEnvironment(qenv)
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         p.readyReadStandardOutput.connect(lambda: self._pipe(p, "render", ("Myrmex", "rror")) if render
                                           else self._pipe(p, "blender"))
@@ -1026,6 +1031,8 @@ class MainWindow(QMainWindow):
             T.refresh_glove(self)
         if self.stack.currentIndex() == self.page_index.get("TouchDesigner"):
             TT.refresh_td(self)
+        if self.stack.currentIndex() == self.page_index.get("FX"):
+            FT.refresh_fx(self)
         st = self.engine.status()
         tok = theme.T
         if not st:

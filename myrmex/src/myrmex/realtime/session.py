@@ -56,6 +56,7 @@ class LiveConfig:
     creature: dict = field(default_factory=dict)
     glove: dict = field(default_factory=dict)       # Hand Glove link (preset, intensity, profile, ...)
     touch: dict = field(default_factory=dict)       # TouchDesigner link (realtime/touch.py: enabled, host, fx ...)
+    fx: dict = field(default_factory=dict)          # Myrmex FX drawn by Blender (realtime/fx.py: preset, rack ...)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
 
@@ -74,8 +75,8 @@ class PoseSink:
         self.last_error = ""
         self.errors = 0
 
-    def send(self, fr: PoseFrame, now: float) -> None:
-        data = encode_pose(fr)
+    def send(self, fr: PoseFrame, now: float, extra: bytes = b"") -> None:
+        data = encode_pose(fr) + extra
         if now - self.last_names > 1.0:
             for a in self.addrs:
                 self._tx(self.names_packet, a)
@@ -173,6 +174,8 @@ class LiveSession:
         self.glove = GloveLink(cfg.glove)
         from .touch import TouchBridge
         self.touch = TouchBridge(cfg.touch)               # computed always (takes keep it), sent when enabled
+        from .fx import FxRack
+        self.fx = FxRack(cfg.fx)                          # the effects Blender draws: sent with every frame
         if cfg.glove.get("profile"):
             self.inputs.glove.profile = dict(cfg.glove["profile"])
         if cfg.camera and cfg.backend in FLYING:
@@ -232,9 +235,6 @@ class LiveSession:
             if self.next_send < t:
                 self.next_send = t + 1.0 / cfg.out_rate
             fr = self._frame(t, dt * max(1, round(cfg.rate / cfg.out_rate)), st, res)
-            if self.sink is not None:
-                self.sink.send(fr, now)
-            self.last_frame = fr
             from types import SimpleNamespace
             body = SimpleNamespace(com=np.asarray(fr.subject_pos, float), glow=0.0,
                                    arousal=float(self.engine.drives.arousal), surface=0.0, instability=0.0,
@@ -245,6 +245,10 @@ class LiveSession:
                             else None, controls=self.inputs.controls, variant="humanoid",
                             texts={"organism": "humanoid", "regime": str(self.engine.section),
                                    "intent": str(self.engine.behavior_name)})
+            if self.sink is not None:
+                from .fx import trailer
+                self.sink.send(fr, now, trailer(self.fx.frame(self.touch.values, self.inputs.controls)))
+            self.last_frame = fr
         if self.recorder is not None and t + 1e-9 >= self.next_rec:
             self.next_rec += 1.0 / cfg.record_fps
             ch = {"beat": st.beat, "bpm": st.bpm, "hold": float(self.hold), "playing": float(st.playing),
@@ -337,7 +341,8 @@ class LiveSession:
         due = t + 1e-9 >= self.next_rec
         if due:
             self.next_rec += 1.0 / cfg.record_fps
-        self.creature.record(due, st, cs, td=self.touch.values)
+        fxv = self.fx.frame(self.touch.values, self.inputs.controls)
+        self.creature.record(due, st, cs, td=self.touch.values, fx=fxv)
         if t + 1e-9 < self.next_send:
             return None
         self.next_send = max(self.next_send + 1.0 / cfg.out_rate, t)
@@ -356,7 +361,8 @@ class LiveSession:
         flags = (FLAG_PLAYING if st.playing else 0) | (FLAG_DEBUG if self.creature.debug else 0)
         self.seq += 1
         if self.sink is not None:
-            self.sink.send_raw(encode_creature(s, self.seq, st.beat, st.bpm, flags, cam))
+            from .fx import trailer
+            self.sink.send_raw(encode_creature(s, self.seq, st.beat, st.bpm, flags, cam) + trailer(fxv))
         self.last_frame = s
         return s
 
@@ -507,6 +513,8 @@ class LiveSession:
             "td": {"enabled": bool(self.touch.cfg.get("enabled")), "sent": self.touch.sent,
                    "connected": time.perf_counter() - self.inputs.td["seen"] < 2.5,
                    "fps": round(float(self.inputs.td["fps"]), 1), "error": self.touch.last_error},
+            "fx": {"enabled": bool(self.fx.cfg.get("enabled")), "preset": self.fx.cfg.get("preset", ""),
+                   "vertical": bool(self.fx.cfg.get("vertical")), "rack": dict(self.fx.cfg["rack"])},
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),
             "max_tick_ms": round(self.stats["max_tick_ms"], 2), "overruns": self.stats["overruns"],
             "errors": self.inputs.stats["errors"] + ([self.clock.link_error] if self.clock.link_error else []) +

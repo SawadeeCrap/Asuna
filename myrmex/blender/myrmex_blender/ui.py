@@ -82,6 +82,56 @@ def _micro_viewport(on: bool) -> None:
         ob.modifiers["MicroMachines"].show_viewport = on
 
 
+def _fx_rack_update(self, context):
+    from . import fx
+    fx.configure({"rack": {k: getattr(self, k) for k in FX_RACK}, "preset": ""})
+    if self.preset != "CUSTOM":
+        self["preset"] = len(_fx_presets())                        # (moving a slider makes it a custom rack)
+
+
+def _fx_presets():
+    from myrmex.realtime.fx import PRESET_NAMES
+    return PRESET_NAMES
+
+
+def _fx_update(self, context):
+    from . import fx
+    d = {"on": self.on, "vertical": self.vertical == "V", "monitor": self.monitor, "preview": float(self.preview)}
+    if self.preset != "CUSTOM":
+        d["preset"] = self.preset
+    fx.configure(d)
+    if self.preset != "CUSTOM":                                   # the sliders show the preset
+        from myrmex.realtime.fx import rack_from_preset
+        r = rack_from_preset(self.preset)
+        for k in FX_RACK:
+            self[k] = r[k]                                        # (item assignment: no update callback)
+
+
+def _fx_props():
+    from myrmex.realtime.fx import DEFAULT_RACK, LABELS, PRESET_NAMES
+    ann = {"on": BoolProperty(name="Myrmex FX", default=False, update=_fx_update,
+                              description="Afterimages, light ribbons and the picture effects (no TouchDesigner)"),
+           "preset": EnumProperty(name="Preset", items=[(n, n, "") for n in PRESET_NAMES] + [("CUSTOM", "Custom", "")],
+                                  default=PRESET_NAMES[0], update=_fx_update),
+           "vertical": EnumProperty(name="Format", items=[("H", "1920×1080", "Horizontal"),
+                                                          ("V", "1080×1920", "Vertical (reels, stories, shorts)")],
+                                    default="H", update=_fx_update),
+           "monitor": BoolProperty(name="Monitor in camera view", default=True, update=_fx_update,
+                                   description="The 3D view looking through the camera shows the finished picture"),
+           "preview": EnumProperty(name="Live size", items=[("1.0", "100%", ""), ("0.75", "75%", ""), ("0.5", "50%", "")],
+                                   default="1.0", update=_fx_update,
+                                   description="Live picture size (renders are always full size)")}
+    for k in FX_RACK:
+        ann[k] = FloatProperty(name=LABELS[k], default=DEFAULT_RACK[k], min=0.0, max=1.0, update=_fx_rack_update)
+    return ann
+
+
+FX_RACK = ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons", "trails", "bloom", "chroma", "glitch",
+           "impact_frames", "speed_lines", "shock", "grain", "vignette", "scanlines", "react", "exposure", "contrast",
+           "saturation", "hue")
+MyrmexFxSettings = type("MyrmexFxSettings", (bpy.types.PropertyGroup,), {"__annotations__": _fx_props()})
+
+
 def import_any_take(context, path: str, audio: str | None = None, use_camera: bool = True) -> str:
     """Creature (v1 / v2) or humanoid take -> animation, cameras, music.  Returns a summary line."""
     from myrmex.creature.take import is_creature_take
@@ -192,6 +242,21 @@ class MYRMEX_OT_render_take(bpy.types.Operator):
             return {"CANCELLED"}
         w, h = (int(x) for x in s.render_size.split("x"))
         out = os.path.splitext(take)[0] + f"_{w}x{h}.mp4"
+        from . import fx
+        if fx.active():                        # Myrmex FX: a background Blender renders + applies the effects
+            import subprocess
+            import sys
+            script = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts",
+                                  "open_take.py")
+            cmd = [bpy.app.binary_path, "-b"] + ([bpy.data.filepath] if bpy.data.filepath else []) + \
+                ["--python", script, "--", "--take", take, "--render", "--size", s.render_size,
+                 "--quality", s.render_quality, "--out", out] + (["--audio", s.take_audio] if s.take_audio else []) + \
+                (["--keep-settings"] if s.keep_settings else [])
+            env = dict(os.environ, MYRMEX_FX=json.dumps(fx.render_settings()), MYRMEX_SRC=os.pathsep.join(
+                p for p in sys.path if os.path.isdir(os.path.join(p, "myrmex"))))
+            subprocess.Popen(cmd, env=env)
+            self.report({"INFO"}, f"Rendering with Myrmex FX in the background to {out}")
+            return {"FINISHED"}
         creature_take.configure_video_output(out, (w, h), s.render_quality, keep=s.keep_settings)
         bpy.ops.render.render("INVOKE_DEFAULT", animation=True)
         self.report({"INFO"}, f"Rendering to {out}")
@@ -442,20 +507,68 @@ class MYRMEX_PT_live(bpy.types.Panel):
                 box.label(text=e, icon="ERROR")
 
 
-CLASSES = (MyrmexLiveSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop, MYRMEX_OT_live_camera_view,
+class MYRMEX_PT_fx(bpy.types.Panel):
+    bl_label = "Myrmex FX"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Myrmex"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.myrmex_fx, "on", text="")
+
+    def draw(self, context):
+        from . import fx
+        f = context.scene.myrmex_fx
+        L = self.layout
+        live = fx.S.get("live")
+        if live:
+            L.label(text="Live: the Myrmex app sets the effects", icon="LINKED")
+        col = L.column()
+        col.enabled = not live
+        col.prop(f, "preset")
+        col.prop(f, "vertical", expand=True)
+        row = L.row(align=True)
+        row.prop(f, "monitor", toggle=True)
+        row.prop(f, "preview", text="")
+        box = col.box()
+        box.label(text="Afterimages · ribbons", icon="GHOST_ENABLED")
+        for k in ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons"):
+            box.prop(f, k, slider=True)
+        box = col.box()
+        box.label(text="Picture", icon="IMAGE_RGB")
+        for k in ("trails", "bloom", "chroma", "glitch", "impact_frames", "speed_lines", "shock", "grain", "vignette",
+                  "scanlines", "react"):
+            box.prop(f, k, slider=True)
+        box = col.box()
+        box.label(text="Colour", icon="COLOR")
+        for k in ("exposure", "contrast", "saturation", "hue"):
+            box.prop(f, k, slider=True)
+        st = fx.status()
+        mon = st.get("monitor") or {}
+        if mon.get("monitor"):
+            L.label(text=f"monitor {mon['size'][0]}×{mon['size'][1]} · {mon['fps']:.0f} fps", icon="RESTRICT_VIEW_OFF")
+        for e in (st.get("error"), mon.get("error")):
+            if e:
+                L.label(text=e, icon="ERROR")
+
+
+CLASSES = (MyrmexLiveSettings, MyrmexFxSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop, MYRMEX_OT_live_camera_view,
            MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take, MYRMEX_OT_render_take,
-           MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_PT_live)
+           MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_PT_live, MYRMEX_PT_fx)
 
 
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.Scene.myrmex_live = PointerProperty(type=MyrmexLiveSettings)
+    bpy.types.Scene.myrmex_fx = PointerProperty(type=MyrmexFxSettings)
 
 
 def unregister():
     live.stop_embedded_engine()
     _stop_link()
     del bpy.types.Scene.myrmex_live
+    del bpy.types.Scene.myrmex_fx
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

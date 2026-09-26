@@ -52,6 +52,10 @@ def _look_through_camera():
                     space.region_3d.view_perspective = "CAMERA"
                     space.overlay.show_overlays = False
             area.tag_redraw()
+    # Myrmex FX: the camera view is its monitor, which renders "Rendered" itself - the view underneath goes
+    # Solid, so the scene is rendered once, not twice (and gets "Rendered" back when the effects are off)
+    from myrmex_blender import fx
+    fx.look_through_camera()
 
 
 def _syphon_from_env():
@@ -67,9 +71,12 @@ def _syphon_from_env():
 
 def go_live():
     _register()
-    from myrmex_blender import control
+    from myrmex_blender import control, fx
     if control.enabled():                  # the app can save / load looks in this Blender
         control.start()
+    st = fx.from_env()                     # Myrmex FX as set in the app (the engine's frames then keep it current)
+    if st is not None:
+        print("Myrmex: FX", "on" if st.get("on") else "off", flush=True)
     scene = bpy.context.scene
     s = scene.myrmex_live
     if "MYRMEX_KEEP_SETTINGS" in os.environ:
