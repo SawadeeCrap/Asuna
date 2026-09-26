@@ -13,6 +13,8 @@ import math
 import bpy
 import numpy as np
 
+from . import compat
+
 COLL = "MyrmexCreature"
 META = "CreatureBody"
 DEBUG = "CreatureDebug"
@@ -998,43 +1000,10 @@ def _mote_red_material() -> bpy.types.Material:
 
 
 def crawler_terrain(on: bool, coll) -> None:
-    """The Crawler walks on rough ground (the same heights as the engine); others keep the flat floor."""
-    floor = bpy.data.objects.get("MyrmexFloor")
-    if not on:
-        _drop(TERRAIN)
-        if floor is not None:
-            floor.hide_viewport = floor.hide_render = False
-        return
-    if floor is not None:
-        floor.hide_viewport = floor.hide_render = True
-    if bpy.data.objects.get(TERRAIN) is not None:
-        return
-    from myrmex.creature.mimetic import terrain_height
-    N, half = 241, 40.0
-    xs = np.linspace(-half, half, N)
-    X, Y = np.meshgrid(xs, xs)
-    Z = terrain_height(X, Y)
-    idx = np.arange(N * N).reshape(N, N)
-    quads = np.stack([idx[:-1, :-1], idx[:-1, 1:], idx[1:, 1:], idx[1:, :-1]], -1).reshape(-1, 4)
-    me = bpy.data.meshes.new(TERRAIN)
-    me.from_pydata(np.stack([X, Y, Z], -1).reshape(-1, 3).tolist(), [], quads.tolist())
-    for poly in me.polygons:
-        poly.use_smooth = True
-    mat = bpy.data.materials.get("MyrmexTerrain")
-    if mat is None:
-        mat = bpy.data.materials.new("MyrmexTerrain")
-        b = _principled(mat, Base_Color=(0.011, 0.011, 0.012, 1.0), Metallic=0.2, Roughness=0.45)
-        nt = mat.node_tree
-        nz = nt.nodes.new("ShaderNodeTexNoise")
-        nz.inputs["Scale"].default_value = 3.0
-        nz.inputs["Detail"].default_value = 8.0
-        bump = nt.nodes.new("ShaderNodeBump")
-        bump.inputs["Strength"].default_value = 0.4
-        nt.links.new(nz.outputs["Fac"], bump.inputs["Height"])
-        nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
-    me.materials.append(mat)
-    ob = bpy.data.objects.new(TERRAIN, me)
-    coll.objects.link(ob)
+    """The Crawler's rough ground is not shown (only the organism, on black): its legs still follow the
+    engine's ground heights; an old terrain object goes, the old floor stays hidden."""
+    _drop(TERRAIN)
+    _hide(bpy.data.objects.get("MyrmexFloor"))
 
 
 def _replace_mesh_object(name: str, verts: int, faces: list, material, coll) -> bpy.types.Object:
@@ -1096,17 +1065,11 @@ def swarm_nodes(cyber: bool = False) -> bpy.types.NodeTree:
 
 
 def dark_studio(scene: bpy.types.Scene) -> None:
-    """Dark environment, one large soft source, two rim lights, glossy black floor (all follow the creature)."""
+    """Black stage: one large soft source and two rim lights (they follow the creature), no floor; the world
+    is what the organism reflects - the camera only ever sees black (black_stage)."""
     world = scene.world or bpy.data.worlds.new("MyrmexCreatureWorld")
     scene.world = world
-    try:
-        world.use_nodes = True
-    except Exception:
-        pass
-    bg = next((n for n in world.node_tree.nodes if n.type == "BACKGROUND"), None)
-    if bg is not None:
-        bg.inputs["Color"].default_value = (0.004, 0.004, 0.005, 1.0)
-        bg.inputs["Strength"].default_value = 1.0
+    studio_world(world)
     coll = bpy.data.collections.get("MyrmexStudio") or bpy.data.collections.new("MyrmexStudio")
     if coll.name not in scene.collection.children:
         scene.collection.children.link(coll)
@@ -1125,20 +1088,105 @@ def dark_studio(scene: bpy.types.Scene) -> None:
     light("Key", (1.5, 2.5, 5.0), (math.radians(28), 0, math.radians(150)), 6.0, 1400)
     light("RimL", (-3.2, 2.2, 2.2), (math.radians(70), 0, math.radians(-125)), 1.2, 900, (0.92, 0.95, 1.0))
     light("RimR", (-2.8, -2.6, 1.8), (math.radians(72), 0, math.radians(-50)), 1.0, 700, (1.0, 0.93, 0.86))
-    me = bpy.data.meshes.new("MyrmexFloor")
-    s = 200.0
-    me.from_pydata([(-s, -s, 0), (s, -s, 0), (s, s, 0), (-s, s, 0)], [], [(0, 1, 2, 3)])
-    floor = bpy.data.objects.new("MyrmexFloor", me)
-    coll.objects.link(floor)
-    fm = bpy.data.materials.new("MyrmexBlackFloor")
-    try:
-        fm.use_nodes = True
-    except Exception:
-        pass
-    fb = next(n for n in fm.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    fb.inputs["Base Color"].default_value = (0.012, 0.012, 0.013, 1)
-    fb.inputs["Roughness"].default_value = 0.22
-    me.materials.append(fm)
+    black_stage(scene)
+
+
+STAGE_HIDDEN = ("MyrmexFloor", TERRAIN, LURE)      # (and every PolyObstacle_*): never shown
+
+
+def _hide(ob) -> None:
+    if ob is not None and not (ob.hide_render and ob.hide_viewport):
+        ob.hide_viewport = ob.hide_render = True
+
+
+def black_stage(scene: bpy.types.Scene | None = None) -> None:
+    """Only the organism, on black: no floor, no terrain, no impact balls, no prey (they still act, unseen);
+    the camera sees black while the world keeps lighting the organism and showing in its reflections."""
+    scene = scene or bpy.context.scene
+    for name in STAGE_HIDDEN:
+        _hide(bpy.data.objects.get(name))
+    for ob in bpy.data.objects:
+        if ob.name.startswith(OBSTACLE):
+            _hide(ob)
+    if scene.world is None:
+        scene.world = bpy.data.worlds.get("MyrmexCreatureWorld") or bpy.data.worlds.new("MyrmexCreatureWorld")
+        studio_world(scene.world)
+    camera_black(scene.world)
+
+
+def camera_black(world: bpy.types.World) -> None:
+    """Camera rays see black; everything else (light, reflections) sees the world as it is.  Idempotent,
+    and a look's own world stays underneath."""
+    nt = compat.world_node_tree(world)
+    if nt is None or "MyrmexCameraBlack" in nt.nodes:
+        return
+    out = next((n for n in nt.nodes if n.type == "OUTPUT_WORLD" and n.is_active_output), None) or \
+        next((n for n in nt.nodes if n.type == "OUTPUT_WORLD"), None) or nt.nodes.new("ShaderNodeOutputWorld")
+    surf = out.inputs["Surface"]
+    src = surf.links[0].from_socket if surf.is_linked else None
+    if src is None:
+        bg = nt.nodes.new("ShaderNodeBackground")
+        bg.inputs["Color"].default_value = (0.004, 0.004, 0.005, 1.0)
+        src = bg.outputs[0]
+    lp = nt.nodes.new("ShaderNodeLightPath")
+    black = nt.nodes.new("ShaderNodeBackground")
+    black.name = black.label = "MyrmexCameraBlack"
+    black.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    black.inputs["Strength"].default_value = 0.0
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    mix.name = "MyrmexCameraBlackMix"
+    nt.links.new(lp.outputs["Is Camera Ray"], mix.inputs[0])
+    nt.links.new(src, mix.inputs[1])
+    nt.links.new(black.outputs[0], mix.inputs[2])
+    nt.links.new(mix.outputs[0], surf)
+    lp.location, black.location, mix.location = (out.location.x - 400, out.location.y + 250), \
+        (out.location.x - 400, out.location.y - 150), (out.location.x - 180, out.location.y)
+
+
+def studio_world(world: bpy.types.World) -> None:
+    """What the organism sees around it (the camera never does): near-black with soft light panels - a large
+    one above, a strip to one side, a faint one behind - so a glossy skin shows its form in reflections."""
+    nt = compat.world_node_tree(world)
+    for nd in list(nt.nodes):
+        nt.nodes.remove(nd)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    nt.links.new(tc.outputs["Generated"], sep.inputs[0])
+
+    def panel(sock, lo, hi, gain, negate=False):
+        src = sock
+        if negate:
+            neg = nt.nodes.new("ShaderNodeMath")
+            neg.operation = "MULTIPLY"
+            nt.links.new(sock, neg.inputs[0])
+            neg.inputs[1].default_value = -1.0
+            src = neg.outputs[0]
+        mr = nt.nodes.new("ShaderNodeMapRange")
+        mr.interpolation_type = "SMOOTHSTEP"
+        mr.clamp = True
+        nt.links.new(src, mr.inputs["Value"])
+        mr.inputs["From Min"].default_value, mr.inputs["From Max"].default_value = lo, hi
+        mr.inputs["To Min"].default_value, mr.inputs["To Max"].default_value = 0.0, gain
+        return mr.outputs["Result"]
+    add1 = nt.nodes.new("ShaderNodeMath")
+    add1.operation = "ADD"
+    nt.links.new(panel(sep.outputs["Z"], 0.45, 0.95, 1.0), add1.inputs[0])
+    nt.links.new(panel(sep.outputs["X"], 0.55, 0.98, 0.5), add1.inputs[1])
+    add2 = nt.nodes.new("ShaderNodeMath")
+    add2.operation = "ADD"
+    nt.links.new(add1.outputs[0], add2.inputs[0])
+    nt.links.new(panel(sep.outputs["Y"], 0.6, 0.98, 0.3, negate=True), add2.inputs[1])
+    base = nt.nodes.new("ShaderNodeMath")
+    base.operation = "ADD"
+    nt.links.new(add2.outputs[0], base.inputs[0])
+    base.inputs[1].default_value = 0.004
+    bg = nt.nodes.new("ShaderNodeBackground")
+    bg.name = "MyrmexStudioWorld"
+    nt.links.new(base.outputs[0], bg.inputs["Strength"])
+    bg.inputs["Color"].default_value = (0.9, 0.93, 1.0, 1.0)
+    out = nt.nodes.new("ShaderNodeOutputWorld")
+    nt.links.new(bg.outputs[0], out.inputs["Surface"])
+    out.location = (600, 0)
 
 
 class CreatureView:
@@ -1258,6 +1306,7 @@ class CreatureView:
                 o = bpy.data.objects.new(name, me)
                 self.coll.objects.link(o)
             o.scale = (0.0, 0.0, 0.0)
+            _hide(o)                                       # impacts act, the balls are not seen
             self.obstacles.append(o)
 
     def _fins(self, n: int) -> bpy.types.Object:
@@ -1360,6 +1409,7 @@ class CreatureView:
             lure = bpy.data.objects.new(LURE, me)
             self.coll.objects.link(lure)
         lure.scale = (0.0, 0.0, 0.0)
+        _hide(lure)                                        # the prey acts, unseen
         self.lure = lure
 
     def make_hive(self, n_particles: int, style: int | None = None) -> None:
@@ -1525,5 +1575,6 @@ def setup_creature_scene(scene: bpy.types.Scene | None = None, variant: str = "n
     if not (keep_look and bpy.data.objects.get("MyrmexLightRig")):
         dark_studio(scene)
     if base in ("polyalloy", "colony", "hive"):
-        crawler_terrain(style == 7, view.coll)             # (the studio floor comes back for the others)
+        crawler_terrain(style == 7, view.coll)
+    black_stage(scene)                                     # only the organism, on black - always
     return view

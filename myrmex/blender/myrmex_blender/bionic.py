@@ -21,7 +21,7 @@ import numpy as np
 
 from myrmex.creature.bionic import meshes
 
-from .creature import OBSTACLE, _attr, _math, _principled, _simple_material, _value
+from .creature import OBSTACLE, _attr, _hide, _math, _principled, _simple_material, _value
 
 KIND_OF = {"tensor": 0, "fold": 1, "arbor": 2, "ferro": 3, "truss": 4}
 OBJECTS = {0: {"struts": "BionicStruts", "cables": "BionicCables", "hubs": "BionicHubs"},
@@ -379,6 +379,7 @@ class BionicView:
                 o = bpy.data.objects.new(name, me)
                 self.coll.objects.link(o)
             o.scale = (0.0, 0.0, 0.0)
+            _hide(o)                                       # impacts act, the balls are not seen
             self.obstacles.append(o)
 
     def apply_arrays(self, kind: int, pos, radius, members, extra, obstacles, t: float, glow: float) -> None:

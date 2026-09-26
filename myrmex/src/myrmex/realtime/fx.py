@@ -1,20 +1,21 @@
-"""Myrmex FX: the picture effects Blender draws itself (no TouchDesigner needed).
+"""Myrmex FX: the effects Blender draws itself (no TouchDesigner needed) - only on the organism, in its own tones.
 
 The engine streams, with every frame it sends to Blender, one small block of floats (``CHANNELS``) and
 records the same block into takes, so a rendered take shows exactly what was seen live:
 
-* the drives - the music (beat, kick, snare, energy ...), the organism (speed, size, glow, impacts, shape
-  changes) and the camera (cuts), as computed by :mod:`myrmex.realtime.touch` (``DRIVES``);
+* the drives - the music (beat, kick, energy ...), the organism (speed, size, glow, impacts, shape changes)
+  and the camera (cuts), as computed by :mod:`myrmex.realtime.touch` (``DRIVES``);
 * the rack - the effect amounts set in the app (a preset, sliders, MIDI knobs ``fx_<name>``) (``RACK``);
 * the output: effects on / off, horizontal 1920x1080 or vertical 1080x1920, live preview scale.
 
-What Blender makes of it (blender/myrmex_blender/fx*.py):
+What Blender makes of it (blender/myrmex_blender/fx*.py), always on a black stage:
 
-* afterimages - the "Sandevistan" look: copies of the organism left behind as it moves, in shifting neon
-  colours, fading and breaking up; dense copies become a continuous echo smear;
-* light ribbons trailing from its extremities; screen-space light trails (feedback of what glows);
-* bloom, chromatic aberration, glitch, anime impact frames, speed lines, shockwaves, grain, vignette,
-  scanlines and a grade (exposure, contrast, saturation, hue drift).
+* afterimages - copies of the organism left behind as it moves, made of its *own* materials, fading and
+  dissolving; dense copies become a continuous echo of the motion;
+* light traces from its extremities, in its own accent colour (its glow, its light lines, its cables);
+* motion echo (what the organism is leaves a fading trace on screen) and a soft glow of its highlights;
+* exposure / contrast / saturation that never lift the black.
+Nothing moves, tears, tints or dirties the frame itself.
 """
 from __future__ import annotations
 
@@ -26,65 +27,35 @@ import numpy as np
 DRIVES = ("beat", "phase", "bpm", "playing", "energy", "bass", "high", "flux", "kick", "snare", "hats", "speed",
           "size", "glow", "arousal", "tension", "impact", "morph", "event", "cut", "shot", "fx_flash", "fx_shake",
           "fx_glitch", "fx_chroma", "fx_bloom", "fx_hue", "fx_strobe")
-RACK = ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons", "trails", "bloom", "chroma", "glitch",
-        "impact_frames", "speed_lines", "shock", "grain", "vignette", "scanlines", "react", "exposure", "contrast",
-        "saturation", "hue")
+RACK = ("ghosts", "ghost_life", "ghost_density", "ribbons", "trails", "bloom", "react", "exposure", "contrast",
+        "saturation")
 STATE = ("on", "vertical", "preview")
 CHANNELS = DRIVES + tuple("r_" + k for k in RACK) + STATE
 
 LABELS = {"ghosts": "Afterimages", "ghost_life": "Afterimage life", "ghost_density": "Afterimage density (echo)",
-          "palette": "Afterimage colours", "ribbons": "Light ribbons", "trails": "Light trails (feedback)",
-          "bloom": "Bloom", "chroma": "Chromatic aberration", "glitch": "Glitch",
-          "impact_frames": "Impact frames (anime)", "speed_lines": "Speed lines", "shock": "Shockwaves",
-          "grain": "Grain", "vignette": "Vignette", "scanlines": "Scanlines", "react": "Music moves the effects",
-          "exposure": "Exposure", "contrast": "Contrast", "saturation": "Saturation", "hue": "Colour drift"}
-PALETTES = ("Sandevistan", "Neon", "Ice", "Blood", "Gold", "Toxic")
+          "ribbons": "Light traces", "trails": "Motion echo", "bloom": "Glow", "react": "Music moves the effects",
+          "exposure": "Exposure", "contrast": "Contrast", "saturation": "Saturation"}
 
-DEFAULT_RACK = {"ghosts": 0.75, "ghost_life": 0.45, "ghost_density": 0.35, "palette": 0.0, "ribbons": 0.3,
-                "trails": 0.3, "bloom": 0.6, "chroma": 0.3, "glitch": 0.15, "impact_frames": 0.35,
-                "speed_lines": 0.35, "shock": 0.45, "grain": 0.2, "vignette": 0.4, "scanlines": 0.08, "react": 0.8,
-                "exposure": 0.5, "contrast": 0.5, "saturation": 0.5, "hue": 0.0}
-
-
-def _palette(name: str) -> float:
-    return PALETTES.index(name) / (len(PALETTES) - 1)
-
+DEFAULT_RACK = {"ghosts": 0.7, "ghost_life": 0.45, "ghost_density": 0.35, "ribbons": 0.0, "trails": 0.25,
+                "bloom": 0.25, "react": 0.5, "exposure": 0.5, "contrast": 0.5, "saturation": 0.5}
 
 PRESETS = {
-    # Cyberpunk: Edgerunners - the fast one leaves a string of neon copies of itself behind.
-    "Sandevistan": {"ghosts": 0.85, "ghost_life": 0.5, "ghost_density": 0.4, "palette": _palette("Sandevistan"),
-                    "ribbons": 0.25, "trails": 0.25, "bloom": 0.7, "chroma": 0.35, "glitch": 0.15,
-                    "impact_frames": 0.3, "speed_lines": 0.3, "shock": 0.4, "grain": 0.2, "vignette": 0.4,
-                    "scanlines": 0.1, "saturation": 0.6, "hue": 0.0},
-    # Dense copies: a continuous smear of the motion.
-    "Echo": {"ghosts": 0.7, "ghost_life": 0.3, "ghost_density": 0.95, "palette": _palette("Ice"), "ribbons": 0.0,
-             "trails": 0.5, "bloom": 0.6, "chroma": 0.2, "glitch": 0.0, "impact_frames": 0.0, "speed_lines": 0.1,
-             "shock": 0.2, "grain": 0.15, "vignette": 0.4, "scanlines": 0.0, "saturation": 0.45, "hue": 0.0},
-    # Manga: inverted impact frames, focus lines, shockwaves on every hit.
-    "Anime Impact": {"ghosts": 0.5, "ghost_life": 0.35, "ghost_density": 0.3, "palette": _palette("Blood"),
-                     "ribbons": 0.2, "trails": 0.15, "bloom": 0.55, "chroma": 0.4, "glitch": 0.2,
-                     "impact_frames": 1.0, "speed_lines": 0.85, "shock": 0.8, "grain": 0.3, "vignette": 0.5,
-                     "scanlines": 0.0, "contrast": 0.65, "saturation": 0.5, "hue": 0.0},
-    # Light writing: ribbons from the extremities, glowing trails.
-    "Neon Ribbons": {"ghosts": 0.3, "ghost_life": 0.4, "ghost_density": 0.3, "palette": _palette("Neon"),
-                     "ribbons": 0.9, "trails": 0.65, "bloom": 0.9, "chroma": 0.3, "glitch": 0.05,
-                     "impact_frames": 0.1, "speed_lines": 0.15, "shock": 0.4, "grain": 0.2, "vignette": 0.45,
-                     "scanlines": 0.05, "saturation": 0.65, "hue": 0.25},
-    "Glitch": {"ghosts": 0.45, "ghost_life": 0.25, "ghost_density": 0.5, "palette": _palette("Toxic"),
-               "ribbons": 0.0, "trails": 0.2, "bloom": 0.5, "chroma": 0.7, "glitch": 0.9, "impact_frames": 0.5,
-               "speed_lines": 0.2, "shock": 0.6, "grain": 0.45, "vignette": 0.45, "scanlines": 0.6,
-               "saturation": 0.45, "hue": 0.1},
-    "Dream": {"ghosts": 0.6, "ghost_life": 0.95, "ghost_density": 0.6, "palette": _palette("Gold"), "ribbons": 0.4,
-              "trails": 0.85, "bloom": 0.95, "chroma": 0.2, "glitch": 0.0, "impact_frames": 0.0,
-              "speed_lines": 0.0, "shock": 0.3, "grain": 0.2, "vignette": 0.5, "scanlines": 0.0,
-              "saturation": 0.7, "hue": 0.45},
-    "Clean": {"ghosts": 0.0, "ghost_life": 0.45, "ghost_density": 0.35, "palette": 0.0, "ribbons": 0.0,
-              "trails": 0.0, "bloom": 0.45, "chroma": 0.1, "glitch": 0.0, "impact_frames": 0.0, "speed_lines": 0.0,
-              "shock": 0.15, "grain": 0.15, "vignette": 0.35, "scanlines": 0.0, "saturation": 0.5, "hue": 0.0},
+    # the organism leaves copies of itself behind as it moves - made of what it is made of
+    "Afterimage": {"ghosts": 0.75, "ghost_life": 0.45, "ghost_density": 0.35, "ribbons": 0.0, "trails": 0.2,
+                   "bloom": 0.25},
+    # dense copies: one continuous echo of the motion
+    "Echo": {"ghosts": 0.65, "ghost_life": 0.3, "ghost_density": 0.95, "ribbons": 0.0, "trails": 0.4, "bloom": 0.2},
+    # long copies dissolving slowly, a deep motion echo
+    "Phantom": {"ghosts": 0.6, "ghost_life": 0.95, "ghost_density": 0.55, "ribbons": 0.0, "trails": 0.55,
+                "bloom": 0.3},
+    # thin traces of light from its extremities, in its own accent colour, a few copies
+    "Trace": {"ghosts": 0.35, "ghost_life": 0.4, "ghost_density": 0.3, "ribbons": 0.7, "trails": 0.3, "bloom": 0.3},
+    # the organism alone
+    "Clean": {"ghosts": 0.0, "ghost_life": 0.45, "ghost_density": 0.35, "ribbons": 0.0, "trails": 0.0, "bloom": 0.15},
 }
 PRESET_NAMES = tuple(PRESETS)
 FORMATS = {False: (1920, 1080), True: (1080, 1920)}
-DEFAULTS = {"enabled": True, "preset": "Sandevistan", "rack": dict(DEFAULT_RACK), "vertical": False, "preview": 1.0}
+DEFAULTS = {"enabled": True, "preset": "Afterimage", "rack": dict(DEFAULT_RACK), "vertical": False, "preview": 1.0}
 TRAILER = b"MFX1"
 _TAIL = struct.Struct("<H4s")
 
@@ -103,7 +74,7 @@ class FxRack:
     """The app's effect settings + MIDI knobs -> the per-frame block for Blender."""
 
     def __init__(self, cfg: dict | None = None):
-        self.cfg = {"enabled": True, "preset": "Sandevistan", "rack": rack_from_preset("Sandevistan"),
+        self.cfg = {"enabled": True, "preset": "Afterimage", "rack": rack_from_preset("Afterimage"),
                     "vertical": False, "preview": 1.0}
         self.configure(**(cfg or {}))
         from .touch import CHANNELS as TD
@@ -169,6 +140,6 @@ def as_dict(values, names=CHANNELS) -> dict:
     return {k: float(x) for k, x in zip(names, values) if math.isfinite(float(x))}
 
 
-__all__ = ["FxRack", "CHANNELS", "DRIVES", "RACK", "STATE", "LABELS", "PALETTES", "PRESETS", "PRESET_NAMES",
+__all__ = ["FxRack", "CHANNELS", "DRIVES", "RACK", "STATE", "LABELS", "PRESETS", "PRESET_NAMES",
            "DEFAULT_RACK", "DEFAULTS", "FORMATS", "rack_from_preset", "size_of", "trailer", "decode_trailer",
            "as_dict"]

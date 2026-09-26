@@ -1,9 +1,10 @@
-"""Light ribbons: glowing strips trailing from the organism's extremities (slash arcs, light writing).
+"""Light traces: thin strips of light trailing from the organism's extremities, in its own accent colour.
 
 A few of the organism's nodes are followed (the ones farthest out when the organism is first seen, spread
 over the body); their recent path becomes a strip facing the camera, widest at the node and thinning /
-fading along its length, one colour per ribbon from the afterimage palette.  One mesh object, fixed
-topology: every frame only its vertices move, so it is cheap live and exact in renders.
+fading along its length.  The colour is the organism's own (its light lines, its cables, its glints - see
+fx_ghosts.accent), never a palette.  One mesh object, fixed topology: every frame only its vertices move,
+so it is cheap live and exact in renders.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import bpy
 import numpy as np
 
 from . import compat
-from .fx_ghosts import _m, _n, _transparent, fx_collection, palette
+from .fx_ghosts import _m, _n, _transparent, accent, fx_collection, sources
 
 NAME = "MyrmexRibbons"
 MAT = "MyrmexRibbon"
@@ -151,11 +152,12 @@ class Ribbons:
                     bpy.data.meshes.remove(old)
             self.k = -1
         me = ob.data
-        pal = palette(rack.get("palette", 0.0))
-        key = (kk, tuple(pal))
-        if self.k != key:                                      # colours only when the palette changes
-            cols = np.array([(*pal[r % len(pal)], 1.0) for r in range(kk)], np.float32)
-            me.attributes["col"].data.foreach_set("color", np.repeat(cols, M * 2, axis=0).ravel())
+        srcs = sources(scene)
+        key = (kk, tuple(sorted(o.name for o in srcs)))
+        if self.k != key:                                      # the organism's colour (again when it changes)
+            c = accent(srcs)
+            cols = np.tile(np.array([(*c, 1.0)], np.float32), (kk * M * 2, 1))
+            me.attributes["col"].data.foreach_set("color", cols.ravel())
             self.k = key
         # strips facing the camera
         tang = np.empty_like(H)
@@ -167,7 +169,7 @@ class Ribbons:
         ln = np.linalg.norm(side, axis=2, keepdims=True)
         side = np.where(ln > 1e-9, side / np.maximum(ln, 1e-9), 0.0)
         moving = np.linalg.norm(tang, axis=2, keepdims=True) > 1e-4
-        w = max(float(size), 0.2) * (0.02 + 0.06 * amt) * (1.0 - np.linspace(0.0, 1.0, M)) ** 0.6
+        w = max(float(size), 0.2) * (0.008 + 0.022 * amt) * (1.0 - np.linspace(0.0, 1.0, M)) ** 0.6
         half = side * (w[:, None, None] * 0.5) * moving
         V = np.empty((kk, M, 2, 3))
         V[:, :, 0] = (H - half).transpose(1, 0, 2)
@@ -176,7 +178,7 @@ class Ribbons:
         me.update()
         nt = ob.active_material.node_tree if ob.active_material is not None else None
         if nt is not None and "MyrmexRibbonGain" in nt.nodes:
-            nt.nodes["MyrmexRibbonGain"].outputs[0].default_value = 1.0 + 5.0 * amt
+            nt.nodes["MyrmexRibbonGain"].outputs[0].default_value = 0.6 + 2.4 * amt
 
 
 def drop() -> None:

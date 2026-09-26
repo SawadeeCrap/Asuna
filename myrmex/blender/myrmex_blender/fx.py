@@ -35,8 +35,6 @@ S: dict = {
     "t": 0.0,
     "org": {"com": np.zeros(3), "size": 0.8, "pos": None, "radius": None},
     "ghosts": None, "ribbons": None,
-    "pc": None, "pc_t": None, "motion": (0.0, 0.0),
-    "shock_t": -1e9, "shock_c": (0.5, 0.5), "last_impact": 0.0,
     "post_by_frame": None,         # take renders: the picture parameters of every frame
     "error": "",
 }
@@ -130,12 +128,10 @@ def active() -> bool:
 
 
 def picture_on(r: dict | None = None) -> bool:
-    """Any effect of the picture (the GPU passes) above zero."""
+    """Any effect of the picture (the GPU passes: motion echo, glow, colour) away from neutral."""
     r = r or rack()
-    return any(r.get(k, 0.0) > 0.01 for k in ("trails", "bloom", "chroma", "glitch", "impact_frames", "speed_lines",
-                                               "shock", "grain", "vignette", "scanlines")) or \
-        abs(r.get("exposure", 0.5) - 0.5) > 0.01 or abs(r.get("contrast", 0.5) - 0.5) > 0.01 or \
-        abs(r.get("saturation", 0.5) - 0.5) > 0.01 or r.get("hue", 0.0) > 0.01
+    return r.get("trails", 0.0) > 0.01 or r.get("bloom", 0.0) > 0.01 or \
+        any(abs(r.get(k, 0.5) - 0.5) > 0.01 for k in ("exposure", "contrast", "saturation"))
 
 
 def apply_format(scene, vertical: bool) -> None:
@@ -165,24 +161,33 @@ def _sync_monitor(views: bool = False) -> None:
 
 
 def warmup(scene=None) -> None:
-    """A speck carrying the afterimage and ribbon materials: the 3D view compiles them in the background
-    before the first copy appears (an offscreen picture would compile them on the spot, stopping Blender)."""
-    from .fx_ghosts import fx_collection, ghost_material
+    """A speck carrying the ghost versions of the organism's materials and the trace material: the 3D view
+    compiles them in the background before the first copy appears (an offscreen picture would compile
+    them on the spot, stopping Blender)."""
+    from .fx_ghosts import fx_collection, ghost_materials_for, sources
     from .fx_ribbons import ribbon_material
     scene = scene or bpy.context.scene
+    mats = ghost_materials_for(sources(scene)) + [ribbon_material()]
     ob = bpy.data.objects.get(WARMUP)
-    if ob is None:
-        me = bpy.data.meshes.new(WARMUP)
-        me.from_pydata([(0.0, 0.0, 0.0), (0.001, 0.0, 0.0), (0.0, 0.001, 0.0), (0.0, 0.0, 0.001)], [],
-                       [(0, 1, 2), (0, 1, 3)])
-        me.materials.append(ghost_material())
-        me.materials.append(ribbon_material())
-        me.polygons[1].material_index = 1
-        ob = bpy.data.objects.new(WARMUP, me)
-        fx_collection(scene).objects.link(ob)
-        ob.hide_render = True
-        ob.visible_shadow = False
-        ob["myrmex_birth"] = -1e9                          # (a copy long gone: nothing shows)
+    if ob is not None and ob.type == "MESH" and list(ob.data.materials) == mats:
+        return
+    if ob is not None:
+        me = ob.data
+        bpy.data.objects.remove(ob, do_unlink=True)
+        if me is not None and me.users == 0:
+            bpy.data.meshes.remove(me)
+    me = bpy.data.meshes.new(WARMUP)
+    k = len(mats)
+    verts = [(0.001 * i, 0.0, 0.0) for i in range(k + 2)] + [(0.0, 0.001, 0.0)]
+    me.from_pydata(verts, [], [(i, i + 1, k + 2) for i in range(k)])
+    for m in mats:
+        me.materials.append(m)
+    me.polygons.foreach_set("material_index", list(range(k)))
+    ob = bpy.data.objects.new(WARMUP, me)
+    fx_collection(scene).objects.link(ob)
+    ob.hide_render = True
+    ob.visible_shadow = False
+    ob["myrmex_birth"] = -1e9                              # (a copy long gone: nothing shows)
 
 
 def _parts():
@@ -207,7 +212,6 @@ def reset(remove: bool = False) -> None:
         pass
     if remove:
         S["ghosts"] = S["ribbons"] = None
-    S["pc"], S["pc_t"] = None, None
     try:
         from . import fx_post
         pipe = fx_post._M.get("pipe")
@@ -360,71 +364,23 @@ def _meta_from_take(d: dict, f: int) -> None:
 
 
 # ---------------------------------------------------------------------- the picture effects' numbers
-def _smooth(e0: float, e1: float, x: float) -> float:
-    u = min(1.0, max(0.0, (x - e0) / (e1 - e0)))
-    return u * u * (3.0 - 2.0 * u)
-
-
-def _project(scene, cam, co) -> tuple[float, float, float]:
-    from bpy_extras.object_utils import world_to_camera_view
-    from mathutils import Vector
-    p = world_to_camera_view(scene, cam, Vector(tuple(float(x) for x in co)))
-    return float(p.x), float(p.y), float(p.z)
-
-
 def post_params(scene, w: int, h: int, cam=None) -> np.ndarray:
-    """The FxParams block (fx_post.UBO) for this frame."""
+    """The FxParams block (fx_post.UBO) for this frame: glow, motion echo, colour - nothing else."""
     from .fx_post import N_PARAMS
-    r, d, org = rack(), drives(), S["org"]
-    t = S["t"]
-    cam = cam or scene.camera
-    cx = cy = 0.5
-    ss, vis = 0.15, 0.0
-    if cam is not None:
-        try:
-            cx, cy, z = _project(scene, cam, org["com"])
-            vis = 1.0 if (z > 0 and -0.1 <= cx <= 1.1 and -0.1 <= cy <= 1.1) else 0.0
-            up = np.array(cam.matrix_world.to_3x3().col[1])
-            _, cy2, _ = _project(scene, cam, np.asarray(org["com"], float) + up * org["size"])
-            ss = min(1.5, abs(cy2 - cy))
-        except (ValueError, ZeroDivisionError):
-            pass
-    mx = my = 0.0
-    if S["pc"] is not None and S["pc_t"] is not None and 0.0 < t - S["pc_t"] < 0.5:
-        mx, my = (cx - S["pc"][0]) / (t - S["pc_t"]), (cy - S["pc"][1]) / (t - S["pc_t"])
-    S["pc"], S["pc_t"] = (cx, cy), t
-    react = r.get("react", 0.8)
-    kick, impact = d.get("kick", 0.0), d.get("impact", 0.0)
-    morph, cut, energy = d.get("morph", 0.0), d.get("cut", 0.0), d.get("energy", 0.0)
-    if impact - S["last_impact"] > 0.25:                      # a hit: a shockwave from where the organism is
-        S["shock_t"], S["shock_c"] = t, (cx, cy)
-    S["last_impact"] = impact
-    age = t - S["shock_t"]
-    shock = r.get("shock", 0.0) * max(0.0, 1.0 - age / 0.8) ** 2 if age >= 0 else 0.0
-    speed_n = min(1.0, d.get("speed", 0.0) / max(org["size"], 0.3) / 4.0)
-    trails = r.get("trails", 0.0)
-    chroma = r.get("chroma", 0.0)
-    p = [t, w / max(h, 1), float(S["frame"]), 0.0,
-         cx, cy, ss, vis,
-         mx, my, speed_n, 0.0,
-         kick, impact, morph, cut,
-         0.78 - 0.33 * r.get("bloom", 0.0), 0.22, 1.6 * r.get("bloom", 0.0) * (1.0 + react * (0.6 * kick + 0.3 * energy)),
-         react * kick * 0.12,
-         (0.8 + 0.17 * trails) if trails > 0.01 else 0.0, (0.002 + 0.012 * trails) * (0.5 + react * energy), 0.0,
-         0.004 + 0.02 * r.get("hue", 0.0),
-         (1.0 + 9.0 * chroma) * (1.0 + react * (1.5 * kick + 1.2 * impact)) if chroma > 0.01 else 0.0,
-         r.get("glitch", 0.0) * min(1.0, 0.05 + 1.2 * d.get("fx_glitch", 0.0)), shock, max(0.0, age) * (0.9 + 0.6 * r.get("shock", 0.0)),
-         r.get("impact_frames", 0.0) * _smooth(0.72, 0.92, impact),
-         r.get("speed_lines", 0.0) * max(speed_n ** 1.5, 0.9 * _smooth(0.5, 0.9, impact)) * (1.0 if vis else 0.0),
-         r.get("scanlines", 0.0), r.get("grain", 0.0),
-         r.get("vignette", 0.0), trails, react * d.get("fx_flash", 0.0) * 0.35, react * d.get("fx_shake", 0.0) * 0.006,
-         (r.get("exposure", 0.5) - 0.5) * 2.0, 0.5 + r.get("contrast", 0.5), 2.0 * r.get("saturation", 0.5),
-         r.get("hue", 0.0) * d.get("fx_hue", 0.0),
-         S["shock_c"][0], S["shock_c"][1], 0.0, react * d.get("fx_strobe", 0.0) * 0.4,
-         float(w), float(h), 1.0 / max(w, 1), 1.0 / max(h, 1)]
+    r, d = rack(), drives()
+    react = float(r.get("react", 0.5))
+    kick, energy = float(d.get("kick", 0.0)), float(d.get("energy", 0.0))
+    glow = float(r.get("bloom", 0.0))
+    echo = float(r.get("trails", 0.0))
     out = np.zeros(N_PARAMS, np.float32)
-    out[:len(p)] = np.nan_to_num(np.asarray(p, np.float32))
-    return out
+    out[0:4] = (S["t"], w / max(h, 1), float(S["frame"]), 0.0)                       # frame
+    out[16:20] = (0.82, 0.12, 0.9 * glow * (1.0 + react * (0.35 * kick + 0.15 * energy)), 0.0)   # bloom
+    out[20:24] = ((0.72 + 0.24 * echo) if echo > 0.01 else 0.0, 0.0, 0.0, 0.0)     # trail: decay
+    out[32:36] = (0.0, min(1.0, 0.9 * echo), 0.0, 0.0)                               # look3: echo mix
+    out[36:40] = ((float(r.get("exposure", 0.5)) - 0.5) * 2.0,                        # grade
+                  2.0 ** ((float(r.get("contrast", 0.5)) - 0.5) * 1.4), 2.0 * float(r.get("saturation", 0.5)), 0.0)
+    out[44:48] = (float(w), float(h), 1.0 / max(w, 1), 1.0 / max(h, 1))              # size
+    return np.nan_to_num(out)
 
 
 def status() -> dict:

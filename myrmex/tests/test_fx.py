@@ -36,18 +36,20 @@ def test_channels_rack_and_presets():
         assert set(p) <= set(RACK), name
         r = rack_from_preset(name)
         assert set(r) == set(RACK) and all(0.0 <= x <= 1.0 for x in r.values())
-    assert rack_from_preset("Sandevistan")["ghosts"] > 0.5 and rack_from_preset("Clean")["ghosts"] == 0.0
+    assert rack_from_preset("Afterimage")["ghosts"] > 0.5 and rack_from_preset("Clean")["ghosts"] == 0.0
+    assert set(RACK) == {"ghosts", "ghost_life", "ghost_density", "ribbons", "trails", "bloom", "react", "exposure",
+                         "contrast", "saturation"}                   # nothing that moves, tears or tints the frame
     assert rack_from_preset("Echo")["ghost_density"] > 0.9                    # dense copies: a smear
     assert size_of(False) == (1920, 1080) and size_of(True) == (1080, 1920)
 
 
 def test_rack_frame_knobs_and_trailer():
-    fx = FxRack({"preset": "Anime Impact", "vertical": True, "preview": 0.75})
+    fx = FxRack({"preset": "Trace", "vertical": True, "preview": 0.75})
     drives = np.arange(len(TD), dtype=float)
     v = as_dict(fx.frame(drives, {"fx_ghosts": 0.12}))
     assert v["kick"] == TD.index("kick") and v["speed"] == TD.index("speed")      # the TD drives, by name
     assert v["r_ghosts"] == pytest.approx(0.12)                                   # a MIDI knob wins
-    assert v["r_impact_frames"] == pytest.approx(1.0) and v["vertical"] == 1.0 and v["preview"] == 0.75
+    assert v["r_ribbons"] == pytest.approx(PRESETS["Trace"]["ribbons"]) and v["vertical"] == 1.0 and v["preview"] == 0.75
     fx.configure(rack={"trails": 3.0, "nonsense": 1.0})
     assert fx.cfg["rack"]["trails"] == 1.0 and "nonsense" not in fx.cfg["rack"]
     fx.configure(enabled=False)
@@ -99,12 +101,14 @@ def test_app_settings_to_engine_and_blender():
     from myrmex.app.settings import AppSettings
     s = AppSettings()
     d = C.fx_settings(s)
-    assert d["enabled"] and d["preset"] == "Sandevistan" and set(d["rack"]) == set(RACK)
-    s.fx = {"preset": "Glitch", "rack": {"glitch": 0.3}, "vertical": True}
+    assert d["enabled"] and d["preset"] == "Afterimage" and set(d["rack"]) == set(RACK)
+    s.fx = {"preset": "Sandevistan", "rack": {"chroma": 0.9}}                 # an old preset: back to Afterimage
+    assert C.fx_settings(s)["preset"] == "Afterimage" and "chroma" not in C.fx_settings(s)["rack"]
+    s.fx = {"preset": "Phantom", "rack": {"trails": 0.3}, "vertical": True}
     e = C.fx_engine(s)
-    assert e["rack"]["glitch"] == 0.3 and e["rack"]["chroma"] == PRESETS["Glitch"]["chroma"] and e["vertical"]
+    assert e["rack"]["trails"] == 0.3 and e["rack"]["ghost_life"] == PRESETS["Phantom"]["ghost_life"] and e["vertical"]
     b = C.fx_blender(s)
-    assert b["on"] and b["replay"] and b["rack"]["glitch"] == 0.3
+    assert b["on"] and b["replay"] and b["monitor"] and b["rack"]["trails"] == 0.3
     import json
     assert json.loads(C.fx_env(s)["MYRMEX_FX"])["vertical"] is True
     pytest.importorskip("PySide6")
@@ -126,10 +130,10 @@ def test_fx_page(tmp_path, monkeypatch):
     s.start_engine_on_launch = s.open_blender_on_start = False
     w = W.MainWindow(s)
     assert "FX" in w.page_index
-    w.cmb_fx_preset.setCurrentIndex(w.cmb_fx_preset.findData("Anime Impact"))
+    w.cmb_fx_preset.setCurrentIndex(w.cmb_fx_preset.findData("Trace"))
     app.processEvents()
-    assert w.s.fx["preset"] == "Anime Impact" and w.s.fx["rack"]["impact_frames"] == 1.0
-    assert w.fx_sliders["speed_lines"].value() == int(1000 * PRESETS["Anime Impact"]["speed_lines"])
+    assert w.s.fx["preset"] == "Trace" and w.s.fx["rack"]["ribbons"] == PRESETS["Trace"]["ribbons"]
+    assert w.fx_sliders["ribbons"].value() == int(1000 * PRESETS["Trace"]["ribbons"])
     w.fx_sliders["ghosts"].setValue(100)                          # a moved slider: your own mix
     assert w.s.fx["rack"]["ghosts"] == pytest.approx(0.1) and w.s.fx["preset"] == ""
     from myrmex.app import fx_tab
@@ -154,7 +158,7 @@ def blender():
         lst.clear()
 
 
-def _stream(variant, preset="Sandevistan", seconds=4.0):
+def _stream(variant, preset="Afterimage", seconds=4.0):
     sink = Sink()
     ses = LiveSession(LiveConfig(backend=variant, clock="internal", out=[], fx={"preset": preset}),
                       start_inputs=False, sink=sink, now=0.0)
@@ -168,7 +172,7 @@ def _stream(variant, preset="Sandevistan", seconds=4.0):
 def test_blender_afterimages_and_ribbons_follow_the_stream(blender):
     bpy = blender
     from myrmex_blender import creature, fx, live
-    raw = _stream("spear")
+    raw = _stream("spear", "Trace")
     creature.setup_creature_scene(bpy.context.scene, "spear")
     link = live.LiveLink(None, port=0)
     for data in raw:
@@ -181,9 +185,19 @@ def test_blender_afterimages_and_ribbons_follow_the_stream(blender):
              (o.type == "MESH" and len(o.data.vertices))]
     assert {o.name.split("_", 1)[1] for o in alive} >= {"CreatureBody", "MimeticTendons"}
     assert all(fx.S["t"] - o["myrmex_birth"] <= 2.0 for o in alive)            # only the living copies
-    assert len({tuple(round(c, 2) for c in o.color[:3]) for o in alive}) >= 3     # the colours cycle
+    from myrmex_blender.fx_ghosts import sources
+    own = {m.name for o in sources(bpy.context.scene)
+           for m in (o.data.materials if o.type == "META" else [x.material for x in o.material_slots]) if m}
+    worn = {m.name for o in alive for m in (o.data.materials if o.type == "META" else
+                                            [x.material for x in o.material_slots]) if m}
+    assert worn and all(n.startswith("MyrmexGhost·") for n in worn)            # the organism's own materials,
+    assert {n[len("MyrmexGhost·"):] for n in worn} <= own                     # made ghostly - no colours of their own
     rb = bpy.data.objects.get("MyrmexRibbons")
     assert rb is not None and len(rb.data.vertices) > 0
+    from myrmex_blender.fx_ghosts import accent
+    col = np.empty(4 * len(rb.data.vertices), np.float32)
+    rb.data.attributes["col"].data.foreach_get("color", col)
+    assert np.allclose(col.reshape(-1, 4)[0, :3], accent(sources(bpy.context.scene)), atol=1e-4)   # its own colour
     assert bpy.context.scene.render.resolution_x == 1920                        # the stream said horizontal
     fx.configure({"on": False})
     fx.S["live"] = False
@@ -200,8 +214,8 @@ def test_blender_vertical_format_and_panel(blender):
     assert sc.render.resolution_y == 3840
     fx.apply_format(sc, False)
     assert (sc.render.resolution_x, sc.render.resolution_y) == (1920, 1080)
-    fx.configure({"preset": "Dream", "on": False})
-    assert sc.myrmex_fx.preset == "Dream" and sc.myrmex_fx.ghost_life == pytest.approx(PRESETS["Dream"]["ghost_life"])
+    fx.configure({"preset": "Phantom", "on": False})
+    assert sc.myrmex_fx.preset == "Phantom" and sc.myrmex_fx.ghost_life == pytest.approx(PRESETS["Phantom"]["ghost_life"])
 
 
 def test_blender_gpu_passes(blender):
@@ -227,24 +241,46 @@ def test_blender_gpu_passes(blender):
     fx.S["vals"], fx.S["rack_src"] = {}, "cfg"
     pipe.run(fx.post_params(sc, W, H), src_tex=tex(img))
     out = pipe.read().astype(float) / 255
-    assert out[45, 40, 0] > 0.9 and 0.02 < out[45, 55, 1] < 0.6 and out[5, 150, 1] < 0.02    # disc, halo, dark
-    fx.S["cfg"]["rack"] = rack_from_preset("Anime Impact")
-    fx.S["vals"] = {"impact": 1.0}
+    assert out[45, 40, 0] > 0.9 and out[45, 53, 1] > 0.0                 # the disc and a soft glow round it
+    assert out[5, 150, :3].max() == 0.0 and out[85, 5, :3].max() == 0.0   # black stays pure black
+    fx.S["cfg"]["rack"] = {**rack_from_preset("Clean"), "exposure": 1.0, "contrast": 0.0, "saturation": 1.0}
     pipe.run(fx.post_params(sc, W, H), src_tex=tex(img))
-    inv = pipe.read().astype(float) / 255
-    assert abs(inv[45, 40, 0] - inv[5, 150, 0]) > 0.5                     # a two-tone impact frame
-    fx.S["cfg"]["rack"] = rack_from_preset("Dream")
-    fx.S["vals"] = {}
+    graded = pipe.read().astype(float) / 255
+    assert graded[5, 150, :3].max() == 0.0                                 # colour never lifts the black
+    fx.S["cfg"]["rack"] = rack_from_preset("Phantom")
+    fx.S["vals"] = {"kick": 1.0, "impact": 1.0, "energy": 1.0}             # hits move nothing on the frame
     pipe.reset()
-    for k in range(5):                                                   # the disc moves; its trail stays
+    for k in range(5):                                                   # the disc moves: its echo stays
         a = np.zeros_like(img)
         a[..., 3] = 1.0
         a[(xx - (40 + 20 * k)) ** 2 + (yy - 45) ** 2 < 100, :3] = 1.0
         fx.S["t"] = k / 30
         pipe.run(fx.post_params(sc, W, H), src_tex=tex(a))
     tr = pipe.read().astype(float) / 255
-    assert tr[45, 40, 1] > 0.2 and tr[5, 5, 1] < 0.05
+    assert tr[45, 40, 1] > 0.15 and tr[5, 5, :3].max() == 0.0 and tr[85, 150, :3].max() == 0.0
     pipe.free()
+
+
+def test_blender_black_stage(blender):
+    """Only the organism, on black: no floor, no terrain, no impact balls, no prey; the camera sees black."""
+    bpy = blender
+    from myrmex_blender import creature
+    for variant in ("spear", "crawler", "hive", "ferro"):
+        sc = bpy.context.scene
+        creature.setup_creature_scene(sc, variant)
+        floor = bpy.data.objects.get("MyrmexFloor")
+        assert floor is None or floor.hide_render
+        assert bpy.data.objects.get("CrawlerTerrain") is None
+        for o in bpy.data.objects:
+            if o.name.startswith("PolyObstacle") or o.name == "ColonyPrey":
+                assert o.hide_render and o.hide_viewport, o.name
+        nd = sc.world.node_tree.nodes
+        assert "MyrmexCameraBlack" in nd and "MyrmexCameraBlackMix" in nd
+        mix = nd["MyrmexCameraBlackMix"]
+        assert mix.inputs[0].links[0].from_socket.name == "Is Camera Ray"
+        assert mix.inputs[2].links[0].from_node.name == "MyrmexCameraBlack"
+    creature.black_stage(sc)                                             # idempotent
+    assert sum(1 for n in sc.world.node_tree.nodes if n.name.startswith("MyrmexCameraBlack")) == 2
 
 
 def test_blender_take_playback_leaves_copies(blender, tmp_path):
@@ -252,7 +288,7 @@ def test_blender_take_playback_leaves_copies(blender, tmp_path):
     from myrmex_blender import creature_take, fx
     sink = Sink()
     ses = LiveSession(LiveConfig(backend="swarm", clock="internal", out=[], record=str(tmp_path),
-                                 fx={"preset": "Sandevistan"}), start_inputs=False, sink=sink, now=0.0)
+                                 fx={"preset": "Afterimage"}), start_inputs=False, sink=sink, now=0.0)
     now = 0.0
     for _ in range(120 * 3):
         now += 1 / 120
@@ -344,7 +380,7 @@ def test_blender_monitor_picture_without_switching_the_view(blender):
     space.shading.type = "RENDERED"
     sc.render.resolution_x, sc.render.resolution_y, sc.render.resolution_percentage = 320, 180, 100
     fx.S["cfg"].update(on=True, preview=1.0)
-    fx.S["cfg"]["rack"] = rack_from_preset("Sandevistan")
+    fx.S["cfg"]["rack"] = rack_from_preset("Afterimage")
     fx.S["vals"], fx.S["rack_src"] = {}, "cfg"
     sc.eevee.taa_samples = 16
     fx_post.limit_samples("monitor", True)

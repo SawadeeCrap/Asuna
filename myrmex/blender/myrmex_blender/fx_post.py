@@ -1,17 +1,16 @@
-"""The picture effects on the GPU (Blender's gpu module) - what TouchDesigner did, inside Blender.
+"""The picture effects on the GPU (Blender's gpu module) - only what the organism itself is, on black.
 
     scene camera --draw_view3d--> src (1920x1080 or 1080x1920, colour managed, EEVEE "Rendered")
-    src --BRIGHT--> 1/2 --BLUR--> 1/4 --BLUR--> 1/8          bloom, two sizes
-    src + trail(prev) --TRAIL--> trail                          light trails: what glows leaves a fading,
-                                                                drifting, hue-shifting streak (feedback)
-    src + bloom + trail --POST--> out                           shake, shockwave, glitch, chromatic aberration,
-                                                                speed lines, impact frame, flash, grade,
-                                                                scanlines, vignette, grain
+    src --BRIGHT--> 1/2 --BLUR--> 1/4 --BLUR--> 1/8          glow of the organism's highlights, two sizes
+    src + echo(prev) --TRAIL--> echo                           motion echo: what the organism is leaves a
+                                                               fading trace where it was (no drift, no hue)
+    src + glow + echo --POST--> out                            exposure / contrast / saturation that keep
+                                                               black black; pure black stays pure black
     out --> the 3D view in camera view (a monitor, letterboxed), Syphon, take renders (fx_render)
 
-Live, the 3D view that looks through the camera ("Rendered") shows ``out`` (see "the monitor" below for how
-it stays light).  Every pass samples with a hand-written bilinear filter (texelFetch), so the result is the
-same on every Blender (4.2 ... 5.x) and on Metal and OpenGL.
+Nothing moves, tears, tints or dirties the frame: the background stays black, the effects stay on the
+organism.  Every pass samples with a hand-written bilinear filter (texelFetch), so the result is the same
+on every Blender (4.2 ... 5.x) and on Metal and OpenGL.
 """
 from __future__ import annotations
 
@@ -39,17 +38,12 @@ struct FxParams {
 };
 """
 # frame   x time (s)  y aspect w/h  z frame counter  w -
-# center  xy the organism on screen (0..1, y up)  z its size on screen (fraction of the height)  w visible
-# motion  xy its screen velocity (uv / s)  z speed 0..1  w -
-# drive   x kick  y impact  z morph  w cut
-# bloom   x threshold  y knee  z amount  w pop (brightness on the kick)
-# trail   x decay (0 = off)  y zoom  z rotate (rad)  w hue drift (turns / frame)
-# look1   x chromatic aberration (px at 1080)  y glitch  z shockwave strength  w shockwave radius
-# look2   x impact frame  y speed lines  z scanlines  w grain
-# look3   x vignette  y trails mix  z flash  w shake
-# grade   x exposure (stops)  y contrast  z saturation  w hue (turns)
-# shock   xy where the hit was  z -  w strobe
+# bloom   x threshold  y knee  z glow amount  w -
+# trail   x echo decay per frame (0 = off)
+# look3   y echo mix
+# grade   x exposure (stops)  y contrast (a curve through 0 and 1: 1 = neutral)  z saturation
 # size    x w  y h  z 1/w  w 1/h
+# (center, motion, drive, look1, look2, shock: kept in the block, unused)
 N_PARAMS = 48
 
 VERT = """
@@ -64,20 +58,7 @@ void main() {
   gl_Position = vec4(pos, 0.0, 1.0);
 }
 """
-COMMON = """
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-vec3 hue_rot(vec3 c, float turns) {
-  float a = turns * 6.28318531;
-  float cs = cos(a);
-  float sn = sin(a);
-  vec3 k = vec3(0.57735027);
-  return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
-}
-"""
+COMMON = ""
 
 
 def _sampler_fn(fn: str, sampler: str) -> str:
@@ -119,85 +100,23 @@ void main() {
 TRAIL = """
 void main() {
   vec3 cur = s_src(uv).rgb;
-  float m = max(cur.r, max(cur.g, cur.b));
-  vec3 feed = cur * smoothstep(P.bloom.x - 0.3, P.bloom.x + 0.05, m);
-  vec2 asp = vec2(P.frame.y, 1.0);
-  vec2 p = (uv - P.center.xy) * asp;
-  float cs = cos(P.trail.z);
-  float sn = sin(P.trail.z);
-  p = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y) / (1.0 + P.trail.y);
-  vec3 prev = s_prev(p / asp + P.center.xy).rgb;
-  prev = max(hue_rot(prev, P.trail.w), vec3(0.0)) * P.trail.x;
+  float l = dot(cur, vec3(0.2126, 0.7152, 0.0722));
+  vec3 feed = cur * smoothstep(0.02, 0.3, l);
+  vec3 prev = s_prev(uv).rgb * P.trail.x;
   FragColor = vec4(max(feed, prev), 1.0);
 }
 """
 POST = """
-vec3 base(vec2 q) {
-  vec3 dry = s_src(q).rgb;
-  vec3 tr = s_tr(q).rgb;
-  vec3 bl = s_b1(q).rgb * 0.7 + s_b2(q).rgb;
-  return dry + max(tr - dry, vec3(0.0)) * P.look3.y + bl * P.bloom.z;
-}
-
 void main() {
-  vec2 asp = vec2(P.frame.y, 1.0);
-  float t = P.frame.x;
-  vec2 q = uv;
-  q += (vec2(hash12(vec2(t * 61.0, 1.7)), hash12(vec2(t * 47.0, 9.1))) - 0.5) * P.look3.w;
-  vec2 d = (q - P.shock.xy) * asp;
-  float dist = length(d);
-  float z = (dist - P.look1.w) * 16.0;
-  float ring = exp(-z * z) * P.look1.z;
-  q -= d / max(dist, 0.0001) / asp * ring * 0.035;
-  float gsh = 0.0;
-  if (P.look1.y > 0.001) {
-    float rows = 6.0 + 40.0 * hash12(vec2(floor(t * 12.0), 3.1));
-    float by = floor(q.y * rows);
-    float seed = floor(t * 15.0);
-    if (hash12(vec2(by, seed)) < P.look1.y * 0.6) {
-      gsh = (hash12(vec2(seed, by)) - 0.5) * P.look1.y * 0.25;
-      q.x += gsh;
-    }
-  }
-  vec2 radial = (q - P.center.xy) * asp;
-  float rl = length(radial);
-  vec2 dir = rl > 0.00001 ? radial / rl : vec2(1.0, 0.0);
-  vec2 off = dir / asp * (P.look1.x / 1080.0) * (0.35 + 1.3 * min(rl, 1.0));
-  vec3 col = vec3(base(q + off + vec2(gsh * 0.3, 0.0)).r, base(q).g, base(q - off - vec2(gsh * 0.3, 0.0)).b);
-  if (P.look2.y > 0.001) {
-    vec2 pc = (uv - P.center.xy) * asp;
-    float r = length(pc);
-    float fa = (atan(pc.y, pc.x) / 6.28318531 + 0.5) * 160.0;
-    float cell = floor(fa);
-    float tick = floor(t * 18.0);
-    float h1 = hash12(vec2(cell, tick));
-    float h2 = hash12(vec2(cell * 1.37, tick + 7.0));
-    float w = abs(fract(fa) - 0.5) * 2.0;
-    float thick = 0.12 + 0.3 * h2;
-    float line = 1.0 - smoothstep(thick * 0.4, thick, w);
-    float r0 = 0.1 + P.center.z * 0.9 + 0.25 * h2;
-    float reach = smoothstep(r0, r0 + 0.12, r);
-    float ml = length(P.motion.xy);
-    float behind = ml > 0.0001 ? 0.3 + 0.7 * max(0.0, dot(-P.motion.xy / ml, pc / max(r, 0.0001))) : 1.0;
-    col += vec3(1.0) * line * reach * step(0.5, h1) * behind * P.look2.y;
-  }
-  if (P.look2.x > 0.001) {
-    float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    float v = smoothstep(0.22, 0.5, l);
-    v = mod(P.frame.z, 2.0) < 1.0 ? 1.0 - v : v;
-    vec3 inkpaper = mix(vec3(0.03, 0.0, 0.01), vec3(1.0, 0.97, 0.93), v);
-    col = mix(col, inkpaper, P.look2.x);
-  }
-  col = col * (1.0 + P.bloom.w + P.shock.w) + vec3(P.look3.z);
+  vec3 dry = s_src(uv).rgb;
+  vec3 echo = s_tr(uv).rgb;
+  vec3 glow = s_b1(uv).rgb * 0.6 + s_b2(uv).rgb * 0.8;
+  vec3 col = dry + max(echo - dry, vec3(0.0)) * P.look3.y + glow * P.bloom.z;
   col *= exp2(P.grade.x);
-  col = (col - 0.5) * P.grade.y + 0.5;
+  col = pow(max(col, vec3(0.0)), vec3(P.grade.y));
   float lg = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = mix(vec3(lg), col, P.grade.z);
-  col = hue_rot(col, P.grade.w);
-  col *= 1.0 - P.look2.z * 0.3 * (0.5 + 0.5 * sin(uv.y * P.size.y * 3.14159265));
-  vec2 v2 = (uv - 0.5) * asp;
-  col *= 1.0 - P.look3.x * dot(v2, v2) / (0.25 * (asp.x * asp.x + 1.0)) * 0.85;
-  col += (hash12(uv * P.size.xy + fract(t * 7.0) * 311.0) - 0.5) * P.look2.w * 0.12;
+  col = max(mix(vec3(lg), col, P.grade.z), vec3(0.0));
+  col = max(col - vec3(0.004), vec3(0.0)) * (1.0 / 0.996);
   FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 """

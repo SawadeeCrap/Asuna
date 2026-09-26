@@ -76,7 +76,7 @@ def main():
                     if area.type == "VIEW_3D":
                         for sp in area.spaces:
                             if sp.type == "VIEW_3D":
-                                sp.shading.type = "MATERIAL"
+                                sp.shading.type = "RENDERED"       # the scene's own world: black
                                 sp.region_3d.view_perspective = "CAMERA"
                                 if fx.active():            # (the FX picture is drawn with this view's overlays)
                                     sp.overlay.show_overlays = False

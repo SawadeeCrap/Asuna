@@ -25,7 +25,9 @@ Simulation and presentation are separate: the engine streams node positions / ra
 surface activity (~2.7 KB per frame); Blender (`blender/myrmex_blender/creature.py`) turns
 every node into an element of one metaball field (a single continuous substance), drives the
 nanomaterial shader (near-black metallic, coat highlights, flowing microstructure, faint
-amber energy traces on transients) and the dark studio (large soft key, two rims, black floor).
+amber energy traces on transients) and the black stage (large soft key, two rims, no floor: the camera
+sees black, the organism's skin reflects soft studio panels only it can see; impact balls and prey act
+unseen).
 
 ## Loop (120 Hz)
 
@@ -208,8 +210,8 @@ very dark red internal glints, tendons along the skeleton and fins that follow t
 | **Blade** (v12) - high-velocity cutting precision | SWEEP (flame-like blades fanning back), scythe, wings | zigzag slashes on the beat; **SLASH** (note 105): lunge, flare, hard turn | wide blades trailing the motion |
 | **Crawler** (v13) - multi-contact terrain adaptation | CRAWL (segmented body on 4 / 6 / 8 clawed legs) | walks on rough ground (feet planted on the terrain, body tilted with the slope, falls when airborne); **RECONFIGURE** (note 107) regrows another number of legs, **POUNCE** (note 108) leaps | claws on the feet, spikes on the back |
 
-The Crawler's ground is `creature/mimetic.py: terrain_height(x, y)`; Blender builds the same surface
-(`CrawlerTerrain`) instead of the flat floor.  Materials: `MyrmexLiquidBlack` (body, tendons),
+The Crawler's ground is `creature/mimetic.py: terrain_height(x, y)`; its legs follow it, but the
+ground itself is not shown (black stage).  Materials: `MyrmexLiquidBlack` (body, tendons),
 `MyrmexLiquidFin` (fins; the red edge is the `glint` attribute), `MyrmexLiquidMote` (swarm shards).
 
 # The Bionic line (backends `tensor`, `fold`, `arbor`, `ferro`, `truss` - creatures v14-v18)

@@ -126,9 +126,8 @@ def _fx_props():
     return ann
 
 
-FX_RACK = ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons", "trails", "bloom", "chroma", "glitch",
-           "impact_frames", "speed_lines", "shock", "grain", "vignette", "scanlines", "react", "exposure", "contrast",
-           "saturation", "hue")
+FX_RACK = ("ghosts", "ghost_life", "ghost_density", "ribbons", "trails", "bloom", "react", "exposure", "contrast",
+           "saturation")
 MyrmexFxSettings = type("MyrmexFxSettings", (bpy.types.PropertyGroup,), {"__annotations__": _fx_props()})
 
 
@@ -356,7 +355,7 @@ class MYRMEX_OT_live_camera_view(bpy.types.Operator):
                 for space in area.spaces:
                     if space.type == "VIEW_3D":
                         space.region_3d.view_perspective = "CAMERA"
-                        space.shading.type = "MATERIAL" if space.shading.type in ("SOLID", "WIREFRAME") else space.shading.type
+                        space.shading.type = "RENDERED" if space.shading.type in ("SOLID", "WIREFRAME", "MATERIAL") else space.shading.type
         return {"FINISHED"}
 
 
@@ -532,17 +531,16 @@ class MYRMEX_PT_fx(bpy.types.Panel):
         row.prop(f, "monitor", toggle=True)
         row.prop(f, "preview", text="")
         box = col.box()
-        box.label(text="Afterimages · ribbons", icon="GHOST_ENABLED")
-        for k in ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons"):
+        box.label(text="Afterimages · traces", icon="GHOST_ENABLED")
+        for k in ("ghosts", "ghost_life", "ghost_density", "ribbons"):
             box.prop(f, k, slider=True)
         box = col.box()
-        box.label(text="Picture", icon="IMAGE_RGB")
-        for k in ("trails", "bloom", "chroma", "glitch", "impact_frames", "speed_lines", "shock", "grain", "vignette",
-                  "scanlines", "react"):
+        box.label(text="Echo · glow", icon="IMAGE_RGB")
+        for k in ("trails", "bloom", "react"):
             box.prop(f, k, slider=True)
         box = col.box()
         box.label(text="Colour", icon="COLOR")
-        for k in ("exposure", "contrast", "saturation", "hue"):
+        for k in ("exposure", "contrast", "saturation"):
             box.prop(f, k, slider=True)
         st = fx.status()
         mon = st.get("monitor") or {}

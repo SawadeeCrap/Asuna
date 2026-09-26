@@ -117,6 +117,9 @@ def fx_settings(s: AppSettings) -> dict:
     d["monitor"] = True
     got = s.fx or {}
     d.update({k: v for k, v in got.items() if k in d and k != "rack"})
+    from ..realtime.fx import PRESETS
+    if d.get("preset") and d["preset"] not in PRESETS:          # a preset that no longer exists
+        d["preset"], got = "Afterimage", {k: v for k, v in got.items() if k != "rack"}
     base = rack_from_preset(d["preset"]) if d.get("preset") else dict(DEFAULT_RACK)
     d["rack"] = {**base, **{k: float(v) for k, v in (got.get("rack") or {}).items() if k in DEFAULT_RACK}}
     return d

@@ -1,28 +1,23 @@
-"""The FX page: Myrmex FX drawn by Blender itself - afterimages, light ribbons, the picture effects, the format."""
+"""The FX page: Myrmex FX drawn by Blender itself - the organism's afterimages, traces, echo and glow, on black."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
                                QLabel, QRadioButton, QSlider, QVBoxLayout, QWidget)
 
-from ..realtime.fx import DEFAULT_RACK, LABELS, PALETTES, PRESET_NAMES, RACK, rack_from_preset
+from ..realtime.fx import DEFAULT_RACK, LABELS, PRESET_NAMES, RACK, rack_from_preset
 from . import controllers as C
 
 PRESET_NOTES = {
-    "Sandevistan": "Cyberpunk: Edgerunners - the fast one leaves a string of neon copies of itself behind",
-    "Echo": "dense copies melt into one continuous smear of the motion",
-    "Anime Impact": "manga hits: inverted impact frames, focus lines, shockwaves",
-    "Neon Ribbons": "light writing: glowing ribbons from the extremities, long light trails",
-    "Glitch": "the picture tears on hits, heavy aberration, scanlines, acid copies",
-    "Dream": "long golden afterimages, soft trails, a liquid glow",
-    "Clean": "a clean cinematic picture: soft glow, grain, vignette - no copies",
+    "Afterimage": "the organism leaves copies of itself behind as it moves - made of what it is made of",
+    "Echo": "dense copies melt into one continuous echo of the motion",
+    "Phantom": "long copies dissolving slowly, a deep motion echo",
+    "Trace": "thin traces of light from its extremities, in its own accent colour, a few copies",
+    "Clean": "the organism alone, a soft glow of its highlights",
 }
-PALETTE_NOTES = {"Sandevistan": "the whole spectrum in turn", "Neon": "cyan / magenta", "Ice": "white and ice blue",
-                 "Blood": "reds", "Gold": "amber and gold", "Toxic": "acid greens"}
-GROUPS = (("Afterimages and ribbons", ("ghosts", "ghost_life", "ghost_density", "ribbons")),
-          ("Picture", ("trails", "bloom", "chroma", "glitch", "impact_frames", "speed_lines", "shock", "grain",
-                       "vignette", "scanlines", "react")),
-          ("Colour", ("exposure", "contrast", "saturation", "hue")))
+GROUPS = (("Afterimages and traces", ("ghosts", "ghost_life", "ghost_density", "ribbons")),
+          ("Echo and glow", ("trails", "bloom", "react")),
+          ("Colour (black stays black)", ("exposure", "contrast", "saturation")))
 
 
 def fx_tab(win) -> QWidget:
@@ -30,10 +25,10 @@ def fx_tab(win) -> QWidget:
     win.s.fx = d
     w = QWidget()
     v = QVBoxLayout(w)
-    intro = QLabel("Blender draws the effects itself - no TouchDesigner. The organism leaves copies of itself as it "
-                   "moves (the Sandevistan look), light ribbons trail from its extremities, what glows leaves trails, "
-                   "and every hit, kick and cut moves the picture. You see it live in Blender's camera view, and every "
-                   "take renders with exactly the same effects.")
+    intro = QLabel("Blender draws the effects itself, only on the organism and in its own tones, always on black. "
+                   "It leaves copies of itself as it moves - its own material, fading and dissolving - light traces "
+                   "follow its extremities in its accent colour, its motion leaves an echo and its highlights glow. "
+                   "You see it live in Blender's camera view, and every take renders with exactly the same effects.")
     intro.setWordWrap(True)
     intro.setProperty("muted", True)
     v.addWidget(intro)
@@ -56,12 +51,6 @@ def fx_tab(win) -> QWidget:
     note.setWordWrap(True)
     note.setProperty("muted", True)
     form.addRow(note)
-    win.cmb_fx_palette = QComboBox()
-    for i, name in enumerate(PALETTES):
-        win.cmb_fx_palette.addItem(f"{name} — {PALETTE_NOTES[name]}", i / (len(PALETTES) - 1))
-    win.cmb_fx_palette.setCurrentIndex(_palette_index(d["rack"].get("palette", 0.0)))
-    win.cmb_fx_palette.currentIndexChanged.connect(lambda *_: _rack(win, "palette", win.cmb_fx_palette.currentData()))
-    form.addRow("Afterimage colours", win.cmb_fx_palette)
     fmt = QHBoxLayout()
     grp = QButtonGroup(w)
     for vert, label in ((False, "Horizontal 1920 × 1080"), (True, "Vertical 1080 × 1920 (Reels, Shorts, TikTok)")):
@@ -118,7 +107,7 @@ def fx_tab(win) -> QWidget:
         win.engine.fx_config(preset=name, rack=rack)
         _blender(win)
     win.cmb_fx_preset.currentIndexChanged.connect(preset)
-    hint = QLabel("MIDI: map knobs to fx_ghosts, fx_trails, fx_impact_frames … on the MIDI page. Open in Blender "
+    hint = QLabel("MIDI: map knobs to fx_ghosts, fx_trails, fx_bloom … on the MIDI page. Open in Blender "
                   "shows the camera view (in Rendered) as the finished picture; if Blender cannot keep up, "
                   "the picture gets smaller or pauses by itself - set Live picture lower for a smoother view. "
                   "Renders: Takes page - the size follows the format chosen here.")
@@ -132,18 +121,11 @@ def fx_tab(win) -> QWidget:
     return w
 
 
-def _palette_index(x: float) -> int:
-    return int(round(min(1.0, max(0.0, float(x))) * (len(PALETTES) - 1)))
-
-
 def _show_rack(win, rack: dict) -> None:
     for key, sl in win.fx_sliders.items():
         sl.blockSignals(True)
         sl.setValue(int(1000 * rack.get(key, DEFAULT_RACK[key])))
         sl.blockSignals(False)
-    win.cmb_fx_palette.blockSignals(True)
-    win.cmb_fx_palette.setCurrentIndex(_palette_index(rack.get("palette", 0.0)))
-    win.cmb_fx_palette.blockSignals(False)
 
 
 def _set(win, key: str, value) -> None:

@@ -32,9 +32,8 @@ TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mod
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"] +
            [f"td_{k}" for k in ("bloom", "trails", "chroma", "glitch", "warp", "shock", "kaleido", "edges", "grain",
                                 "vignette", "hud", "react", "exposure", "contrast", "saturation", "hue", "mix")] +
-           [f"fx_{k}" for k in ("ghosts", "ghost_life", "ghost_density", "palette", "ribbons", "trails", "bloom",
-                                "chroma", "glitch", "impact_frames", "speed_lines", "shock", "grain", "vignette",
-                                "scanlines", "react", "exposure", "contrast", "saturation", "hue")])
+           [f"fx_{k}" for k in ("ghosts", "ghost_life", "ghost_density", "ribbons", "trails", "bloom", "react",
+                                "exposure", "contrast", "saturation")])
 
 
 def creature_tab(win) -> QWidget:
