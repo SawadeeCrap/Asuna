@@ -272,3 +272,92 @@ def test_blender_take_playback_leaves_copies(blender, tmp_path):
     sc.frame_set(sc.frame_start + 5)                                  # a jump back: the copies start over
     assert all(b < -1e8 or b <= fx.S["t"] for b in fx.S["ghosts"].birth)
     fx.configure({"on": False, "replay": True})
+
+
+def test_blender_monitor_limits_samples_waits_and_paces(blender, tmp_path):
+    """The live monitor must never choke Blender: EEVEE at 1 viewport sample while pictures are drawn every
+    frame (draw_view3d renders all of them per call), the scene's own value back afterwards (and in saved
+    looks), no picture before the view has compiled its shaders, and it slows down / pauses by itself."""
+    bpy = blender
+    import time as _t
+
+    from myrmex_blender import fx_post, looks
+    sc = bpy.context.scene
+    sc.eevee.taa_samples = 16
+    fx_post.limit_samples("monitor", True)
+    fx_post.limit_samples("syphon", True)
+    assert sc.eevee.taa_samples == 1 and sc[fx_post.TAA_KEY] == 16
+    fx_post.limit_samples("monitor", False)
+    assert sc.eevee.taa_samples == 1                                    # Syphon still draws
+    path = str(tmp_path / "look.blend")
+    with looks._without_take(sc):                                        # what a saved look keeps
+        assert sc.eevee.taa_samples == 16 and fx_post.TAA_KEY not in sc
+    assert sc.eevee.taa_samples == 1 and sc[fx_post.TAA_KEY] == 16
+    fx_post.limit_samples("syphon", False)
+    assert sc.eevee.taa_samples == 16 and fx_post.TAA_KEY not in sc
+    # waiting for shaders, the right shading, EEVEE
+    scr = bpy.data.screens.get("Layout")
+    area = next((a for a in scr.areas if a.type == "VIEW_3D"), None) if scr else None
+    if area is None:
+        pytest.skip("no 3D view in this Blender's startup screen")
+    space = area.spaces[0]
+    sc.render.engine = "BLENDER_EEVEE" if bpy.app.version >= (5, 0, 0) else "BLENDER_EEVEE_NEXT"
+    space.shading.type = "SOLID"
+    assert "Rendered" in fx_post._why_not(sc, space)
+    space.shading.type = "RENDERED"
+    fx_post._M["warm_until"] = _t.perf_counter() + 10.0
+    assert "preparing" in fx_post._why_not(sc, space)
+    fx_post._M["warm_until"] = 0.0
+    fx_post._M["paused"] = False
+    assert fx_post._why_not(sc, space) == ""
+    # pacing: a struggling Blender lowers the size, then pauses
+    fx_post._M.update(scale=1.0, busy=0.0, period=0.0, slow=0, note="", paused=False)
+    for _ in range(25):
+        fx_post._adapt(0.01, 0.3)
+    assert fx_post._M["scale"] < 1.0 and "lowered" in fx_post._M["note"]
+    for _ in range(80):
+        fx_post._adapt(0.01, 0.3)
+    assert fx_post._M["paused"] and "paused" in fx_post._M["note"]
+    assert "paused" in fx_post._why_not(sc, space)
+    fx_post._M.update(scale=1.0, busy=0.0, period=0.0, slow=0, note="", paused=False)
+    for _ in range(40):                                                   # a healthy pace stays as it is
+        fx_post._adapt(0.004, 0.017)
+    assert fx_post._M["scale"] == 1.0 and not fx_post._M["paused"] and fx_post._M["interval"] <= 1 / 50
+
+
+def test_blender_monitor_picture_without_switching_the_view(blender):
+    bpy = blender
+    import gpu
+    if bpy.app.background:
+        if not hasattr(gpu, "init"):
+            pytest.skip("the gpu module needs Blender 5.0+ in background mode")
+        gpu.init()
+    from myrmex_blender import fx, fx_post
+    sc = bpy.context.scene
+    scr = bpy.data.screens.get("Layout")
+    area = next((a for a in scr.areas if a.type == "VIEW_3D"), None) if scr else None
+    if area is None:
+        pytest.skip("no 3D view in this Blender's startup screen")
+    space = area.spaces[0]
+    region = next(r for r in area.regions if r.type == "WINDOW")
+    sc.render.engine = "BLENDER_EEVEE"
+    space.shading.type = "RENDERED"
+    sc.render.resolution_x, sc.render.resolution_y, sc.render.resolution_percentage = 320, 180, 100
+    fx.S["cfg"].update(on=True, preview=1.0)
+    fx.S["cfg"]["rack"] = rack_from_preset("Sandevistan")
+    fx.S["vals"], fx.S["rack_src"] = {}, "cfg"
+    sc.eevee.taa_samples = 16
+    fx_post.limit_samples("monitor", True)
+    try:
+        fx_post._produce(bpy.context, sc, space, region)             # the first one compiles the shaders
+        t0 = time.perf_counter()
+        fx_post._produce(bpy.context, sc, space, region)
+        took = time.perf_counter() - t0
+    finally:
+        fx_post.limit_samples("monitor", False)
+    assert space.shading.type == "RENDERED"                          # nothing switched behind the view's back
+    pipe = fx_post._M["pipe"]
+    assert (pipe.w, pipe.h) == (320, 180) and pipe.read()[..., :3].max() > 0
+    assert took < 5.0 and sc.eevee.taa_samples == 16
+    pipe.free()
+    fx_post._M["pipe"] = None

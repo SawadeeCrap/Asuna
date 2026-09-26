@@ -78,6 +78,11 @@ def fx_tab(win) -> QWidget:
     size.setCurrentIndex(max(0, size.findData(float(d.get("preview", 1.0)))))
     size.currentIndexChanged.connect(lambda *_: _set(win, "preview", size.currentData()))
     form.addRow("Live picture", size)
+    mon = QCheckBox("Show the picture effects live in Blender (off: afterimages and ribbons only - lightest; "
+                    "renders always get everything)")
+    mon.setChecked(bool(d.get("monitor", True)))
+    mon.toggled.connect(lambda on: _set(win, "monitor", on))
+    form.addRow(mon)
     rep = QCheckBox("Renders repeat the knob moves recorded in the take (off: the settings on this page)")
     rep.setChecked(bool(d.get("replay", True)))
     rep.toggled.connect(lambda on: _set(win, "replay", on))
@@ -114,7 +119,8 @@ def fx_tab(win) -> QWidget:
         _blender(win)
     win.cmb_fx_preset.currentIndexChanged.connect(preset)
     hint = QLabel("MIDI: map knobs to fx_ghosts, fx_trails, fx_impact_frames … on the MIDI page. Open in Blender "
-                  "shows the camera view as the finished picture (the 3D view stays light: it is rendered once). "
+                  "shows the camera view (in Rendered) as the finished picture; if Blender cannot keep up, "
+                  "the picture gets smaller or pauses by itself - set Live picture lower for a smoother view. "
                   "Renders: Takes page - the size follows the format chosen here.")
     hint.setWordWrap(True)
     hint.setProperty("muted", True)

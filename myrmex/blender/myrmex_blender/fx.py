@@ -149,38 +149,40 @@ def apply_format(scene, vertical: bool) -> None:
         r.resolution_percentage = 100
 
 
-_SHADING: dict = {}
+WARMUP = "MyrmexFXWarmup"
 
 
 def _sync_monitor(views: bool = False) -> None:
-    """The monitor on / off.  On: the views looking through the camera go Solid (the monitor renders the
-    "Rendered" picture itself - once); off: they get their shading back.  ``views``: look at the views again
-    (one has just been turned to the camera)."""
+    """The monitor on / off (the 3D view keeps its own shading: the monitor never switches it)."""
     if bpy.app.background:
         return
     from . import fx_post
     want = active() and bool(S["cfg"].get("monitor", True))
-    if want == fx_post.enabled() and not views:
-        return
     if want and not fx_post.enabled():
         fx_post.enable()
     elif not want and fx_post.enabled():
         fx_post.disable()
-    wm = bpy.context.window_manager
-    for win in (wm.windows if wm is not None else ()):
-        for area in win.screen.areas:
-            if area.type != "VIEW_3D":
-                continue
-            for sp in area.spaces:
-                if sp.type != "VIEW_3D" or sp.region_3d is None or sp.region_3d.view_perspective != "CAMERA":
-                    continue
-                key = sp.as_pointer()
-                if want and sp.shading.type in ("MATERIAL", "RENDERED"):
-                    _SHADING[key] = sp.shading.type
-                    sp.shading.type = "SOLID"
-                elif not want and key in _SHADING:
-                    sp.shading.type = _SHADING.pop(key)
-            area.tag_redraw()
+
+
+def warmup(scene=None) -> None:
+    """A speck carrying the afterimage and ribbon materials: the 3D view compiles them in the background
+    before the first copy appears (an offscreen picture would compile them on the spot, stopping Blender)."""
+    from .fx_ghosts import fx_collection, ghost_material
+    from .fx_ribbons import ribbon_material
+    scene = scene or bpy.context.scene
+    ob = bpy.data.objects.get(WARMUP)
+    if ob is None:
+        me = bpy.data.meshes.new(WARMUP)
+        me.from_pydata([(0.0, 0.0, 0.0), (0.001, 0.0, 0.0), (0.0, 0.001, 0.0), (0.0, 0.0, 0.001)], [],
+                       [(0, 1, 2), (0, 1, 3)])
+        me.materials.append(ghost_material())
+        me.materials.append(ribbon_material())
+        me.polygons[1].material_index = 1
+        ob = bpy.data.objects.new(WARMUP, me)
+        fx_collection(scene).objects.link(ob)
+        ob.hide_render = True
+        ob.visible_shadow = False
+        ob["myrmex_birth"] = -1e9                          # (a copy long gone: nothing shows)
 
 
 def _parts():
@@ -441,6 +443,9 @@ def status() -> dict:
 def _on_load(*_args):
     reset(remove=True)
     S["vals"], S["rack_src"], S["live"] = {}, "cfg", False
+    if not bpy.app.background:
+        from . import fx_post
+        fx_post.reapply(bpy.context.scene)
 
 
 def register() -> None:
@@ -457,10 +462,10 @@ def unregister() -> None:
 
 
 def look_through_camera() -> None:
-    """Every 3D view looks through the scene camera (the live / take start): Solid under the monitor."""
+    """The 3D views look through the scene camera (the live / take start): the monitor follows the switch."""
     _sync_monitor(True)
 
 
-__all__ = ["look_through_camera", "configure", "render_settings", "from_env", "live_frame", "live_pose", "take_frame", "post_params", "active", "rack",
+__all__ = ["look_through_camera", "warmup", "configure", "render_settings", "from_env", "live_frame", "live_pose", "take_frame", "post_params", "active", "rack",
            "drives", "status", "apply_format", "picture_on", "reset", "register", "unregister", "decode_trailer",
            "S"]

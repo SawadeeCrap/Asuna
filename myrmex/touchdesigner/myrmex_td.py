@@ -178,7 +178,8 @@ void main() {
     }
     vec2 d = (uv - uShock.xy) * asp;                        // a shockwave from where the hit was
     float dist = length(d);
-    float ring = exp(-pow((dist - uChroma.z) * 14.0, 2.0)) * uChroma.w;
+    float z = (dist - uChroma.z) * 14.0;
+    float ring = exp(-z * z) * uChroma.w;
     uv -= d / max(dist, 0.0001) / asp * ring * 0.03;
     if (uGlitch.x > 0.001) {                                // glitch: torn rows
         float rows = max(uGlitch.y, 2.0);

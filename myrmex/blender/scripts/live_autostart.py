@@ -52,8 +52,7 @@ def _look_through_camera():
                     space.region_3d.view_perspective = "CAMERA"
                     space.overlay.show_overlays = False
             area.tag_redraw()
-    # Myrmex FX: the camera view is its monitor, which renders "Rendered" itself - the view underneath goes
-    # Solid, so the scene is rendered once, not twice (and gets "Rendered" back when the effects are off)
+    # Myrmex FX: the camera view (Rendered) becomes its monitor - the finished picture drawn over it
     from myrmex_blender import fx
     fx.look_through_camera()
 

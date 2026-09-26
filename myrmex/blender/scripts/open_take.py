@@ -78,7 +78,9 @@ def main():
                             if sp.type == "VIEW_3D":
                                 sp.shading.type = "MATERIAL"
                                 sp.region_3d.view_perspective = "CAMERA"
-            fx.look_through_camera()           # Myrmex FX: the camera view becomes its monitor (Solid underneath)
+                                if fx.active():            # (the FX picture is drawn with this view's overlays)
+                                    sp.overlay.show_overlays = False
+            fx.look_through_camera()           # Myrmex FX: the camera view becomes its monitor
             return None
         bpy.app.timers.register(look, first_interval=1.0)
 

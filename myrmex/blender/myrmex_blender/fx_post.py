@@ -9,10 +9,9 @@
                                                                 scanlines, vignette, grain
     out --> the 3D view in camera view (a monitor, letterboxed), Syphon, take renders (fx_render)
 
-Live, the 3D view that looks through the camera shows ``out``.  The offscreen picture is always drawn in
-"Rendered" mode, so the view itself can stay in Solid (cheap): Blender then renders the scene once, at the
-output size, instead of twice.  Every pass samples with a hand-written bilinear filter (texelFetch), so
-the result is the same on every Blender (4.2 ... 5.x) and on Metal and OpenGL.
+Live, the 3D view that looks through the camera ("Rendered") shows ``out`` (see "the monitor" below for how
+it stays light).  Every pass samples with a hand-written bilinear filter (texelFetch), so the result is the
+same on every Blender (4.2 ... 5.x) and on Metal and OpenGL.
 """
 from __future__ import annotations
 
@@ -147,7 +146,8 @@ void main() {
   q += (vec2(hash12(vec2(t * 61.0, 1.7)), hash12(vec2(t * 47.0, 9.1))) - 0.5) * P.look3.w;
   vec2 d = (q - P.shock.xy) * asp;
   float dist = length(d);
-  float ring = exp(-pow((dist - P.look1.w) * 16.0, 2.0)) * P.look1.z;
+  float z = (dist - P.look1.w) * 16.0;
+  float ring = exp(-z * z) * P.look1.z;
   q -= d / max(dist, 0.0001) / asp * ring * 0.035;
   float gsh = 0.0;
   if (P.look1.y > 0.001) {
@@ -363,8 +363,60 @@ def draw_solid(color, x0=-1.0, y0=-1.0, x1=1.0, y1=1.0) -> None:
 
 
 # ---------------------------------------------------------------------- the monitor in the 3D view
-_M: dict = {"handler": None, "pipe": None, "done": -1, "last": 0.0, "last_new": 0.0, "error": "", "fps": 0.0,
-            "n": 0, "t0": 0.0, "size": (0, 0)}
+# How the live picture is made without choking Blender:
+# * the offscreen picture is drawn with the 3D view's own settings - nothing is switched while Blender
+#   draws (changing the shading inside a draw frees the very region being drawn);
+# * draw_view3d renders *all* of EEVEE's viewport samples on every call (16 by default = 16 renders per
+#   frame): while the monitor (or Syphon) runs the viewport samples are 1 - a live picture changes every
+#   frame anyway.  The scene's own value is kept and comes back when they stop (a saved look keeps it);
+# * EEVEE compiles materials for an offscreen picture synchronously (the UI would stop): the monitor waits
+#   until the view (in "Rendered") has compiled them; a warm-up object carries the afterimage and ribbon
+#   materials from the start;
+# * it paces itself: never more often than it can afford; if Blender cannot keep up it lowers the size,
+#   then pauses (the organism, its afterimages and ribbons stay in the normal view).
+_M: dict = {"handler": None, "pipe": None, "done": -1, "last": 0.0, "last_new": 0.0, "error": "", "note": "",
+            "fps": 0.0, "n": 0, "t0": 0.0, "size": (0, 0), "busy": 0.0, "period": 0.0, "interval": 1.0 / 60.0,
+            "warm_until": 0.0, "slow": 0, "paused": False, "scale": 1.0}
+WARM_S = 6.0                    # the 3D view compiles the materials meanwhile (in the background)
+SLOW_PERIOD = 0.15              # live pictures further apart than this: Blender is struggling
+_LIMIT: set = set()
+TAA_KEY = "myrmex_fx_taa"
+EEVEE = ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT")
+
+
+def limit_samples(owner: str, on: bool, scene=None) -> None:
+    """EEVEE's viewport samples at 1 while someone draws offscreen pictures every frame (monitor, Syphon)."""
+    if on:
+        _LIMIT.add(owner)
+    else:
+        _LIMIT.discard(owner)
+    sc = scene or bpy.context.scene
+    if sc is None:
+        return
+    try:
+        ee = sc.eevee
+        if _LIMIT and TAA_KEY not in sc:
+            sc[TAA_KEY] = int(ee.taa_samples)
+            ee.taa_samples = 1
+        elif not _LIMIT and TAA_KEY in sc:
+            ee.taa_samples = int(sc[TAA_KEY])
+            del sc[TAA_KEY]
+    except (AttributeError, TypeError, ValueError, KeyError):
+        pass
+
+
+def reapply(scene=None) -> None:
+    """A new file / look was opened while the monitor or Syphon runs: its scene gets the 1-sample limit,
+    and the monitor waits for its materials again."""
+    if _LIMIT:
+        limit_samples(next(iter(_LIMIT)), True, scene)
+    if _M["handler"] is not None:
+        _M.update(warm_until=time.perf_counter() + WARM_S, paused=False, slow=0, note="", period=0.0)
+        try:
+            from . import fx
+            fx.warmup(scene)
+        except Exception as e:
+            print("Myrmex FX warm-up:", e)
 
 
 def enabled() -> bool:
@@ -376,6 +428,18 @@ def enable() -> None:
         _M["handler"] = bpy.types.SpaceView3D.draw_handler_add(_draw, (), "WINDOW", "POST_PIXEL")
     if not bpy.app.timers.is_registered(_pump):
         bpy.app.timers.register(_pump, first_interval=0.1, persistent=True)
+    _M.update(warm_until=time.perf_counter() + WARM_S, paused=False, slow=0, note="", scale=1.0, busy=0.0,
+              period=0.0, interval=1.0 / 60.0)
+    limit_samples("monitor", True)
+    try:
+        shaders()                                     # compiled now, not in the middle of a draw
+    except Exception as e:
+        print("Myrmex FX shaders (compiled at the first picture instead):", e)
+    try:
+        from . import fx
+        fx.warmup(bpy.context.scene)
+    except Exception as e:
+        print("Myrmex FX warm-up:", e)
     _tag()
 
 
@@ -392,6 +456,7 @@ def disable() -> None:
     if pipe is not None:
         pipe.free()
     _M["pipe"] = None
+    limit_samples("monitor", False)
     _tag()
 
 
@@ -410,7 +475,7 @@ def _pump():
     if _M["handler"] is None:
         return None
     now = time.perf_counter()
-    if now - _M["last"] > 1.0 / 30.0 and now - _M["last_new"] < 2.5:
+    if now < _M["warm_until"] + 1.0 or (now - _M["last"] > 1.0 / 30.0 and now - _M["last_new"] < 2.5):
         _tag()
     return 1.0 / 30.0
 
@@ -418,10 +483,32 @@ def _pump():
 def output_size(scene) -> tuple[int, int]:
     from . import fx
     r = scene.render
-    s = float(fx.S["cfg"].get("preview", 1.0)) if not bpy.app.background else 1.0
+    s = float(fx.S["cfg"].get("preview", 1.0)) * float(_M.get("scale", 1.0)) if not bpy.app.background else 1.0
     s = min(1.0, max(0.25, s))
     return max(16, int(r.resolution_x * r.resolution_percentage / 100 * s)), \
         max(16, int(r.resolution_y * r.resolution_percentage / 100 * s))
+
+
+def _compiling() -> bool:
+    try:
+        return bool(bpy.app.is_job_running("SHADER_COMPILATION"))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _why_not(scene, space) -> str:
+    """Why the monitor cannot draw this view right now ("" = it can)."""
+    engine = scene.render.engine
+    if engine not in EEVEE and engine != "BLENDER_WORKBENCH":
+        return "Myrmex FX: the live picture needs EEVEE (Render engine)"
+    if engine in EEVEE and space.shading.type not in ("RENDERED", "MATERIAL"):
+        return "Myrmex FX: switch this view to Rendered (Z) to see the effects"
+    now = time.perf_counter()
+    if now < _M["warm_until"] or (now < _M["warm_until"] + 20.0 and _compiling()):
+        return "Myrmex FX: preparing shaders…"
+    if _M["paused"]:
+        return _M["note"] or "Myrmex FX paused"
+    return ""
 
 
 def _draw() -> None:
@@ -433,13 +520,23 @@ def _draw() -> None:
     if scene is None or space is None or space.type != "VIEW_3D" or region is None or scene.camera is None:
         return
     in_cam = space.region_3d is not None and space.region_3d.view_perspective == "CAMERA"
-    now = time.perf_counter()
-    fresh = fx.S["frame"] != _M["done"] or now - _M["last"] > 1.0 / 30.0
     try:
-        if fresh and (in_cam or syphon_out.wants_fx()):
-            if fx.S["frame"] != _M["done"]:
+        why = _why_not(scene, space)
+        if why:
+            if in_cam:
+                _text(why)
+            return
+        now = time.perf_counter()
+        new = fx.S["frame"] != _M["done"]
+        due = (new or now - _M["last"] > 0.25) and now - _M["last"] >= _M["interval"]
+        if due and (in_cam or syphon_out.wants_fx()):
+            live = new and now - _M["last_new"] < 0.5         # frames keep coming: the pace means something
+            period = now - _M["last"]
+            if new:
                 _M["last_new"] = now
+            t0 = time.perf_counter()
             _produce(ctx, scene, space, region)
+            _adapt(time.perf_counter() - t0, period if live else None)
             _M["done"] = fx.S["frame"]
             _M["last"] = now
         pipe = _M.get("pipe")
@@ -448,6 +545,28 @@ def _draw() -> None:
         _M["error"] = ""
     except Exception as e:                                    # never break the viewport
         _M["error"] = f"{type(e).__name__}: {e}"
+
+
+def _adapt(dt: float, period: float | None = None) -> None:
+    """Pace: at most as often as a picture takes (x1.3).  If Blender cannot keep up (the pictures of a
+    running performance come further apart than SLOW_PERIOD, or one takes over 0.2 s), lower the size,
+    then pause."""
+    _M["busy"] = 0.7 * _M["busy"] + 0.3 * dt if _M["busy"] else dt
+    _M["interval"] = min(1.0 / 12.0, max(1.0 / 60.0, _M["busy"] * 1.3))
+    if period is not None:
+        _M["period"] = 0.8 * _M["period"] + 0.2 * period if _M["period"] else period
+    slow = _M["busy"] > 0.2 or (period is not None and _M["period"] > SLOW_PERIOD)
+    _M["slow"] = _M["slow"] + 1 if slow else max(0, _M["slow"] - 2)
+    if _M["slow"] < 20:
+        return
+    _M["slow"] = 0
+    if _M["scale"] > 0.5:
+        _M["scale"] = max(0.5, _M["scale"] * 0.7)
+        _M["note"] = f"Myrmex FX: live picture lowered to {int(_M['scale'] * 100)}% (Blender was too slow)"
+    else:
+        _M["paused"] = True
+        _M["note"] = (f"Myrmex FX paused: Blender manages {1.0 / max(_M['period'], 1e-3):.0f} pictures a second - "
+                      "set Live picture lower, then turn Myrmex FX off and on")
 
 
 def _produce(ctx, scene, space, region) -> None:
@@ -462,20 +581,7 @@ def _produce(ctx, scene, space, region) -> None:
     depsgraph = ctx.evaluated_depsgraph_get()
     view = cam.matrix_world.inverted()
     proj = cam.calc_matrix_camera(depsgraph, x=w, y=h)
-    shading = space.shading
-    old_type, old_ov = shading.type, space.overlay.show_overlays
-    engine_ok = scene.render.engine in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT", "BLENDER_WORKBENCH")
-    try:
-        if engine_ok and old_type != "RENDERED":         # the picture is always the "Rendered" one
-            shading.type = "RENDERED"
-        if old_ov:
-            space.overlay.show_overlays = False
-        pipe.src.draw_view3d(scene, ctx.view_layer, space, region, view, proj, do_color_management=True)
-    finally:
-        if shading.type != old_type:
-            shading.type = old_type
-        if space.overlay.show_overlays != old_ov:
-            space.overlay.show_overlays = old_ov
+    pipe.src.draw_view3d(scene, ctx.view_layer, space, region, view, proj, do_color_management=True)
     tex = pipe.run(fx.post_params(scene, w, h, cam))
     syphon_out.publish_texture(tex, w, h)
     _M["n"] += 1
@@ -486,6 +592,18 @@ def _produce(ctx, scene, space, region) -> None:
     _M["size"] = (w, h)
 
 
+def _text(msg: str, y: int = 10) -> None:
+    try:
+        import blf
+        gpu.state.blend_set("ALPHA")
+        blf.size(0, 11)
+        blf.color(0, 1.0, 1.0, 1.0, 0.7)
+        blf.position(0, 12, y, 0)
+        blf.draw(0, msg)
+    except Exception:
+        pass
+
+
 def _show(region, pipe: Pipeline) -> None:
     rw, rh = max(1, region.width), max(1, region.height)
     s = min(rw / pipe.w, rh / pipe.h)
@@ -494,21 +612,16 @@ def _show(region, pipe: Pipeline) -> None:
     gpu.state.blend_set("NONE")
     draw_solid((0.0, 0.0, 0.0, 1.0))
     draw_rect(pipe.out.texture_color, x0 / rw * 2 - 1, y0 / rh * 2 - 1, (x0 + dw) / rw * 2 - 1, (y0 + dh) / rh * 2 - 1)
-    gpu.state.blend_set("ALPHA")
-    try:
-        import blf
-        blf.size(0, 11)
-        blf.color(0, 1.0, 1.0, 1.0, 0.55)
-        blf.position(0, 12, 10, 0)
-        fps = f" · {_M['fps']:.0f} fps" if _M["fps"] else ""
-        blf.draw(0, f"Myrmex FX · {pipe.w}×{pipe.h}{fps}" + (f" · {_M['error']}" if _M["error"] else ""))
-    except Exception:
-        pass
+    fps = f" · {_M['fps']:.0f} fps" if _M["fps"] else ""
+    _text(f"Myrmex FX · {pipe.w}×{pipe.h}{fps}" + (f" · {_M['error']}" if _M["error"] else ""))
+    if _M["note"]:
+        _text(_M["note"], 26)
 
 
 def status() -> dict:
-    return {"monitor": enabled(), "size": list(_M["size"]), "fps": round(_M["fps"], 1), "error": _M["error"]}
+    return {"monitor": enabled(), "size": list(_M["size"]), "fps": round(_M["fps"], 1), "error": _M["error"],
+            "note": _M["note"], "paused": _M["paused"], "ms": round(1000 * _M["busy"], 1)}
 
 
 __all__ = ["Pipeline", "shaders", "enable", "disable", "enabled", "status", "output_size", "draw_rect",
-           "N_PARAMS"]
+           "limit_samples", "N_PARAMS", "TAA_KEY"]

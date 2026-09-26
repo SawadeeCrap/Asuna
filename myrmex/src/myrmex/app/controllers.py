@@ -114,6 +114,7 @@ def fx_settings(s: AppSettings) -> dict:
     from ..realtime.fx import DEFAULT_RACK, DEFAULTS, rack_from_preset
     d = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     d["replay"] = True
+    d["monitor"] = True
     got = s.fx or {}
     d.update({k: v for k, v in got.items() if k in d and k != "rack"})
     base = rack_from_preset(d["preset"]) if d.get("preset") else dict(DEFAULT_RACK)
@@ -132,7 +133,8 @@ def fx_blender(s: AppSettings) -> dict:
     """What a Blender needs (the "fx" control command / MYRMEX_FX): takes have no engine stream."""
     d = fx_settings(s)
     return {"on": bool(d["enabled"]), "preset": d.get("preset", ""), "rack": dict(d["rack"]),
-            "vertical": bool(d["vertical"]), "preview": float(d["preview"]), "replay": bool(d.get("replay", True))}
+            "vertical": bool(d["vertical"]), "preview": float(d["preview"]), "replay": bool(d.get("replay", True)),
+            "monitor": bool(d.get("monitor", True))}
 
 
 def fx_env(s: AppSettings) -> dict:

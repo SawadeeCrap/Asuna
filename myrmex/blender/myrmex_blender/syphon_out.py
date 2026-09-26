@@ -78,6 +78,8 @@ class SyphonOut:
         else:
             self.srv = syphon.SyphonOpenGLServer(self.name)
         self.off = gpu.types.GPUOffScreen(self.w, self.h)
+        from . import fx_post                               # (an offscreen picture per frame: EEVEE at 1 sample)
+        fx_post.limit_samples("syphon", True)
         self.handle = bpy.types.SpaceView3D.draw_handler_add(self._draw, (), "WINDOW", "POST_PIXEL")
         if not bpy.app.timers.is_registered(self._pump):
             bpy.app.timers.register(self._pump, first_interval=0.05, persistent=True)
@@ -130,6 +132,11 @@ class SyphonOut:
             except ValueError:
                 pass
             self.handle = None
+            try:
+                from . import fx_post
+                fx_post.limit_samples("syphon", False)
+            except Exception:
+                pass
         if bpy.app.timers.is_registered(self._pump):
             bpy.app.timers.unregister(self._pump)
         for n in self.hidden:

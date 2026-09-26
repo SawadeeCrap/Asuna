@@ -119,6 +119,15 @@ def _without_take(scene: bpy.types.Scene):
         if fxc is not None and fxc.name in scene.collection.children:
             scene.collection.children.unlink(fxc)
             undo.append(lambda: scene.collection.children.link(fxc))
+        if "myrmex_fx_taa" in scene:                            # the look keeps its own viewport samples
+            live_taa, own = scene.eevee.taa_samples, int(scene["myrmex_fx_taa"])
+            scene.eevee.taa_samples = own
+            del scene["myrmex_fx_taa"]
+
+            def back_taa(live_taa=live_taa, own=own):
+                scene["myrmex_fx_taa"] = own
+                scene.eevee.taa_samples = live_taa
+            undo.append(back_taa)
         marks = [(m.name, m.frame, m.camera) for m in scene.timeline_markers if m.name.startswith("Shot")]
         for m in [m for m in scene.timeline_markers if m.name.startswith("Shot")]:
             scene.timeline_markers.remove(m)
