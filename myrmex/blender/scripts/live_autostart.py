@@ -54,6 +54,17 @@ def _look_through_camera():
             area.tag_redraw()
 
 
+def _syphon_from_env():
+    """The picture for TouchDesigner (MYRMEX_SYPHON, set by the app when the TD link is on)."""
+    from myrmex_blender import control, syphon_out
+    st = syphon_out.from_env()
+    if st is not None:
+        print("Myrmex: Syphon", "ON:" if st.get("on") else "failed:", st.get("name") or st.get("error"))
+        if control.enabled():
+            control.reply({"cmd": "syphon", "ok": bool(st.get("on")), **st})
+    return None
+
+
 def go_live():
     _register()
     from myrmex_blender import control
@@ -77,6 +88,7 @@ def go_live():
         ui._LINK["link"] = link
         if not bpy.app.background:
             bpy.app.timers.register(lambda: (_look_through_camera(), None)[1], first_interval=1.5)
+            bpy.app.timers.register(_syphon_from_env, first_interval=2.5)
         print("Myrmex: creature live on port", s.port)
         return None
     if s.armature is None:
@@ -98,6 +110,7 @@ def go_live():
     # The live camera appears with the first pose packet; look through it a moment later.
     if win is not None:
         bpy.app.timers.register(lambda: (_look_through_camera(), None)[1], first_interval=1.5)
+        bpy.app.timers.register(_syphon_from_env, first_interval=2.5)
     print("Myrmex: live", "ON" if link is not None else "FAILED", "- waiting for poses on port", s.port)
     return None
 

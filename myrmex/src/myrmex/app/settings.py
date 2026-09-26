@@ -77,6 +77,7 @@ class AppSettings:
     camera_controls: dict = field(default_factory=dict)
     glove: dict = field(default_factory=dict)          # Hand Glove link: preset, intensity, mapping, neutral pose
     looks: dict = field(default_factory=dict)          # organism -> the chosen saved look ("" = default studio)
+    td: dict = field(default_factory=dict)             # TouchDesigner link (realtime/touch.py DEFAULTS)
 
     @classmethod
     def load(cls) -> "AppSettings":

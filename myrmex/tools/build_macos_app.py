@@ -45,6 +45,12 @@ PLATFORMS = ["macosx_14_0_arm64", "macosx_13_0_arm64", "macosx_12_0_arm64", "mac
              "macosx_13_0_universal2", "macosx_11_0_universal2", "macosx_10_9_universal2",
              "macosx_10_6_universal2", "any"]
 QT_MODULES = ("QtCore", "QtGui", "QtWidgets")
+# Syphon for Blender's own Python (the picture for TouchDesigner): Blender 4.2-5.0 = 3.11, 5.1+ = 3.13.
+BLENDER_PYTHONS = ("3.11", "3.13")
+SYPHON_PURE = ("syphon-python==0.1.1", "pyopengl==3.1.10")          # Python + Syphon.framework, any CPython
+PYOBJC = ("pyobjc-core==10.3.2", "pyobjc-framework-Cocoa==10.3.2", "pyobjc-framework-Metal==10.3.2")
+VENDOR_PLATFORMS = ("macosx_11_0_arm64", "macosx_10_13_universal2", "macosx_10_9_universal2", "macosx_11_0_universal2",
+                    "any")
 QT_PLUGINS = ("platforms/libqcocoa.dylib", "styles/libqmacstyle.dylib", "imageformats/libqicns.dylib")
 VERSION = "0.3.0"
 
@@ -268,9 +274,39 @@ def copy_app_sources(dst: str) -> None:
     shutil.copytree(os.path.join(REPO, "ableton", "remote_script"), os.path.join(dst, "ableton", "remote_script"),
                     ignore=ign)
     shutil.copytree(os.path.join(REPO, "characters"), os.path.join(dst, "characters"), ignore=ign)
+    shutil.copytree(os.path.join(REPO, "touchdesigner"), os.path.join(dst, "touchdesigner"), ignore=ign)
     os.makedirs(os.path.join(dst, "docs"), exist_ok=True)
-    for f in ("docs/REALTIME.md", "README.md"):
+    for f in ("docs/REALTIME.md", "docs/TOUCHDESIGNER.md", "README.md"):
         shutil.copy2(os.path.join(REPO, f), os.path.join(dst, f))
+
+
+def vendor_blender_syphon(cache: str, blender_dir: str, pip: list[str]) -> None:
+    """syphon-python + pyobjc for Blender's Python (blender/vendor/common + cpXY): nothing to install on the Mac."""
+    base = os.path.join(blender_dir, "vendor")
+    shutil.rmtree(base, ignore_errors=True)
+
+    def download(dst: str, pyver: str, reqs) -> list[str]:
+        os.makedirs(dst, exist_ok=True)
+        cmd = pip + ["download", "-q", "--no-deps", "-d", dst, "--only-binary=:all:", "--python-version", pyver,
+                     "--implementation", "cp"]
+        for p in VENDOR_PLATFORMS:
+            cmd += ["--platform", p]
+        subprocess.run(cmd + list(reqs), check=True)
+        return sorted(os.path.join(dst, f) for f in os.listdir(dst) if f.endswith(".whl"))
+    wheels = os.path.join(cache, "blender-wheels")
+    for whl in download(os.path.join(wheels, "common"), "3.12", SYPHON_PURE):
+        install_wheel(whl, os.path.join(base, "common"))
+    for pyver in BLENDER_PYTHONS:
+        tag = "cp" + pyver.replace(".", "")
+        for whl in download(os.path.join(wheels, tag), pyver, PYOBJC):
+            install_wheel(whl, os.path.join(base, tag))
+    thinned = 0
+    for root, _dirs, files in os.walk(base):
+        for f in files:
+            p = os.path.join(root, f)
+            if not os.path.islink(p) and is_macho(p):
+                thinned += thin_to_arm64(p)
+    print("Blender Syphon:", ", ".join(sorted(os.listdir(base))), f"(thinned {thinned})")
 
 
 def make_icon(path: str) -> bool:
@@ -348,6 +384,7 @@ def build(cache: str, out: str, pip: list[str], python312: str | None) -> str:
     os.symlink("Resources/python/lib", os.path.join(contents, "lib"))
     # The app
     copy_app_sources(os.path.join(res, "app"))
+    vendor_blender_syphon(cache, os.path.join(res, "app", "blender"), pip)
     precompile([os.path.join(res, "app", "src"), site], python312)
     launcher = os.path.join(contents, "MacOS", "Myrmex")
     with open(launcher, "w") as f:

@@ -100,8 +100,18 @@ def _log(p: QPainter) -> None:
         p.restore()
 
 
+def _touch(p: QPainter) -> None:
+    """TouchDesigner: a screen with a wave of light running through it."""
+    p.drawRoundedRect(QRectF(2.5, 4.5, 19, 13), 2.4, 2.4)
+    path = QPainterPath(QPointF(5.5, 11.5))
+    for x, y in ((8, 8.5), (10.5, 14), (13, 7.5), (15.5, 13), (18.5, 10)):
+        path.lineTo(x, y)
+    p.drawPath(path)
+    p.drawLine(QPointF(9, 20.5), QPointF(15, 20.5))
+
+
 DRAW = {"Live": _live, "Character": _character, "Creature": _creature, "Camera": _camera, "Glove": _glove,
-        "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Log": _log}
+        "TouchDesigner": _touch, "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Log": _log}
 
 
 def _pixmap(draw, color: str, size: int = 22, ratio: float = 2.0) -> QPixmap:

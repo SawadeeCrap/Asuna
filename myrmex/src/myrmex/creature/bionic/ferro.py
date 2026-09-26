@@ -163,10 +163,8 @@ class FerroEngine(BionicEngine):
 
     def _field(self, dt: float) -> None:
         pr, inp, gc = self.params.values(), self.inp, self.glove.ctrl
-        if inp.playing:
-            drive = 0.5 + 0.9 * inp.bass + 0.35 * inp.energy
-        else:
-            drive = 0.8 + 0.1 * math.sin(0.7 * self.t)                    # idling: calm spikes, breathing
+        idle = 0.8 + 0.1 * math.sin(0.7 * self.t)                         # calm spikes, breathing
+        drive = max(idle, 0.5 + 0.9 * inp.bass + 0.35 * inp.energy) if inp.playing else idle
         beat = inp.beat if inp.playing else 2.0 * self.t
         if gc.active and gc.pulse > 1e-3:
             drive *= 1.0 + 0.5 * gc.pulse * math.sin(math.pi * beat) ** 2

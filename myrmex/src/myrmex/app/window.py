@@ -36,6 +36,7 @@ from . import controllers as C
 from . import icons
 from . import tabs as T
 from . import theme
+from . import touch_tab as TT
 from .settings import AppSettings, characters_dir
 
 CLOCKS = [("auto", "Auto (best available)"), ("link", "Ableton Link"), ("osc", "Remote Script (Ableton)"),
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
              ("Creature", "The organisms' parameters and events"),
              ("Camera", "Automatic director or your own shots"),
              ("Glove", "Hand Glove: the organism moves with your hand"),
+             ("TouchDesigner", "Effects in TouchDesigner, in sync with the music, the organism and Blender"),
              ("Inputs", "Ableton, VCV Rack, MIDI, audio and the clock"),
              ("MIDI", "Every incoming CC and note, and where it goes"),
              ("Takes", "Record performances and turn them into videos"),
@@ -181,6 +183,7 @@ class MainWindow(QMainWindow):
         self.btn_blender.clicked.connect(self.open_blender)
         builders = {"Live": self._live_tab, "Character": self._character_tab, "Creature": lambda: T.creature_tab(self),
                     "Camera": self._camera_tab, "Glove": lambda: T.glove_tab(self), "Inputs": self._inputs_tab,
+                    "TouchDesigner": lambda: TT.td_tab(self),
                     "MIDI": lambda: T.midi_tab(self),
                     "Takes": self._output_tab, "Log": lambda: self.logbox}
         self.page_index = {}
@@ -820,6 +823,11 @@ class MainWindow(QMainWindow):
         if cmd == "hello":
             p.setProperty("myrmex_control", True)
             return
+        if cmd == "syphon":                                    # Blender's picture for TouchDesigner
+            TT.on_blender_syphon(self, d)
+            self.log(f"Blender → TouchDesigner: Syphon \"{d.get('name')}\" on" if d.get("on") else
+                     f"Blender → TouchDesigner: Syphon off{' - ' + d['error'] if d.get('error') else ''}")
+            return
         if not d.get("ok"):
             self.log(f"! Blender: {d.get('error', 'failed')}")
             return
@@ -911,7 +919,7 @@ class MainWindow(QMainWindow):
         if not self.engine.running:
             self.start_engine()
         cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend,
-                                          self.s.keep_blender_settings, self.s.looks)
+                                          self.s.keep_blender_settings, self.s.looks, C.td_env(self.s))
         look = C.look_file(self.s.backend, self.s.looks) if self.s.backend in C.CREATURE_BACKENDS else ""
         if look:
             self.log(f"using your saved look: {look}")
@@ -948,6 +956,8 @@ class MainWindow(QMainWindow):
             qenv = QProcessEnvironment.systemEnvironment()
             qenv.insert("MYRMEX_CONTROL", "stdin")
             qenv.insert("MYRMEX_LOOKS", C.looks_dir())
+            for k, val in C.td_env(self.s).items():            # TouchDesigner follows the take
+                qenv.insert(k, val)
             p.setProcessEnvironment(qenv)
             p.setProperty("myrmex_variant", C.take_variant(take) or "humanoid")
         p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -1014,6 +1024,8 @@ class MainWindow(QMainWindow):
         T.refresh_midi(self)
         if self.stack.currentIndex() == self.page_index.get("Glove"):
             T.refresh_glove(self)
+        if self.stack.currentIndex() == self.page_index.get("TouchDesigner"):
+            TT.refresh_td(self)
         st = self.engine.status()
         tok = theme.T
         if not st:

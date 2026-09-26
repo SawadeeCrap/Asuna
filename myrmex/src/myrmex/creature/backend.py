@@ -101,7 +101,7 @@ class CreatureBackend:
             self._ev_seen = out[-1][0]
         return out
 
-    def record(self, fps_due: bool, st=None, cam=None) -> None:
+    def record(self, fps_due: bool, st=None, cam=None, td=None) -> None:
         """One take frame: body, material, music position (audio alignment) and the live camera."""
         if self.frames is None or not fps_due:
             return
@@ -130,6 +130,8 @@ class CreatureBackend:
                      memories=s.memories)
         if getattr(s, "light", None) is not None:          # Cyber Hive: light lines per node, the scan front
             f.update(light=np.clip(s.light * 255.0, 0, 255).astype(np.uint8), scan=float(s.scan))
+        if td is not None:                                 # what TouchDesigner saw (realtime/touch.py CHANNELS)
+            f["td"] = np.asarray(td, np.float32)
         if getattr(s, "members", None) is not None:        # Bionic line: the structure + the creature's floats
             f.update(members=np.asarray(s.members, np.float32).astype(np.float16),
                      extra=np.asarray(s.extra, np.float32), obstacles=np.asarray(s.obstacles, np.float32),
@@ -153,6 +155,9 @@ class CreatureBackend:
             else:
                 data[k] = np.array([f.get(k, np.nan) for f in fr], float)
         ev = self.ev_log
+        if "td" in data:
+            from ..realtime.touch import CHANNELS
+            data["td_names"] = np.array(CHANNELS)
         np.savez_compressed(path, **data, kind=self.state.kind, anchor=self.state.anchor, seed=self.engine.cfg.seed,
                             variant=self.variant, fps=float(fps), format="myrmex-creature-take-2",
                             ev_t=np.array([e[0] for e in ev], float), ev_name=np.array([str(e[1]) for e in ev]))

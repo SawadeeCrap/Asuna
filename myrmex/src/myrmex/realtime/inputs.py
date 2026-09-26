@@ -161,6 +161,7 @@ class InputHub:
         from .glove import GloveDecoder
         self.glove = GloveDecoder(self.cfg.mapping.get("glove_profile"))    # Hand Glove, read in parallel
         self.glove_owns = False                    # True while a glove link drives the creature directly
+        self.td = {"seen": -1e9, "fps": 0.0}       # TouchDesigner heartbeat (/myrmex/td/alive f fps)
         self.stats = {"notes": 0, "osc_packets": 0, "midi_events": 0, "last_note": -1e9, "errors": []}
         if start:
             self.start()
@@ -348,6 +349,9 @@ class InputHub:
             return None
         if k == "osc":
             addr, v = d["address"], float(d["value"])
+            if addr == "/myrmex/td/alive":                       # TouchDesigner is there (and how fast)
+                self.td = {"seen": time.perf_counter(), "fps": v}
+                return None
             if self.glove.feed_osc(addr, v, ev.t):
                 return None
             target = self.cfg.mapping["osc"].get(addr)

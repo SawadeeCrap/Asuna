@@ -72,5 +72,14 @@ def main():
             return None
         bpy.app.timers.register(look, first_interval=1.0)
 
+        def syphon():                      # the take's picture for TouchDesigner (MYRMEX_SYPHON)
+            from myrmex_blender import syphon_out
+            st = syphon_out.from_env()
+            if st is not None:
+                print("Myrmex: Syphon", "ON:" if st.get("on") else "failed:", st.get("name") or st.get("error"),
+                      flush=True)
+            return None
+        bpy.app.timers.register(syphon, first_interval=2.0)
+
 
 main()

@@ -55,6 +55,7 @@ class LiveConfig:
     backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial) | polyalloy (Mimetic Polyalloy)
     creature: dict = field(default_factory=dict)
     glove: dict = field(default_factory=dict)       # Hand Glove link (preset, intensity, profile, ...)
+    touch: dict = field(default_factory=dict)       # TouchDesigner link (realtime/touch.py: enabled, host, fx ...)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
 
@@ -170,6 +171,8 @@ class LiveSession:
         self.inputs = InputHub(cfg.inputs, self.clock, start=start_inputs)
         from .glove import GloveLink
         self.glove = GloveLink(cfg.glove)
+        from .touch import TouchBridge
+        self.touch = TouchBridge(cfg.touch)               # computed always (takes keep it), sent when enabled
         if cfg.glove.get("profile"):
             self.inputs.glove.profile = dict(cfg.glove["profile"])
         if cfg.camera and cfg.backend in FLYING:
@@ -232,6 +235,16 @@ class LiveSession:
             if self.sink is not None:
                 self.sink.send(fr, now)
             self.last_frame = fr
+            from types import SimpleNamespace
+            body = SimpleNamespace(com=np.asarray(fr.subject_pos, float), glow=0.0,
+                                   arousal=float(self.engine.drives.arousal), surface=0.0, instability=0.0,
+                                   heading=float(fr.heading), pos=None, rms=0.9,
+                                   morphology=str(self.engine.section), behavior=str(self.engine.behavior_name))
+            self.touch.tick(now, dt=1.0 / cfg.out_rate, st=st, notes=notes, state=body,
+                            events=[e.type.upper() for e in res.events], cam=self.camera.state if self.camera
+                            else None, controls=self.inputs.controls, variant="humanoid",
+                            texts={"organism": "humanoid", "regime": str(self.engine.section),
+                                   "intent": str(self.engine.behavior_name)})
         if self.recorder is not None and t + 1e-9 >= self.next_rec:
             self.next_rec += 1.0 / cfg.record_fps
             ch = {"beat": st.beat, "bpm": st.bpm, "hold": float(self.hold), "playing": float(st.playing),
@@ -315,10 +328,16 @@ class LiveSession:
                     self.camera.impact(1.0, t, reframe=True)
                 elif name in self.AERIAL_SUGGEST:
                     self.camera.suggest(self.AERIAL_SUGGEST[name], t)
+        cs = self.camera.state if self.camera is not None else None
+        self.touch.tick(now, dt=dt, st=st, inp=self.creature.engine.inp, notes=notes, state=s,
+                        events=[e[1] for e in self.creature.fresh], cam=cs, controls=self.inputs.controls,
+                        variant=self.creature.variant,
+                        texts={"organism": self.creature.variant, "regime": s.morphology, "intent": s.behavior,
+                               "shot": cs.kind if cs is not None else ""})
         due = t + 1e-9 >= self.next_rec
         if due:
             self.next_rec += 1.0 / cfg.record_fps
-        self.creature.record(due, st, self.camera.state if self.camera is not None else None)
+        self.creature.record(due, st, cs, td=self.touch.values)
         if t + 1e-9 < self.next_send:
             return None
         self.next_send = max(self.next_send + 1.0 / cfg.out_rate, t)
@@ -457,6 +476,7 @@ class LiveSession:
         self.clock.close()
         if self.sink is not None:
             self.sink.close()
+        self.touch.close()
         return self.save_take()
 
     def save_take(self) -> str | None:
@@ -484,6 +504,9 @@ class LiveSession:
             "glove": {"present": self.glove.state.present, "rate": round(self.inputs.glove.rate, 1),
                       "preset": self.glove.cfg["preset"]},
             "osc_packets": self.inputs.stats["osc_packets"], "sent": self.sink.sent if self.sink else 0,
+            "td": {"enabled": bool(self.touch.cfg.get("enabled")), "sent": self.touch.sent,
+                   "connected": time.perf_counter() - self.inputs.td["seen"] < 2.5,
+                   "fps": round(float(self.inputs.td["fps"]), 1), "error": self.touch.last_error},
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),
             "max_tick_ms": round(self.stats["max_tick_ms"], 2), "overruns": self.stats["overruns"],
             "errors": self.inputs.stats["errors"] + ([self.clock.link_error] if self.clock.link_error else []) +

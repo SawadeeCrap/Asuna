@@ -7,6 +7,7 @@ as ``MYRMEX_REPLY {json}``.  Only switched on when the app starts Blender (``MYR
     {"cmd": "ping"}
     {"cmd": "save_look", "path": ".../looks/cyber_hive/Neon.blend", "kind": "cyber_hive", "id": 3}
     {"cmd": "load_look", "path": ".../looks/cyber_hive/Neon.blend" | "", "kind": "cyber_hive", "keep": true}
+    {"cmd": "syphon", "on": true, "name": "Myrmex", "width": 1280, "height": 720, "fps": 60, "alpha": false}
 """
 from __future__ import annotations
 
@@ -89,6 +90,12 @@ def handle(cmd: dict) -> dict:
                 raise ValueError(f"Blender shows {kind}, not {want}")
             path = looks.save_look(bpy.context, path=cmd.get("path") or None, name=cmd.get("name") or None)
             out.update(ok=True, kind=kind, path=path)
+        elif name == "syphon":                             # the picture for TouchDesigner
+            from . import syphon_out
+            st = syphon_out.configure(cmd)
+            out.update(ok=not st.get("error"), **st)
+            if st.get("error"):
+                out["error"] = st["error"]
         elif name == "load_look":
             kind = cmd.get("kind") or looks.look_kind()
             kind = {"creature": "nanomaterial"}.get(kind, kind)

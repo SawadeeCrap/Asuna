@@ -18,6 +18,9 @@ SHOTS = ["auto", "front_dolly", "front_low", "three_quarter", "side_track", "rea
 REMOTE_SCRIPT_SRC = os.path.join(REPO, "ableton", "remote_script", "Myrmex")
 REMOTE_SCRIPTS_DIR = os.path.expanduser("~/Music/Ableton/User Library/Remote Scripts")
 AUTOSTART = os.path.join(REPO, "blender", "scripts", "live_autostart.py")
+TD_SCRIPT = os.path.join(REPO, "touchdesigner", "myrmex_td.py")              # builds the TD network
+TD_HOME = os.path.expanduser("~/Myrmex/touchdesigner")
+TD_PROJECT = os.path.join(TD_HOME, "Myrmex_FX.toe")                           # saved by the script
 PREPARE = os.path.join(REPO, "blender", "scripts", "prepare_character.py")
 OPEN_TAKE = os.path.join(REPO, "blender", "scripts", "open_take.py")
 CREATURE_BACKENDS = ("creature", "polyalloy", "colony", "hive", "osseous", "osseous_colony", "osseous_hive",
@@ -73,6 +76,67 @@ def look_file(backend_or_variant: str, chosen: dict | None = None) -> str:
     return p if os.path.exists(p) else ""
 
 
+def td_settings(s: AppSettings) -> dict:
+    """The TouchDesigner link settings with every default filled in (the app keeps them in s.td)."""
+    from ..realtime.touch import DEFAULTS, FX_DEFAULTS
+    d = dict(DEFAULTS)
+    d.update({k: v for k, v in (s.td or {}).items() if k in DEFAULTS})
+    d["fx"] = {**FX_DEFAULTS, **((s.td or {}).get("fx") or {})}
+    return d
+
+
+def syphon_config(s: AppSettings) -> dict:
+    """What Blender's Syphon picture should be (the "syphon" control command / MYRMEX_SYPHON)."""
+    d = td_settings(s)
+    try:
+        w, h = (int(x) for x in str(d.get("syphon_size", "1280x720")).lower().split("x"))
+    except ValueError:
+        w, h = 1280, 720
+    return {"on": bool(d["enabled"] and d["syphon"]), "name": d.get("syphon_name") or "Myrmex", "width": w,
+            "height": h, "fps": int(d.get("syphon_fps", 60)), "alpha": bool(d.get("alpha", False))}
+
+
+def td_env(s: AppSettings) -> dict:
+    """Environment for a Blender Myrmex opens: the Syphon picture, and the TD channels of a played take."""
+    import json
+    d = td_settings(s)
+    if not d["enabled"]:
+        return {}
+    env = {"MYRMEX_TD": json.dumps({"host": d["host"], "port": int(d["port"])})}
+    sy = syphon_config(s)
+    if sy["on"]:
+        env["MYRMEX_SYPHON"] = json.dumps(sy)
+    return env
+
+
+def install_td_files() -> str:
+    """Copy the TD network builder next to the user's TD project; returns its path."""
+    os.makedirs(TD_HOME, exist_ok=True)
+    dst = os.path.join(TD_HOME, os.path.basename(TD_SCRIPT))
+    shutil.copy2(TD_SCRIPT, dst)
+    return dst
+
+
+def td_build_command(path: str | None = None) -> str:
+    """The one line to paste into TouchDesigner's Textport."""
+    return f"exec(open({(path or os.path.join(TD_HOME, os.path.basename(TD_SCRIPT)))!r}).read())"
+
+
+def find_touchdesigner() -> str | None:
+    for base in ("/Applications", os.path.expanduser("~/Applications")):
+        for app in sorted(glob.glob(os.path.join(base, "TouchDesigner*.app")), reverse=True):
+            return app
+    return None
+
+
+def open_touchdesigner_command(project: str | None = None) -> list[str] | None:
+    app = find_touchdesigner()
+    if app is None and sys.platform != "darwin":
+        return None
+    cmd = ["open", "-a", app or "TouchDesigner"]
+    return cmd + ([project] if project and os.path.exists(project) else [])
+
+
 class EngineController:
     """Owns the LiveSession (it runs in its own thread inside the app process)."""
 
@@ -104,7 +168,7 @@ class EngineController:
             cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
                              camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs,
-                             glove=dict(s.glove or {}))
+                             glove=dict(s.glove or {}), touch=td_settings(s))
             self.session = LiveSession(cfg)
             self.session.start()
         except Exception as e:
@@ -165,6 +229,11 @@ class EngineController:
         if self.session is not None:
             self.session.glove.configure(**kw)
 
+    def td_config(self, **kw) -> None:
+        """Change the TouchDesigner link live (effects, recording, the output window ...)."""
+        if self.session is not None:
+            self.session.touch.configure(**kw)
+
     def glove_calibrate(self) -> dict:
         return self.session.glove.state.calibrate() if self.session is not None else {}
 
@@ -219,9 +288,11 @@ def find_blender(hint: str = "") -> str | None:
 
 
 def blender_live_command(blender: str, character: str, pose_port: int, backend: str = "humanoid",
-                         keep_settings: bool = True, looks: dict | None = None) -> tuple[list[str], dict]:
+                         keep_settings: bool = True, looks: dict | None = None,
+                         extra_env: dict | None = None) -> tuple[list[str], dict]:
     env = dict(os.environ, MYRMEX_POSE_PORT=str(pose_port), MYRMEX_ENGINE_MODE="EXTERNAL", MYRMEX_MODE=backend,
                MYRMEX_KEEP_SETTINGS="1" if keep_settings else "0", MYRMEX_LOOKS=looks_dir(), MYRMEX_CONTROL="stdin")
+    env.update(extra_env or {})
     if backend in CREATURE_BACKENDS:           # the chosen look, or a scene built from scratch
         look = look_file(backend, looks)
         return [blender] + ([look] if look else []) + ["--python", AUTOSTART], env

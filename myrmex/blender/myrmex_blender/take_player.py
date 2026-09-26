@@ -27,6 +27,9 @@ def attach(scene: bpy.types.Scene, take, frame_start: int, fps: int) -> None:
     for k in ("members", "bkind"):                                   # Bionic line: the recorded structure
         if k in take.d:
             d[k] = take.resampled(k, fps).astype(np.float32)
+    if "td" in take.d and "td_names" in take.d:                      # what TouchDesigner saw live
+        d["td"] = take.resampled("td", fps).astype(np.float32)
+        d["td_names"] = [str(n) for n in take.d["td_names"]]
     if "light" in d:
         d["light"] /= 255.0
     if "heading" in take.d:
@@ -61,6 +64,9 @@ def apply(scene: bpy.types.Scene) -> None:
     style = _P.get("style", 0)
     f = int(np.clip(scene.frame_current - _P["start"], 0, _P["n"] - 1))
     pos = d["pos"][f].astype(float)
+    if "td" in d and not bpy.app.background:                   # TouchDesigner follows the take
+        from . import td_out
+        td_out.send(d["td_names"], d["td"][f])
     if style >= 8 and "members" in d:                # Bionic line: struts / panels / vessels / liquid / truss
         from .creature import CreatureView
         view = _P.get("view")
