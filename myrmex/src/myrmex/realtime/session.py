@@ -51,7 +51,8 @@ class LiveConfig:
     engine: dict = field(default_factory=dict)
     camera: bool = True
     auto_hold: bool = True                  # stand and pose when the music stops
-    record: str | None = None               # directory for recorded takes
+    record: str | None = None               # folder for recorded takes (REC / STOP: rec_start, rec_stop)
+    rec_on_start: bool = True               # recording starts with the engine (the app records with REC instead)
     backend: str = "humanoid"               # humanoid | creature (Black Nanomaterial) | polyalloy (Mimetic Polyalloy)
     creature: dict = field(default_factory=dict)
     glove: dict = field(default_factory=dict)       # Hand Glove link (preset, intensity, profile, ...)
@@ -121,33 +122,33 @@ class LiveSession:
             from ..creature.config import CreatureConfig
             if cfg.backend == "polyalloy":
                 from ..creature.polyalloy import PolyalloyConfig
-                self.creature = CreatureBackend(PolyalloyConfig(seed=cfg.seed), record=bool(cfg.record),
+                self.creature = CreatureBackend(PolyalloyConfig(seed=cfg.seed), record=False,
                                                 variant="polyalloy")
             elif cfg.backend == "colony":
                 from ..creature.colony import ColonyConfig
-                self.creature = CreatureBackend(ColonyConfig(seed=cfg.seed), record=bool(cfg.record), variant="colony")
+                self.creature = CreatureBackend(ColonyConfig(seed=cfg.seed), record=False, variant="colony")
             elif cfg.backend == "hive":
                 from ..creature.hive import HiveConfig
-                self.creature = CreatureBackend(HiveConfig(seed=cfg.seed), record=bool(cfg.record), variant="hive")
+                self.creature = CreatureBackend(HiveConfig(seed=cfg.seed), record=False, variant="hive")
             elif cfg.backend.startswith("osseous"):             # the bony line (v5-v7)
                 from ..creature.osseous import VARIANTS
-                self.creature = CreatureBackend(VARIANTS[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                self.creature = CreatureBackend(VARIANTS[cfg.backend][1](seed=cfg.seed), record=False,
                                                 variant=cfg.backend)
             elif cfg.backend == "cyber_hive":                    # v8: white nanomaterial, light lines
                 from ..creature.cyber import VARIANTS as CYBER
-                self.creature = CreatureBackend(CYBER[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                self.creature = CreatureBackend(CYBER[cfg.backend][1](seed=cfg.seed), record=False,
                                                 variant=cfg.backend)
             elif cfg.backend in ("swarm", "spear", "cloud", "blade", "crawler"):     # v9-v13: the Mimetic line
                 from ..creature.mimetic import VARIANTS as MIMETIC
-                self.creature = CreatureBackend(MIMETIC[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                self.creature = CreatureBackend(MIMETIC[cfg.backend][1](seed=cfg.seed), record=False,
                                                 variant=cfg.backend)
             elif cfg.backend in ("tensor", "fold", "arbor", "ferro", "truss"):       # v14-v18: the Bionic line
                 from ..creature.bionic import VARIANTS as BIONIC
-                self.creature = CreatureBackend(BIONIC[cfg.backend][1](seed=cfg.seed), record=bool(cfg.record),
+                self.creature = CreatureBackend(BIONIC[cfg.backend][1](seed=cfg.seed), record=False,
                                                 variant=cfg.backend)
             else:
                 extra = {k: v for k, v in cfg.creature.items() if k in ("variation", "stage_radius")}
-                self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=bool(cfg.record))
+                self.creature = CreatureBackend(CreatureConfig(seed=cfg.seed, **extra), record=False)
             self.plan, self.names, self.rig_id = None, [], 0
             self.core = self.motor = self.engine = None
             height = CreatureBackend.height
@@ -188,8 +189,13 @@ class LiveSession:
         self.t = 0.0
         self.seq = 0
         self.next_send = 0.0
-        self.recorder = Recorder(self.names, cfg.record_fps) if cfg.record and self.creature is None else None
+        self.recorder = None                              # the humanoid's take being recorded
         self.next_rec = 0.0
+        # The take (REC / STOP): on, when it started (engine time, wall clock), engine time lost to stalls (made up
+        # by holding frames: the take keeps real time and the song), takes being written, the last one saved.
+        self.rec = {"on": False, "t0": 0.0, "started": 0.0, "pad": 0.0, "saving": 0, "last": None, "last_s": 0.0,
+                    "error": None}
+        self._reserved: set = set()
         self.style_idx = None
         self._hold_notes: list = []
         self.last_state: ClockState | None = None
@@ -207,7 +213,9 @@ class LiveSession:
         self.stats = {"ticks": 0, "overruns": 0, "max_tick_ms": 0.0, "mean_tick_ms": 0.0}
         self._thread: threading.Thread | None = None
         self._running = False
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()                     # (REC / STOP can come from inside a step: a MIDI pad)
+        if cfg.record and cfg.rec_on_start:
+            self._rec_begin()
 
     # ------------------------------------------------------------------ one step
     def step(self, now: float) -> PoseFrame | None:
@@ -251,6 +259,7 @@ class LiveSession:
             self.last_frame = fr
         if self.recorder is not None and t + 1e-9 >= self.next_rec:
             self.next_rec += 1.0 / cfg.record_fps
+            self.recorder.hold(self._rec_hold())
             ch = {"beat": st.beat, "bpm": st.bpm, "hold": float(self.hold), "playing": float(st.playing),
                   "song_beat": st.song_beat if st.song_beat is not None else float("nan"),
                   "wall": now - self.t0}
@@ -341,6 +350,8 @@ class LiveSession:
         due = t + 1e-9 >= self.next_rec
         if due:
             self.next_rec += 1.0 / cfg.record_fps
+            if self.rec["on"]:
+                self.creature.hold_take(self._rec_hold())
         fxv = self.fx.frame(self.touch.values, self.inputs.controls)
         self.creature.record(due, st, cs, td=self.touch.values, fx=fxv)
         if t + 1e-9 < self.next_send:
@@ -372,7 +383,9 @@ class LiveSession:
         if self.creature is not None:
             self.creature.controls(c)
             for name, _ in self.inputs.take_triggers():
-                if name.startswith("camera") and self.camera is not None:
+                if name == "take" or name.startswith("take:"):
+                    self._take_trigger(name)
+                elif name.startswith("camera") and self.camera is not None:
                     self.camera.request_cut(name.split(":", 1)[1] if ":" in name else None)
                 else:
                     self.creature.trigger(name)
@@ -407,7 +420,9 @@ class LiveSession:
                 self.style_idx = idx
                 self.motor.set_style(styles[idx])
         for name, _ in self.inputs.take_triggers():
-            if name == "camera" and self.camera is not None:
+            if name == "take" or name.startswith("take:"):
+                self._take_trigger(name)
+            elif name == "camera" and self.camera is not None:
                 self.camera.request_cut()
             elif name.startswith("camera:") and self.camera is not None:
                 self.camera.request_cut(name.split(":", 1)[1])
@@ -470,6 +485,8 @@ class LiveSession:
             self.stats["max_tick_ms"] = max(self.stats["max_tick_ms"], el)
             nxt += dt
             if now - nxt > 0.25:              # fell far behind (debugger, sleep): resync, don't spiral
+                if self.rec["on"]:
+                    self.rec["pad"] += now - nxt  # (the take holds its last frame for the time lost)
                 nxt = now
                 self.stats["overruns"] += 1
 
@@ -483,20 +500,119 @@ class LiveSession:
         if self.sink is not None:
             self.sink.close()
         self.touch.close()
-        return self.save_take()
+        return self.rec_stop()                            # a take still being recorded is saved
+
+    # ------------------------------------------------------------------ takes: REC / STOP
+    def rec_start(self) -> bool:
+        """REC: a new take from now on (False: already recording, or no takes folder)."""
+        with self.lock:
+            return self._rec_begin()
+
+    def rec_stop(self, background: bool = False) -> str | None:
+        """STOP: the take ends now and is saved -> its file (None: nothing was recorded).  ``background``: a
+        thread writes it (the engine and the app keep going); ``rec_status`` tells when it is there."""
+        with self.lock:
+            job = self._rec_end()
+        if job is None:
+            return None
+        if background:
+            threading.Thread(target=self._rec_write, args=(job,), name="myrmex-take", daemon=False).start()
+            return job["path"]
+        return self._rec_write(job)
 
     def save_take(self) -> str | None:
+        """Stop recording and save the take (scripts and tests; the app uses REC / STOP)."""
+        return self.rec_stop()
+
+    def rec_status(self) -> dict:
+        n = 0
+        if self.rec["on"]:
+            n = len(self.creature.frames or []) if self.creature is not None else \
+                (len(self.recorder._deltas) if self.recorder is not None else 0)
+        return {"on": self.rec["on"], "frames": n, "seconds": n / self.cfg.record_fps, "saving": self.rec["saving"] > 0,
+                "last": self.rec["last"], "last_seconds": self.rec["last_s"], "folder": self.cfg.record,
+                "error": self.rec["error"]}
+
+    def _take_trigger(self, name: str) -> None:
+        """A pad / an OSC message: take (toggle), take:start, take:stop."""
+        want = {"take:start": True, "take:stop": False}.get(name, not self.rec["on"])
+        if want:
+            self._rec_begin()
+        else:
+            self.rec_stop(background=True)
+
+    def _rec_begin(self) -> bool:
+        if self.rec["on"] or not self.cfg.record:
+            return False
         if self.creature is not None:
-            return self.creature.save_take(self.cfg.record, self.cfg.record_fps) if self.cfg.record else None
-        if self.recorder is None or not self.cfg.record or not self.recorder._deltas:
+            self.creature.start_take()
+        else:
+            self.recorder = Recorder(self.names, self.cfg.record_fps)
+        self.next_rec = self.t + 1.0 / self.cfg.record_fps   # frames at REC + 1/fps ... STOP: exactly its length
+        self.rec.update(on=True, t0=self.t, started=time.time(), pad=0.0, error=None)
+        return True
+
+    def _rec_hold(self) -> int:
+        """Frames to hold for engine time lost to stalls (the take stays in real time)."""
+        n = int(self.rec["pad"] * self.cfg.record_fps)
+        self.rec["pad"] -= n / self.cfg.record_fps
+        return n
+
+    def _take_path(self, name: str) -> str:
+        path = os.path.join(self.cfg.record, name)
+        k = 2
+        while os.path.exists(path) or path in self._reserved:
+            path = os.path.join(self.cfg.record, f"{name[:-4]}_{k}.npz")
+            k += 1
+        self._reserved.add(path)
+        return path
+
+    def _rec_end(self) -> dict | None:
+        """(Under the lock.)  Recording stops -> what to write, or None."""
+        if not self.rec["on"]:
             return None
-        os.makedirs(self.cfg.record, exist_ok=True)
-        path = os.path.join(self.cfg.record, time.strftime("take_%Y%m%d_%H%M%S"))
-        perf = self.recorder.build({"generator": "myrmex.live", "seed": self.cfg.seed, "height": self.plan.height,
-                                    "heading0": float(self.motor.psi0), "body_plan": self.plan.rig.body_plan,
-                                    "behavior_log": self.engine.log, "sections": []})
-        perf.save(path + ".npz")
-        return path + ".npz"
+        self.rec["on"] = False
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.rec["started"]))
+        fps = self.cfg.record_fps
+        if self.creature is not None:
+            take = self.creature.end_take()
+            if take is None:
+                return None
+            job = {"take": take, "n": len(take["frames"]), "fps": fps,
+                   "path": self._take_path(f"{self.creature.variant}_take_{stamp}.npz")}
+        else:
+            rec, self.recorder = self.recorder, None
+            if rec is None or not rec._deltas:
+                return None
+            meta = {"generator": "myrmex.live", "seed": self.cfg.seed, "height": self.plan.height,
+                    "heading0": float(self.motor.psi0), "body_plan": self.plan.rig.body_plan,
+                    "behavior_log": list(self.engine.log), "sections": []}
+            job = {"rec": rec, "meta": meta, "n": len(rec._deltas), "fps": fps,
+                   "path": self._take_path(f"take_{stamp}.npz")}
+        self.rec["saving"] += 1
+        return job
+
+    def _rec_write(self, job: dict) -> str | None:
+        path = job["path"]
+        try:
+            if "take" in job:
+                from ..creature.backend import write_take
+                write_take(path, job["take"], job["fps"])
+            else:                                         # (.npz + .json, under their names only when whole)
+                d = os.path.dirname(path) or "."
+                os.makedirs(d, exist_ok=True)
+                part = os.path.join(d, "." + os.path.basename(path)[:-4] + "_part")
+                job["rec"].build(job["meta"]).save(part + ".npz")
+                os.replace(part + ".json", path[:-4] + ".json")
+                os.replace(part + ".npz", path)
+            self.rec.update(last=path, last_s=job["n"] / job["fps"])
+            return path
+        except Exception as e:                            # (the app shows it)
+            self.rec["error"] = f"{type(e).__name__}: {e}"
+            return None
+        finally:
+            self.rec["saving"] -= 1
+            self._reserved.discard(path)
 
     def status(self) -> dict:
         st = self.last_state
@@ -513,6 +629,7 @@ class LiveSession:
             "td": {"enabled": bool(self.touch.cfg.get("enabled")), "sent": self.touch.sent,
                    "connected": time.perf_counter() - self.inputs.td["seen"] < 2.5,
                    "fps": round(float(self.inputs.td["fps"]), 1), "error": self.touch.last_error},
+            "rec": self.rec_status(),
             "fx": {"enabled": bool(self.fx.cfg.get("enabled")), "preset": self.fx.cfg.get("preset", ""),
                    "vertical": bool(self.fx.cfg.get("vertical")), "rack": dict(self.fx.cfg["rack"])},
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),

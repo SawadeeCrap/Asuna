@@ -215,6 +215,7 @@ class EngineController:
         self.s = settings
         self.log = log
         self.session = None
+        self.rec_last: dict = {}                          # the take recording as it was last seen
 
     @property
     def running(self) -> bool:
@@ -238,7 +239,7 @@ class EngineController:
             out = [f"127.0.0.1:{int(s.pose_port)}"] + [t.strip() for t in s.extra_targets.split(",") if t.strip()]
             cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
-                             camera=bool(s.camera), record=s.record_dir if s.record else None, inputs=inputs,
+                             camera=bool(s.camera), record=takes_dir(s), rec_on_start=False, inputs=inputs,
                              glove=dict(s.glove or {}), touch=td_settings(s), fx=fx_engine(s))
             self.session = LiveSession(cfg)
             self.session.start()
@@ -263,9 +264,14 @@ class EngineController:
     def stop(self) -> None:
         if self.session is None:
             return
-        path = self.session.stop()
+        path = self.session.stop()                        # (a take still being recorded is saved)
+        self.rec_last = dict(self.session.rec_status())
         self.session = None
-        self.log("engine stopped" + (f" - take saved: {path}" if path else ""))
+        if path:
+            self.log(f"engine stopped - the take being recorded is saved: {os.path.basename(path)} "
+                     f"({fmt_seconds(self.rec_last.get('last_seconds', 0.0))})")
+        else:
+            self.log("engine stopped")
 
     def restart(self) -> bool:
         self.stop()
@@ -329,8 +335,18 @@ class EngineController:
         snap["events"] = [f"{g} → {e.lower()}" for _, g, e in self.session.glove.last_events[-4:]]
         return snap
 
-    def save_take(self) -> str | None:
-        return self.session.save_take() if self.session is not None else None
+    # ------------------------------------------------------------------ takes: REC / STOP
+    def rec_start(self) -> bool:
+        return self.session.rec_start() if self.session is not None else False
+
+    def rec_stop(self) -> str | None:
+        """STOP: the take is written in the background (rec_status: saving, then last)."""
+        return self.session.rec_stop(background=True) if self.session is not None else None
+
+    def rec_status(self) -> dict:
+        if self.session is not None:
+            self.rec_last = dict(self.session.rec_status())
+        return self.rec_last
 
     def status(self) -> dict:
         if self.session is None:
@@ -407,9 +423,63 @@ def take_command(blender: str, take: str, character: str = "", audio: str = "", 
     return cmd
 
 
+def takes_dir(s: AppSettings) -> str:
+    return os.path.expanduser(s.record_dir or os.path.join(characters_dir(), "takes"))
+
+
+def list_takes(folder: str) -> list[str]:
+    """Every take in the folder, newest first."""
+    files = glob.glob(os.path.join(os.path.expanduser(folder or ""), "*take_*.npz"))
+    return sorted(files, key=os.path.getmtime, reverse=True)
+
+
 def last_take(folder: str) -> str:
-    files = sorted(glob.glob(os.path.join(os.path.expanduser(folder or ""), "*take_*.npz")), key=os.path.getmtime)
-    return files[-1] if files else ""
+    files = list_takes(folder)
+    return files[0] if files else ""
+
+
+def take_videos(take: str) -> list[str]:
+    """The videos rendered from a take (next to it), newest first."""
+    files = glob.glob(glob.escape(os.path.splitext(take)[0]) + "_*.mp4")
+    return sorted(files, key=os.path.getmtime, reverse=True)
+
+
+_INFO: dict = {}
+
+
+def take_info(path: str) -> dict:
+    """{"frames", "fps", "seconds", "variant"} of a take (read once per file version)."""
+    import json
+
+    import numpy as np
+    try:
+        key = (path, os.path.getmtime(path))
+    except OSError:
+        return {}
+    if key in _INFO:
+        return _INFO[key]
+    info = {"frames": 0, "fps": 30.0, "seconds": 0.0, "variant": take_variant(path) or "humanoid"}
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            if "t" in z.files:                              # an organism's take
+                info["frames"] = int(len(z["t"]))
+                info["fps"] = float(z["fps"]) if "fps" in z.files else 30.0
+            else:                                           # a humanoid's: the frame rate is in its .json
+                ch = next((k for k in z.files if k.startswith("ch__")), None)
+                info["frames"] = int(len(z[ch])) if ch else int(z["deltas"].shape[0])
+                with open(os.path.splitext(path)[0] + ".json", encoding="utf-8") as f:
+                    info["fps"] = float(json.load(f).get("fps", 30.0))
+    except (OSError, ValueError, KeyError):
+        return {}
+    info["seconds"] = info["frames"] / max(1.0, info["fps"])
+    _INFO[key] = info
+    return info
+
+
+def fmt_seconds(sec: float) -> str:
+    """12.4 -> "0:12.4", 75 -> "1:15.0"."""
+    sec = max(0.0, float(sec))
+    return f"{int(sec // 60)}:{sec % 60:04.1f}"
 
 
 def prepare_command(blender: str, glb: str, out: str, height: float, material: str, smooth: int) -> list[str]:

@@ -88,6 +88,14 @@ class Recorder:
             lst.extend([lst[-1] if lst else ""] * (n - 1 - len(lst)))
             lst.append(str(v))
 
+    def hold(self, n: int) -> None:
+        """The last frame holds ``n`` more frames (the engine stalled: the take keeps real time)."""
+        if n <= 0 or not self._deltas:
+            return
+        for _ in range(int(n)):
+            self.add(self._deltas[-1], {k: v[-1] for k, v in self._channels.items() if v},
+                     {k: v[-1] for k, v in self._labels.items() if v})
+
     def event(self, time: float, kind: str, **data) -> None:
         self.events.append({"time": float(time), "type": kind, **data})
 

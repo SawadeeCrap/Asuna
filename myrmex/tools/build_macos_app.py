@@ -407,6 +407,8 @@ def build(cache: str, out: str, pip: list[str], python312: str | None) -> str:
         "LSApplicationCategoryType": "public.app-category.music",
         "NSMicrophoneUsageDescription": "Myrmex listens to the music input to animate the character.",
         "NSAppleEventsUsageDescription": "Myrmex opens your character in Blender.",
+        # No App Nap: the engine keeps its 120 Hz beat (and takes their real time) behind Blender and Live.
+        "NSAppSleepDisabled": True,
     }
     if icon:
         info["CFBundleIconFile"] = "Myrmex.icns"

@@ -26,7 +26,8 @@ from . import controllers as C
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
-                           "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug"] +
+                           "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug",
+                           "take", "take:start", "take:stop"] +
            [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +
                                                                   CYBER_EVENTS + MIMETIC_EVENTS + BIONIC_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"] +

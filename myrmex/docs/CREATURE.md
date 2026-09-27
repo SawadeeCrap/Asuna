@@ -264,14 +264,19 @@ again by itself; *Start Live* also works in organism scenes (no armature needed)
 
 # Takes → video (all organisms, and the humanoid)
 
-1. *Camera & Output* → tick **Record**, play your set, stop the engine (or *Save take now*).
-   A take stores the body every frame, the live camera and the song position.
+1. **REC** starts a take and **STOP** ends and saves it. The take holds only what happened in between: the engine keeps running and nothing records by itself. Ways to press it:
+   - the red button on the app's left rail (on every page);
+   - the big button on the *Takes* page;
+   - ⌘R;
+   - a MIDI pad mapped to `take` (`take:start` and `take:stop` also work) on the MIDI page.
+
+   If REC is pressed while the engine is stopped, the engine starts. Stopping the engine while recording saves the take.
+
+   A take stores the body every frame, the live camera and the song position. It stays in real time: if the engine ever stalls, the take holds the last frame, so the song stays in sync.
 2. Export the track from Ableton **from bar 1** and pick it as *Song for renders*.
-3. **Open last take in Blender** - the scene is rebuilt as ordinary animation (metaball keyframes,
-   strut lattice as a Point Cache, obstacles, lights, one camera per shot + markers, the song lined up
-   by the recorded song position).  Change the look if you like, then *Myrmex → Render Video*
-   (or F12 / Render Animation).  Or **Render last take → .mp4** renders in the background (H.264 + AAC,
-   next to the take; sizes 1920×1080, 1080×1920 for reels, square, 4K).
+3. The *Takes* page lists every take with its length. The selected one (the newest by default) is what the buttons use:
+   - **Open in Blender** rebuilds the scene as ordinary animation: metaball keyframes, strut lattice as a Point Cache, obstacles, lights, one camera per shot plus markers, and the song lined up by the recorded song position. Change the look if you like, then *Myrmex → Render Video* (or F12 / Render Animation).
+   - **Render → .mp4** renders in the background (H.264 + AAC, next to the take; sizes 1920×1080, 1080×1920 for reels, square, 4K). The video is exactly as long as the take, and the log shows its length and frame count before the render starts.
 4. In Blender: *Myrmex* panel → *Takes → video* → **Import Take** works for any take
    (`nanomaterial_take_*`, `polyalloy_take_*`, `colony_take_*`, `hive_take_*`, humanoid `take_*` with the
    character's .blend open).  Hive takes also write `*_swarm.pc2` (the nanomachines) next to the take.

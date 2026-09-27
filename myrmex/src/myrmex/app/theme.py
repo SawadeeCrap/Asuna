@@ -59,6 +59,18 @@ QPushButton#primary:hover { background: %(accent_h)s; border-color: %(accent_h)s
 QPushButton#primary:pressed { background: %(accent_p)s; border-color: %(accent_p)s; }
 QPushButton#primary[running="true"] { background: %(card)s; color: %(text)s; border: 1px solid %(border2)s; }
 QPushButton#primary[running="true"]:hover { background: %(hover)s; }
+QPushButton#rec { background: transparent; border: 1px solid %(border2)s; border-radius: 19px; padding: 0;
+                  min-height: 0; color: %(err)s; font-size: 17px; }
+QPushButton#rec:hover { background: %(hover)s; border-color: %(err)s; }
+QPushButton#rec[recording="true"] { background: %(err)s; border-color: %(err)s; color: #ffffff; font-size: 13px; }
+QLabel#rectime { color: %(err)s; font-size: 10px; font-weight: 600; }
+QPushButton#recbig { background: %(card)s; border: 1px solid %(err)s; color: %(err)s; border-radius: 10px;
+                     font-weight: 600; padding: 8px 18px; }
+QPushButton#recbig:hover { background: %(hover)s; }
+QPushButton#recbig[recording="true"] { background: %(err)s; color: #ffffff; }
+QListWidget#takes { background: %(field)s; border: 1px solid %(border)s; border-radius: 8px; padding: 4px; }
+QListWidget#takes::item { padding: 6px 8px; border-radius: 6px; }
+QListWidget#takes::item:selected { background: %(navsel)s; color: %(text)s; }
 QPushButton#pill { background: transparent; border: 1px solid %(border2)s; border-radius: 10px;
                    padding: 2px 10px; min-height: 14px; font-size: 11px; color: %(text3)s; }
 QPushButton#pill:checked { color: %(accent)s; border-color: %(accent)s; background: %(tint)s; }

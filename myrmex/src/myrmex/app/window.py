@@ -37,6 +37,7 @@ from . import icons
 from . import tabs as T
 from . import theme
 from . import fx_tab as FT
+from . import takes_tab as TK
 from . import touch_tab as TT
 from .settings import AppSettings, characters_dir
 
@@ -169,6 +170,7 @@ class MainWindow(QMainWindow):
         self.dot.setFixedSize(10, 10)
         self.lbl_engine = QLabel("Engine stopped")           # (not shown: the dot's tooltip)
         self.lbl_engine.setObjectName("enginestate")
+        sv.addWidget(TK.rec_rail(self))                    # REC / STOP a take, from every page
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.dot)
@@ -187,7 +189,7 @@ class MainWindow(QMainWindow):
                     "Camera": self._camera_tab, "Glove": lambda: T.glove_tab(self), "Inputs": self._inputs_tab,
                     "FX": lambda: FT.fx_tab(self), "TouchDesigner": lambda: TT.td_tab(self),
                     "MIDI": lambda: T.midi_tab(self),
-                    "Takes": self._output_tab, "Log": lambda: self.logbox}
+                    "Takes": lambda: TK.takes_tab(self), "Log": lambda: self.logbox}
         self.page_index = {}
         for name, subtitle in self.PAGES:
             actions = [self.btn_blender, self.btn_engine] if name == "Live" else []
@@ -551,80 +553,6 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         return w
 
-    def _output_tab(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        box = QGroupBox("Pose stream (to Blender / other renderers)")
-        form = QFormLayout(box)
-        self.spin_pose = QSpinBox()
-        self.spin_pose.setRange(1024, 65535)
-        self.spin_pose.setValue(int(self.s.pose_port))
-        form.addRow("Pose port", self.spin_pose)
-        self.spin_fps = QSpinBox()
-        self.spin_fps.setRange(15, 240)
-        self.spin_fps.setValue(int(self.s.out_fps))
-        form.addRow("Poses per second", self.spin_fps)
-        self.ed_targets = QLineEdit(self.s.extra_targets)
-        self.ed_targets.setPlaceholderText("extra targets, e.g. 192.168.1.20:9101")
-        form.addRow("Also send to", self.ed_targets)
-        v.addWidget(box)
-        box = QGroupBox("Recording (for final renders)")
-        form = QFormLayout(box)
-        self.chk_record = QCheckBox("Record the performance (saved when the engine stops)")
-        self.chk_record.setChecked(self.s.record)
-        form.addRow(self.chk_record)
-        row = QHBoxLayout()
-        self.ed_rec = QLineEdit(self.s.record_dir)
-        b = QPushButton("…")
-        b.clicked.connect(lambda: self._pick_dir(self.ed_rec))
-        row.addWidget(self.ed_rec, 1)
-        row.addWidget(b)
-        form.addRow("Takes folder", row)
-        b = QPushButton("Save take now")
-        b.clicked.connect(self._save_take)
-        form.addRow(b)
-        row = QHBoxLayout()
-        self.ed_song = QLineEdit(self.s.take_audio)
-        self.ed_song.setPlaceholderText("the track exported from Ableton (from bar 1) — lined up automatically")
-        b = QPushButton("…")
-        b.clicked.connect(lambda: self._pick_file(self.ed_song, "Song", "Audio (*.wav *.aif *.aiff *.mp3 *.flac)"))
-        row.addWidget(self.ed_song, 1)
-        row.addWidget(b)
-        form.addRow("Song for renders", row)
-        row = QHBoxLayout()
-        self.cmb_rsize = QComboBox()
-        self.cmb_rsize.addItems(["1920x1080", "1080x1920", "1080x1080", "3840x2160", "1280x720"])
-        self.cmb_rsize.setCurrentText(self.s.render_size)
-        self.cmb_rquality = QComboBox()
-        for label, key in (("Draft (EEVEE fast)", "eevee_preview"), ("Final (EEVEE)", "eevee"),
-                           ("Cinema (Cycles, slow)", "cycles")):
-            self.cmb_rquality.addItem(label, key)
-        self.cmb_rquality.setCurrentIndex(max(0, self.cmb_rquality.findData(self.s.render_quality)))
-        self.cmb_rquality.setEnabled(not self.s.keep_blender_settings)
-        self.cmb_rquality.setToolTip("Used when 'Keep my Blender settings' (Character page) is off")
-        row.addWidget(self.cmb_rsize)
-        row.addWidget(self.cmb_rquality, 1)
-        form.addRow("Video", row)
-        row = QHBoxLayout()
-        for label, render, choose in (("Open last take in Blender", False, False), ("Render last take → .mp4", True, False),
-                                      ("Choose take…", False, True)):
-            b = QPushButton(label)
-            b.clicked.connect(lambda _=False, r=render, c=choose: self.open_take(r, c))
-            row.addWidget(b)
-        form.addRow(row)
-        self.chk_autostart = QCheckBox("Start the engine when the app starts")
-        self.chk_autostart.setChecked(self.s.start_engine_on_launch)
-        form.addRow(self.chk_autostart)
-        v.addWidget(box)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        apply = QPushButton("Apply (restart engine)")
-        apply.clicked.connect(self.apply_and_restart)
-        row.addWidget(apply)
-        v.addLayout(row)
-        v.addStretch(1)
-        return w
-
     # ================================================================== actions
     def log(self, msg: str) -> None:
         self.logbox.appendPlainText(time.strftime("%H:%M:%S  ") + msg)
@@ -649,7 +577,6 @@ class MainWindow(QMainWindow):
         s.pose_port = int(self.spin_pose.value())
         s.out_fps = float(self.spin_fps.value())
         s.extra_targets = self.ed_targets.text().strip()
-        s.record = self.chk_record.isChecked()
         s.record_dir = self.ed_rec.text().strip() or s.record_dir
         s.start_engine_on_launch = self.chk_autostart.isChecked()
         s.style = self.cmb_style.currentText()
@@ -719,10 +646,6 @@ class MainWindow(QMainWindow):
     def _camera_cut(self) -> None:
         shot = self.cmb_shot.currentText()
         self.engine.trigger("camera" if shot == "auto" else f"camera:{shot}")
-
-    def _save_take(self) -> None:
-        path = self.engine.save_take()
-        self.log(f"take saved: {path}" if path else "no take: enable recording and restart the engine")
 
     # ------------------------------------------------------------------ looks (saved in / loaded into Blender)
     def _fill_looks(self) -> None:
@@ -949,12 +872,16 @@ class MainWindow(QMainWindow):
         if not blender:
             QMessageBox.warning(self, "Myrmex", "Blender not found. Install Blender 5.2 or set its path on the Character tab.")
             return
-        take = C.last_take(self.s.record_dir)
+        rec = self.engine.rec_status()
+        if not choose and (rec.get("on") or rec.get("saving")):
+            self.log("! a take is " + ("being recorded: STOP it first" if rec.get("on") else "being saved: a moment…"))
+            return
+        take = "" if choose else (TK.selected_take(self) or C.last_take(C.takes_dir(self.s)))
         if choose or not take:
-            take = QFileDialog.getOpenFileName(self, "Take", os.path.expanduser(self.s.record_dir or "~"),
-                                               "Takes (*.npz)")[0]
+            take = QFileDialog.getOpenFileName(self, "Take", C.takes_dir(self.s), "Takes (*.npz)")[0]
         if not take:
             return
+        info = C.take_info(take)
         cmd = C.take_command(blender, take, self.s.character, self.s.take_audio, render, self.s.render_size,
                              self.s.render_quality, self.s.keep_blender_settings, self.s.looks)
         p = QProcess(self)
@@ -975,8 +902,11 @@ class MainWindow(QMainWindow):
         p.start(cmd[0], cmd[1:])
         self.take_procs = [q for q in getattr(self, "take_procs", []) if q.state() != QProcess.ProcessState.NotRunning]
         self.take_procs.append(p)
-        self.log(("rendering " if render else "opening ") + os.path.basename(take) +
-                 (" (video next to the take)" if render else " in Blender"))
+        length = (f" · {C.fmt_seconds(info['seconds'])} = {info['frames']} frames at {info['fps']:g} fps"
+                  if info else "")
+        self.log(("rendering " if render else "opening ") + os.path.basename(take) + length +
+                 (f" → {os.path.basename(os.path.splitext(take)[0])}_{self.s.render_size}.mp4 next to the take"
+                  if render else " in Blender"))
 
     def prepare_character(self) -> None:
         self._collect()
@@ -1029,6 +959,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ status
     def _refresh(self) -> None:
+        TK.refresh_rec(self)
         T.refresh_midi(self)
         if self.stack.currentIndex() == self.page_index.get("Glove"):
             T.refresh_glove(self)

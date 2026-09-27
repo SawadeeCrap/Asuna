@@ -6,7 +6,7 @@ Everything that can drive the creature ends up in three places:
   melody, harmony, texture, fx) - what the body reacts to;
 * **controls** (name -> 0..1) - macro knobs: ``energy``, ``stride``, ``sway``, ``style``,
   ``hold`` ...;
-* **triggers** (one-shots) - ``camera`` (next shot), ``pose``, ``flourish`` ...
+* **triggers** (one-shots) - ``camera`` (next shot), ``pose``, ``flourish``, ``take`` (REC / STOP) ...
 
 Routes (any combination):
 
@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
 }
 
 CONTROLS = ("energy", "stride", "sway", "style", "hold", "latency")
-TRIGGERS = ("camera", "pose", "flourish", "reset")
+TRIGGERS = ("camera", "pose", "flourish", "reset", "take")      # take: REC / STOP (take:start, take:stop)
 
 
 @dataclass
@@ -213,7 +213,7 @@ class InputHub:
             return
         if name in GROUPS:
             return
-        if name in TRIGGERS or name.startswith("pose:") or name.startswith("flourish:") or name.startswith("camera:"):
+        if name in TRIGGERS or name.startswith(("pose:", "flourish:", "camera:", "take:")):
             value = max(0.0, value)
             prev = self.controls.get("_trig_" + name, 0.0)
             if value > 0.5 >= prev:

@@ -140,30 +140,58 @@ class CreatureBackend:
                      bkind=float(s.bkind))
         self.frames.append(f)
 
-    def save_take(self, folder: str, fps: float = 30.0) -> str | None:
-        if not self.frames:
+    # ------------------------------------------------------------------ takes (REC / STOP)
+    def start_take(self) -> None:
+        """Record a new take from now on."""
+        self.frames, self.ev_log = [], []
+
+    def end_take(self) -> dict | None:
+        """Stop recording -> the take (frames, events and what its file needs), or None when it is empty."""
+        fr, ev = self.frames, self.ev_log
+        self.frames, self.ev_log = None, []
+        if not fr:
             return None
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, time.strftime(f"{self.variant}_take_%Y%m%d_%H%M%S.npz"))
-        fr = self.frames
-        keys = list(dict.fromkeys(k for f in fr for k in f))
-        data = {}
-        for k in keys:
-            v0 = next(f[k] for f in fr if k in f)          # e.g. the camera starts a few frames late
-            if isinstance(v0, str):
-                data[k] = np.array([f.get(k, "") for f in fr])
-            elif isinstance(v0, np.ndarray):
-                data[k] = np.stack([f[k] if k in f else np.zeros_like(v0) for f in fr])
-            else:
-                data[k] = np.array([f.get(k, np.nan) for f in fr], float)
-        ev = self.ev_log
-        if "td" in data:
-            from ..realtime.touch import CHANNELS
-            data["td_names"] = np.array(CHANNELS)
-        if "fx" in data:
-            from ..realtime.fx import CHANNELS as FX_CHANNELS
-            data["fx_names"] = np.array(FX_CHANNELS)
-        np.savez_compressed(path, **data, kind=self.state.kind, anchor=self.state.anchor, seed=self.engine.cfg.seed,
-                            variant=self.variant, fps=float(fps), format="myrmex-creature-take-2",
+        return {"frames": fr, "events": ev, "kind": self.state.kind, "anchor": self.state.anchor,
+                "seed": self.engine.cfg.seed, "variant": self.variant}
+
+    def hold_take(self, n: int) -> None:
+        """The engine stalled: the last frame holds ``n`` frames, so the take keeps real time (and the song)."""
+        if self.frames and n > 0:
+            self.frames.extend([self.frames[-1]] * int(n))
+
+    def save_take(self, folder: str, fps: float = 30.0) -> str | None:
+        """Stop recording and save the take in ``folder`` -> its file."""
+        take = self.end_take()
+        if take is None:
+            return None
+        return write_take(os.path.join(folder, time.strftime(f"{self.variant}_take_%Y%m%d_%H%M%S.npz")), take, fps)
+
+
+def write_take(path: str, take: dict, fps: float = 30.0) -> str:
+    """A take (``CreatureBackend.end_take``) -> its .npz file."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fr = take["frames"]
+    keys = list(dict.fromkeys(k for f in fr for k in f))
+    data = {}
+    for k in keys:
+        v0 = next(f[k] for f in fr if k in f)          # e.g. the camera starts a few frames late
+        if isinstance(v0, str):
+            data[k] = np.array([f.get(k, "") for f in fr])
+        elif isinstance(v0, np.ndarray):
+            data[k] = np.stack([f[k] if k in f else np.zeros_like(v0) for f in fr])
+        else:
+            data[k] = np.array([f.get(k, np.nan) for f in fr], float)
+    ev = take["events"]
+    if "td" in data:
+        from ..realtime.touch import CHANNELS
+        data["td_names"] = np.array(CHANNELS)
+    if "fx" in data:
+        from ..realtime.fx import CHANNELS as FX_CHANNELS
+        data["fx_names"] = np.array(FX_CHANNELS)
+    tmp = os.path.join(os.path.dirname(path) or ".", "." + os.path.basename(path) + ".part")
+    with open(tmp, "wb") as f:                             # (never a half-written take under its name)
+        np.savez_compressed(f, **data, kind=take["kind"], anchor=take["anchor"], seed=take["seed"],
+                            variant=take["variant"], fps=float(fps), format="myrmex-creature-take-2",
                             ev_t=np.array([e[0] for e in ev], float), ev_name=np.array([str(e[1]) for e in ev]))
-        return path
+    os.replace(tmp, path)
+    return path
