@@ -78,6 +78,7 @@ class AppSettings:
     glove: dict = field(default_factory=dict)          # Hand Glove link: preset, intensity, mapping, neutral pose
     looks: dict = field(default_factory=dict)          # organism -> the chosen saved look ("" = default studio)
     td: dict = field(default_factory=dict)             # TouchDesigner link (realtime/touch.py DEFAULTS)
+    brain: dict = field(default_factory=dict)          # the morphology brain (brain/core.py BrainConfig; off)
     fx: dict = field(default_factory=dict)             # Myrmex FX in Blender (realtime/fx.py DEFAULTS)
     stage: dict = field(default_factory=dict)          # the light on every organism, black behind (controllers.STAGE)
     window: str = ""                                   # the window's place and size (Qt geometry, base64)

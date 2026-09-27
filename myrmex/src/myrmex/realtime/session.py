@@ -58,6 +58,7 @@ class LiveConfig:
     glove: dict = field(default_factory=dict)       # Hand Glove link (preset, intensity, profile, ...)
     touch: dict = field(default_factory=dict)       # TouchDesigner link (realtime/touch.py: enabled, host, fx ...)
     fx: dict = field(default_factory=dict)          # Myrmex FX drawn by Blender (realtime/fx.py: preset, rack ...)
+    brain: dict = field(default_factory=dict)       # the morphology brain (brain/core.py BrainConfig; off by default)
     record_fps: float = 30.0
     inputs: InputConfig = field(default_factory=InputConfig)
 
@@ -214,6 +215,12 @@ class LiveSession:
         self._thread: threading.Thread | None = None
         self._running = False
         self.lock = threading.RLock()                     # (REC / STOP can come from inside a step: a MIDI pad)
+        self.brain = None                                 # the morphology brain (an isolated worker), when on
+        if self.creature is not None:
+            from ..brain.core import with_env
+            cfg.brain = with_env(cfg.brain)               # (MYRMEX_BRAIN_* flags, once)
+            if cfg.brain.get("enabled"):
+                self.set_brain(cfg.brain)
         if cfg.record and cfg.rec_on_start:
             self._rec_begin()
 
@@ -331,6 +338,9 @@ class LiveSession:
         if self.camera is not None:
             self.camera.extra = cam_mod
         s = self.creature.tick(t, dt, notes, st)
+        if self.brain is not None:                        # microseconds, unless a snapshot is due (~1 Hz)
+            self.brain.tick(now, t, s, self.glove.state, ctrl, self.inputs.controls,
+                            f"{'playing' if st.playing else 'silent'}, {st.bpm:.0f} BPM")
         aerial = self.creature.variant in FLYING
         if aerial and self.camera is not None:
             for _, name, _a in self.creature.fresh:
@@ -385,6 +395,8 @@ class LiveSession:
             for name, _ in self.inputs.take_triggers():
                 if name == "take" or name.startswith("take:"):
                     self._take_trigger(name)
+                elif name == "brain" or name.startswith("brain:"):
+                    self._brain_trigger(name)
                 elif name.startswith("camera") and self.camera is not None:
                     self.camera.request_cut(name.split(":", 1)[1] if ":" in name else None)
                 else:
@@ -500,7 +512,38 @@ class LiveSession:
         if self.sink is not None:
             self.sink.close()
         self.touch.close()
+        if self.brain is not None:
+            self.brain.close()
         return self.rec_stop()                            # a take still being recorded is saved
+
+    # ------------------------------------------------------------------ the morphology brain
+    def set_brain(self, d: dict | None) -> dict:
+        """Switch the morphology brain on / off or change it (live).  -> its status."""
+        if self.creature is None:
+            return {"enabled": False, "error": "organisms only"}
+        from ..brain.core import BrainConfig
+        old, d = dict(self.cfg.brain or {}), dict(d or {})
+        merged = {**old, **d, "controls": {**(old.get("controls") or {}), **(d.get("controls") or {})}}
+        cfg = BrainConfig.from_dict(merged)
+        self.cfg.brain = cfg.to_dict()
+        if self.brain is None:
+            if not cfg.enabled:
+                return {"enabled": False}
+            from ..brain.worker import BrainLink
+            link = BrainLink(cfg, self.creature.engine, self.creature.variant)   # (starting it takes the engine
+            with self.lock:                                                       #  no time: outside the lock)
+                self.brain = link
+        else:
+            with self.lock:
+                self.brain.configure(cfg)
+        return self.brain.status()
+
+    def _brain_trigger(self, name: str) -> None:
+        """A pad: brain (on / off), brain:good / brain:bad (the performer's verdict on the current form)."""
+        if name == "brain":
+            self.set_brain({"enabled": not (self.brain is not None and self.brain.cfg.enabled)})
+        elif self.brain is not None and name in ("brain:good", "brain:bad"):
+            self.brain.mark(name == "brain:good")
 
     # ------------------------------------------------------------------ takes: REC / STOP
     def rec_start(self) -> bool:
@@ -630,6 +673,7 @@ class LiveSession:
                    "connected": time.perf_counter() - self.inputs.td["seen"] < 2.5,
                    "fps": round(float(self.inputs.td["fps"]), 1), "error": self.touch.last_error},
             "rec": self.rec_status(),
+            "brain": self.brain.status() if self.brain is not None else {"enabled": False},
             "fx": {"enabled": bool(self.fx.cfg.get("enabled")), "preset": self.fx.cfg.get("preset", ""),
                    "vertical": bool(self.fx.cfg.get("vertical")), "rack": dict(self.fx.cfg["rack"])},
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),

@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
 }
 
 CONTROLS = ("energy", "stride", "sway", "style", "hold", "latency")
-TRIGGERS = ("camera", "pose", "flourish", "reset", "take")      # take: REC / STOP (take:start, take:stop)
+TRIGGERS = ("camera", "pose", "flourish", "reset", "take", "brain")   # take: REC / STOP; brain: on / off, brain:good
 
 
 @dataclass
@@ -213,7 +213,7 @@ class InputHub:
             return
         if name in GROUPS:
             return
-        if name in TRIGGERS or name.startswith(("pose:", "flourish:", "camera:", "take:")):
+        if name in TRIGGERS or name.startswith(("pose:", "flourish:", "camera:", "take:", "brain:")):
             value = max(0.0, value)
             prev = self.controls.get("_trig_" + name, 0.0)
             if value > 0.5 >= prev:

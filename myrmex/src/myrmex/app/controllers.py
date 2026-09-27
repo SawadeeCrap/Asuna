@@ -125,6 +125,15 @@ def fx_settings(s: AppSettings) -> dict:
     return d
 
 
+def brain_settings(s: AppSettings) -> dict:
+    """The morphology brain's settings (s.brain) with every default filled in - off unless switched on; its
+    decision log goes to ~/Myrmex/brain."""
+    from ..brain.core import BrainConfig
+    d = BrainConfig.from_dict(s.brain or {}).to_dict()
+    d["log_dir"] = d["log_dir"] or os.path.join(characters_dir(), "brain")
+    return d
+
+
 def fx_engine(s: AppSettings) -> dict:
     """What the engine's FX rack takes (LiveConfig.fx)."""
     d = fx_settings(s)
@@ -240,7 +249,8 @@ class EngineController:
             cfg = LiveConfig(rig=None if creature else s.rig_json, backend=s.backend, seed=int(s.seed), out=out, out_rate=float(s.out_fps), clock=s.clock,
                              bpm=float(s.bpm), link=bool(s.link), latency=float(s.latency_ms) / 1000.0, style=s.style,
                              camera=bool(s.camera), record=takes_dir(s), rec_on_start=False, inputs=inputs,
-                             glove=dict(s.glove or {}), touch=td_settings(s), fx=fx_engine(s))
+                             glove=dict(s.glove or {}), touch=td_settings(s), fx=fx_engine(s),
+                             brain=brain_settings(s))
             self.session = LiveSession(cfg)
             self.session.start()
         except Exception as e:
@@ -315,6 +325,12 @@ class EngineController:
         """Change Myrmex FX live (it travels to Blender with every frame)."""
         if self.session is not None:
             self.session.fx.configure(**kw)
+
+    def brain_config(self, d: dict) -> dict:
+        """Switch the morphology brain on / off or change it, live (the engine keeps running)."""
+        if self.session is None:
+            return {}
+        return self.session.set_brain(d)
 
     def glove_calibrate(self) -> dict:
         return self.session.glove.state.calibrate() if self.session is not None else {}

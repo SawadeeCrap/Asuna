@@ -1041,6 +1041,8 @@ class MainWindow(QMainWindow):
             TT.refresh_td(self)
         if self.stack.currentIndex() == self.page_index.get("FX"):
             FT.refresh_fx(self)
+        if self.stack.currentIndex() == self.page_index.get("Creature"):
+            T.refresh_brain(self)
         st = self.engine.status()
         tok = theme.T
         if not st:

@@ -28,7 +28,9 @@ from . import responsive as R
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug",
-                           "take", "take:start", "take:stop"] +
+                           "take", "take:start", "take:stop", "brain", "brain:good", "brain:bad",
+                           "brain_autonomy", "brain_novelty", "brain_persistence", "brain_mutation", "brain_return",
+                           "brain_memory", "brain_rate"] +
            [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +
                                                                   CYBER_EVENTS + MIMETIC_EVENTS + BIONIC_EVENTS] +
            ["kick", "snare", "hats", "perc", "bass", "melody", "harmony", "fx"] +
@@ -62,6 +64,7 @@ def creature_tab(win) -> QWidget:
         cells.append(R.pair(p.replace("_", " "), kb, label_width=96))
     lay.addWidget(R.grid_box(cells, min_cell=270, spacing=10, max_cols=2))
     v.addWidget(box)
+    v.addWidget(brain_group(win))
     box = QGroupBox("Reconfiguration events")
     lay = QVBoxLayout(box)
     buttons = []
@@ -103,6 +106,151 @@ def creature_tab(win) -> QWidget:
     v.addWidget(dbg)
     v.addStretch(1)
     return w
+
+
+# ---------------------------------------------------------------------------- the morphology brain
+BRAIN_CONTROLS = (("autonomy", "Autonomy", 0.5, "0 = you lead · 0.5 = shared · 1 = the organism leads"),
+                  ("novelty", "Novelty", 0.6, "how strongly it looks for forms it has not been"),
+                  ("persistence", "Persistence", 0.5, "how long it holds a form"),
+                  ("mutation", "Mutation", 0.4, "how far one change may go"),
+                  ("returns", "Returns", 0.5, "how readily it comes back to old forms"),
+                  ("memory", "Memory", 0.6, "how long forms stay familiar: 20 s … 6 min"))
+BRAIN_MODES = (("deterministic", "Built in"), ("kev_candidates", "Kev (local server)"))
+
+
+def brain_group(win) -> QGroupBox:
+    from PySide6.QtWidgets import QLineEdit
+    from .controllers import brain_settings
+    b = brain_settings(win.s)
+    box = QGroupBox("Morphology brain")
+    lay = QVBoxLayout(box)
+    note = QLabel("Keeps the organism exploring its forms instead of settling: it remembers what it has been, notices "
+                  "when it repeats itself, looks for forms it has not been, sometimes pushes a form further and, much "
+                  "later, comes back to an old one - changed. Your hand and MIDI still lead. It runs beside the engine "
+                  "in its own process and can never stall it. MIDI (MIDI page): pads brain, brain:good, brain:bad; "
+                  "CCs brain_autonomy … brain_memory, brain_rate.")
+    note.setWordWrap(True)
+    note.setProperty("muted", True)
+    lay.addWidget(note)
+    win.chk_brain = QCheckBox("On")
+    win.chk_brain.setChecked(bool(b["enabled"]))
+    win.chk_brain.toggled.connect(lambda on: _brain_set(win, enabled=bool(on)))
+    win.cmb_brain = QComboBox()
+    for key, label in BRAIN_MODES:
+        win.cmb_brain.addItem(label, key)
+    win.cmb_brain.setCurrentIndex(max(0, win.cmb_brain.findData(b["mode"])))
+    win.cmb_brain.setToolTip("Built in: candidates, novelty and memory, a deterministic arbiter (the default).\n"
+                             "Kev: the same candidates - a local Kev server chooses; below its confidence the "
+                             "built-in arbiter decides, and if Kev is slow or down it goes on without it.")
+    win.cmb_brain.currentIndexChanged.connect(lambda *_: _brain_set(win, mode=win.cmb_brain.currentData()))
+    lay.addWidget(R.grid_box([win.chk_brain, R.pair("decides", win.cmb_brain, label_width=60)], min_cell=160,
+                             spacing=10, max_cols=2))
+    cells = []
+    win.brain_sliders = {}
+    for key, label, default, tip in BRAIN_CONTROLS:
+        sl = QSlider(Qt.Orientation.Horizontal)
+        sl.setRange(0, 100)
+        sl.setValue(int(round(100 * b["controls"].get(key, default))))
+        sl.setToolTip(tip)
+        sl.valueChanged.connect(lambda val, k=key: _brain_set(win, **{k: val / 100.0}))
+        win.brain_sliders[key] = sl
+        cells.append(R.pair(label, sl, label_width=86))
+    rate = QDoubleSpinBox()
+    rate.setRange(0.25, 4.0)
+    rate.setSingleStep(0.25)
+    rate.setDecimals(2)
+    rate.setSuffix(" Hz")
+    rate.setValue(float(b["controls"].get("rate_hz", 1.0)))
+    rate.setToolTip("how often it looks (1 Hz: the body changes form over seconds; faster only costs more)")
+    rate.valueChanged.connect(lambda val: _brain_set(win, rate_hz=float(val)))
+    cells.append(R.pair("Looks", rate, label_width=86))
+    lay.addWidget(R.grid_box(cells, min_cell=250, spacing=10, max_cols=2))
+    win.txt_kev = QLineEdit(b["kev_url"] or "http://127.0.0.1:8009")
+    win.txt_kev.setToolTip("uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b --port 8009")
+    win.txt_kev.editingFinished.connect(lambda: _brain_set(win, kev_url=win.txt_kev.text().strip()))
+    chk = QPushButton("Check Kev")
+    chk.clicked.connect(lambda: _brain_check_kev(win))
+    good = QPushButton("Good form")
+    good.setToolTip("remember this form as a good one (it comes back more readily)")
+    good.clicked.connect(lambda: win.engine.trigger("brain:good"))
+    bad = QPushButton("Bad form")
+    bad.setToolTip("this form is not wanted (it is not brought back)")
+    bad.clicked.connect(lambda: win.engine.trigger("brain:bad"))
+    lay.addWidget(R.grid_box([R.pair("Kev", win.txt_kev, label_width=40), chk, good, bad], min_cell=130,
+                             spacing=8, max_cols=4))
+    win.lbl_brain = QLabel("off")
+    win.lbl_brain.setWordWrap(True)
+    win.lbl_brain.setProperty("muted", True)
+    lay.addWidget(win.lbl_brain)
+    return box
+
+
+def _brain_set(win, enabled=None, mode=None, kev_url=None, **controls) -> None:
+    b = win.s.brain = dict(win.s.brain or {})
+    d: dict = {}
+    if enabled is not None:
+        b["enabled"] = d["enabled"] = enabled
+    if mode is not None:
+        b["mode"] = d["mode"] = mode
+    if kev_url is not None:
+        b["kev_url"] = d["kev_url"] = kev_url
+    if controls:
+        b["controls"] = {**(b.get("controls") or {}), **controls}
+        d["controls"] = dict(controls)
+    if mode == "kev_candidates" and not b.get("kev_url"):
+        b["kev_url"] = d["kev_url"] = win.txt_kev.text().strip()
+    win.engine.brain_config(d)
+    refresh_brain(win)
+
+
+def _brain_check_kev(win) -> None:
+    from ..brain.kev_client import KevClient, KevError
+    url = win.txt_kev.text().strip()
+    try:
+        info = KevClient(url, timeout=1.5).models()
+        names = ", ".join(str(m.get("id", "?")) for m in info.get("data", [])[:3]) or "a model"
+        win.log(f"Kev at {url}: {names}")
+    except KevError as e:
+        win.log(f"! no Kev at {url}: {e}")
+
+
+def refresh_brain(win) -> None:
+    if not hasattr(win, "lbl_brain"):
+        return
+    st = (win.engine.status() or {}).get("brain") if win.engine.running else None
+    if st is None:
+        win.lbl_brain.setText("starts with the engine" if win.chk_brain.isChecked() else "off")
+        return
+    if bool(st.get("enabled")) != win.chk_brain.isChecked():        # (a MIDI pad switched it)
+        win.chk_brain.blockSignals(True)
+        win.chk_brain.setChecked(bool(st.get("enabled")))
+        win.chk_brain.blockSignals(False)
+        win.s.brain = {**(win.s.brain or {}), "enabled": bool(st.get("enabled"))}
+    if not st.get("enabled"):
+        win.lbl_brain.setText(st.get("error") or "off")
+        return
+    if st.get("gave_up"):
+        win.lbl_brain.setText(f"stopped after repeated failures ({st.get('error', '')}) - the organism goes on by "
+                              "itself; switch off and on to try again")
+        return
+    if not st.get("running"):
+        win.lbl_brain.setText("starting …" if not st.get("error") else f"restarting: {st['error']}")
+        return
+    last, mem, kev = st.get("last") or {}, st.get("memory") or {}, st.get("kev") or {}
+    parts = [f"running · {st.get('applied', 0)} changes"]
+    if last:
+        conf = last.get("confidence")
+        parts.append(f"last: {last.get('label', '')} [{last.get('source', '')}"
+                     + (f", confidence {conf:.2f}" if isinstance(conf, (int, float)) else "") + "]")
+    if mem:
+        parts.append(f"now {mem.get('current', '')} · {mem.get('forms_known', 0)} forms remembered"
+                     + (" · repeating itself" if mem.get("repeating") else ""))
+    if st.get("mode") == "kev_candidates":
+        parts.append(f"Kev: {kev.get('kev_calls', 0)} asked, {kev.get('kev_fail', 0)} failed, "
+                     f"{kev.get('kev_lowconf', 0)} unsure")
+    if st.get("rtt_ms") is not None:
+        parts.append(f"round trip {st['rtt_ms']:.0f} ms")
+    win.lbl_brain.setText(" · ".join(parts))
 
 
 def camera_group(win) -> QGroupBox:
