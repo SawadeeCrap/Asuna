@@ -196,7 +196,7 @@ def takes_tab(win) -> QWidget:
     lay.addWidget(note)
     v.addWidget(box)
     # --- where the poses go
-    box = QGroupBox("Pose stream (to Blender / other renderers)")
+    box = QGroupBox("Pose stream (to Blender)")
     form = QFormLayout(box)
     win.spin_pose = QSpinBox()
     win.spin_pose.setRange(1024, 65535)

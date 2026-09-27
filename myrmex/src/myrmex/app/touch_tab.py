@@ -5,11 +5,12 @@ import os
 
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from ..realtime.touch import FX, FX_DEFAULTS, PRESET_NAMES, PRESETS
 from . import controllers as C
+from . import responsive as R
 
 FX_LABELS = {"bloom": "Bloom", "trails": "Trails (echoes)", "chroma": "Chromatic aberration", "glitch": "Glitch",
              "warp": "Liquid warp", "shock": "Shockwaves", "kaleido": "Kaleidoscope", "edges": "Neon edges",
@@ -59,17 +60,15 @@ def td_tab(win) -> QWidget:
     form.addRow(row)
     host = QLineEdit(str(d["host"]))
     host.editingFinished.connect(lambda: _set(win, "host", host.text().strip() or "127.0.0.1"))
-    ports = QHBoxLayout()
+    cells = []
     for key, label in (("port", "data"), ("text_port", "text")):
         sp = QSpinBox()
         sp.setRange(1024, 65535)
         sp.setValue(int(d[key]))
         sp.valueChanged.connect(lambda val, k=key: _set(win, k, int(val)))
-        ports.addWidget(QLabel(label))
-        ports.addWidget(sp)
-    ports.addStretch(1)
+        cells.append(R.pair(label, sp))
     form.addRow("TouchDesigner at", host)
-    form.addRow("Ports", ports)
+    form.addRow("Ports", R.grid_box(cells, min_cell=120, spacing=10, max_cols=2))
     v.addWidget(box)
     # --- Blender's picture
     box = QGroupBox("Picture from Blender (Syphon)")
@@ -113,17 +112,17 @@ def td_tab(win) -> QWidget:
     top.addWidget(win.cmb_td_preset, 1)
     lay.addLayout(top)
     lay.addWidget(note)
-    grid = QGridLayout()
     win.td_sliders = {}
-    for i, k in enumerate(FX):
+    cells = []
+    for k in FX:
         sl = QSlider(Qt.Orientation.Horizontal)
         sl.setRange(0, 1000)
         sl.setValue(int(1000 * float(d["fx"].get(k, FX_DEFAULTS[k]))))
         sl.valueChanged.connect(lambda val, key=k: _fx(win, key, val / 1000.0))
         sl.setToolTip(f"MIDI: map a knob to td_{k}")
-        grid.addWidget(QLabel(FX_LABELS[k]), i // 2, (i % 2) * 2)
-        grid.addWidget(sl, i // 2, (i % 2) * 2 + 1)
+        cells.append(R.pair(FX_LABELS[k], sl, label_width=110))
         win.td_sliders[k] = sl
+    grid = R.grid_box(cells, min_cell=250, spacing=10, max_cols=2)
 
     def preset(*_):
         name = win.cmb_td_preset.currentData()
@@ -137,7 +136,7 @@ def td_tab(win) -> QWidget:
         win.s.save()
         win.engine.td_config(preset=name, fx=fx)
     win.cmb_td_preset.currentIndexChanged.connect(preset)
-    lay.addLayout(grid)
+    lay.addWidget(grid)
     v.addWidget(box)
     # --- output
     box = QGroupBox("Output")

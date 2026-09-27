@@ -80,6 +80,7 @@ class AppSettings:
     td: dict = field(default_factory=dict)             # TouchDesigner link (realtime/touch.py DEFAULTS)
     fx: dict = field(default_factory=dict)             # Myrmex FX in Blender (realtime/fx.py DEFAULTS)
     stage: dict = field(default_factory=dict)          # the light on every organism, black behind (controllers.STAGE)
+    window: str = ""                                   # the window's place and size (Qt geometry, base64)
 
     @classmethod
     def load(cls) -> "AppSettings":

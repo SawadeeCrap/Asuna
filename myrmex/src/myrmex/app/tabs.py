@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSlider, QSpinBox,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -23,6 +23,7 @@ BIONIC_EVENTS = ("LASH", "COIL", "UNFURL", "CLAP", "FURL", "BLOOM", "SPROUT", "S
                  "OVERLOAD")
 from ..realtime.midimap import CURVES, NOTE_MODES
 from . import controllers as C
+from . import responsive as R
 
 CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
@@ -52,20 +53,23 @@ def creature_tab(win) -> QWidget:
                        "altitude: v2–v4; swarm · armor · mechanism · hunt: v3–v4; architecture · pattern · nanoswarm · "
                        "memory: v4."))
     box = QGroupBox("Parameters")
-    grid = QGridLayout(box)
+    lay = QVBoxLayout(box)
     win.cknobs = {}
-    for i, p in enumerate(PARAMS):
+    cells = []
+    for p in PARAMS:
         kb = Knob(p, win.s.creature_params.get(p), win._creature_knob)
         win.cknobs[p] = kb
-        grid.addWidget(QLabel(p.replace("_", " ")), i // 2, (i % 2) * 2)
-        grid.addWidget(kb, i // 2, (i % 2) * 2 + 1)
+        cells.append(R.pair(p.replace("_", " "), kb, label_width=96))
+    lay.addWidget(R.grid_box(cells, min_cell=270, spacing=10, max_cols=2))
     v.addWidget(box)
     box = QGroupBox("Reconfiguration events")
-    grid = QGridLayout(box)
-    for i, e in enumerate(EVENTS):
+    lay = QVBoxLayout(box)
+    buttons = []
+    for e in EVENTS:
         b = QPushButton(e.replace("_", " ").title())
         b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
-        grid.addWidget(b, i // 3, i % 3)
+        buttons.append(b)
+    lay.addWidget(R.grid_box(buttons, min_cell=130, spacing=8, max_cols=3))
     v.addWidget(box)
     for title, note, events in (
             ("Physical events (v2–v13)", "the kick does one of these by itself (kick mode)", POLY_EVENTS),
@@ -82,15 +86,17 @@ def creature_tab(win) -> QWidget:
              ("LASH", "COIL", "UNFURL", "CLAP", "FURL", "BLOOM", "SPROUT", "SHED", "PULSE", "SPLIT", "SURGE", "CALM",
               "BLOW", "ANNEAL", "OVERLOAD"))):
         box = QGroupBox(title)
-        grid = QGridLayout(box)                               # wraps: the page stays narrow
+        lay = QVBoxLayout(box)                                # wraps: the page stays narrow
         lab = QLabel(note)
         lab.setWordWrap(True)
         lab.setProperty("muted", True)
-        grid.addWidget(lab, 0, 0, 1, 4)
-        for i, e in enumerate(events):
+        lay.addWidget(lab)
+        buttons = []
+        for e in events:
             b = QPushButton(e.title())
             b.clicked.connect(lambda _=False, n=e: win.engine.trigger(f"creature:{n.lower()}"))
-            grid.addWidget(b, 1 + i // 4, i % 4)
+            buttons.append(b)
+        lay.addWidget(R.grid_box(buttons, min_cell=110, spacing=8, max_cols=4))
         v.addWidget(box)
     dbg = QCheckBox("Debug: show the internal control network (nodes + links) in Blender")
     dbg.toggled.connect(lambda on: win.engine.control("creature_debug", 1.0 if on else 0.0))
@@ -101,22 +107,22 @@ def creature_tab(win) -> QWidget:
 
 def camera_group(win) -> QGroupBox:
     cc = win.s.camera_controls
-    box = QGroupBox("Camera control (keys 1–9 = shots, 0 = automatic)")
+    box = QGroupBox("Camera (keys 1–9: shots, 0: auto)")
     v = QVBoxLayout(box)
     win.cmb_cam_mode = QComboBox()
     win.cmb_cam_mode.addItems(["Automatic director", "Manual (hold the chosen shot)"])
     win.cmb_cam_mode.setCurrentIndex(1 if cc.get("cam_mode", 0.0) > 0.5 else 0)
     win.cmb_cam_mode.currentIndexChanged.connect(lambda i: win._cam_control("cam_mode", float(i)))
     v.addWidget(win.cmb_cam_mode)
-    grid = QGridLayout()
+    shots = []
     for i, k in enumerate(CAMERA_SHOTS):
         b = QPushButton(f"{i + 1}   {k.replace('_', ' ')}")
         b.setObjectName("shot")
         b.clicked.connect(lambda _=False, kind=k: win._pick_shot(kind))
-        grid.addWidget(b, i // 3, i % 3)
+        shots.append(b)
         QShortcut(QKeySequence(str(i + 1)), win, activated=lambda kind=k: win._pick_shot(kind))
     QShortcut(QKeySequence("0"), win, activated=lambda: win.cmb_cam_mode.setCurrentIndex(0))
-    v.addLayout(grid)
+    v.addWidget(R.grid_box(shots, min_cell=140, spacing=8, max_cols=3))
     form = QFormLayout()
     for key, label, default in (("cam_distance", "Distance", 0.2857), ("cam_height", "Height", 1 / 3),
                                 ("cam_orbit", "Orbit", 0.5), ("cam_lens", "Lens (0 = shot default)", 0.0),
@@ -311,17 +317,16 @@ def glove_tab(win) -> QWidget:
     lay = QVBoxLayout(box)
     win.lbl_glove = QLabel("waiting for the glove …")
     lay.addWidget(win.lbl_glove)
-    grid = QGridLayout()
     win.glove_bars = {}
-    for i, p in enumerate(PARAMS):
+    cells = []
+    for p in PARAMS:
         bar = QProgressBar()
         bar.setRange(0, 1000)
         bar.setTextVisible(False)
         bar.setFixedHeight(8)
-        grid.addWidget(QLabel(p), i % 6, (i // 6) * 2)
-        grid.addWidget(bar, i % 6, (i // 6) * 2 + 1)
+        cells.append(R.pair(p, bar, label_width=86))
         win.glove_bars[p] = bar
-    lay.addLayout(grid)
+    lay.addWidget(R.grid_box(cells, min_cell=200, spacing=10, max_cols=3))
     win.lbl_glove_ev = QLabel("")
     win.lbl_glove_ev.setProperty("muted", True)
     lay.addWidget(win.lbl_glove_ev)
@@ -368,7 +373,7 @@ def glove_tab(win) -> QWidget:
     form.addRow(b)
     v.addWidget(box)
 
-    box = QGroupBox("Link (which MIDI controls are the glove)")
+    box = QGroupBox("Glove link (MIDI)")
     lay = QVBoxLayout(box)
     lay.addWidget(QLabel("Myrmex reads the glove's MIDI port in parallel with your other programs. Auto-detect "
                          "takes the controls that stream, in the glove's order (thumb … z). If that is wrong: "

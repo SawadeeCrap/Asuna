@@ -25,11 +25,12 @@ import sys
 import time
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QSize, Qt, QTimer
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+                               QFrame,
+                               QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListView, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-                               QScrollArea,
+                               QScrollArea, QSizePolicy,
                                QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import controllers as C
@@ -37,6 +38,7 @@ from . import icons
 from . import tabs as T
 from . import theme
 from . import fx_tab as FT
+from . import responsive as R
 from . import takes_tab as TK
 from . import touch_tab as TT
 from .settings import AppSettings, characters_dir
@@ -96,8 +98,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.s = settings or AppSettings.load()
         self.setWindowTitle("Myrmex")
-        self.resize(900, 740)
-        self.setMinimumSize(720, 560)
+        self.resize(560, 860)                              # slim by default; any width down to a side panel
+        self.setMinimumSize(self.MIN_W, 460)
+        self._wide_w = 0                                   # the width before "narrow" (the rail's toggle)
         self.engine = C.EngineController(self.s, self.log)
         self.blender_proc: QProcess | None = None
         self.prepare_proc: QProcess | None = None
@@ -109,6 +112,9 @@ class MainWindow(QMainWindow):
         self.logbox.setMaximumBlockCount(4000)
         self.logbox.setFont(theme.mono_font(12))
         self._build_shell()
+        if self.s.window:                                  # where and how wide it was last time
+            from PySide6.QtCore import QByteArray
+            self.restoreGeometry(QByteArray.fromBase64(self.s.window.encode("ascii")))
         act = QAction("Quit", self)
         act.setShortcut("Ctrl+Q")
         act.triggered.connect(self.close)
@@ -117,6 +123,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._refresh)
         self.timer.start(100)
         self._refresh_devices()
+        R.wrap_labels(self.stack)                          # (the lines just filled in)
         if self.s.start_engine_on_launch:
             QTimer.singleShot(200, self.start_engine)
         if self.s.open_blender_on_start:
@@ -142,13 +149,13 @@ class MainWindow(QMainWindow):
         h.setSpacing(0)
         side = QWidget()                                   # a narrow rail of icons (names in the tooltips)
         side.setObjectName("sidebar")
-        side.setFixedWidth(64)
+        side.setFixedWidth(self.RAIL)
         sv = QVBoxLayout(side)
-        sv.setContentsMargins(0, 14, 0, 14)
+        sv.setContentsMargins(0, 14, 0, 12)
         sv.setSpacing(2)
         brand = QLabel()
         brand.setObjectName("brand")
-        brand.setPixmap(icons.logo(36))
+        brand.setPixmap(icons.logo(32))
         brand.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         brand.setToolTip("Myrmex — live character engine")
         sv.addWidget(brand)
@@ -160,7 +167,7 @@ class MainWindow(QMainWindow):
         self.nav.setMovement(QListView.Movement.Static)
         self.nav.setWrapping(False)
         self.nav.setIconSize(QSize(22, 22))
-        self.nav.setGridSize(QSize(64, 46))
+        self.nav.setGridSize(QSize(self.RAIL, 44))
         self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -171,6 +178,19 @@ class MainWindow(QMainWindow):
         self.lbl_engine = QLabel("Engine stopped")           # (not shown: the dot's tooltip)
         self.lbl_engine.setObjectName("enginestate")
         sv.addWidget(TK.rec_rail(self))                    # REC / STOP a take, from every page
+        self.btn_narrow = QPushButton("›‹")                # slim side panel <-> the width it had
+        self.btn_narrow.setObjectName("railbtn")
+        self.btn_narrow.setFixedSize(34, 24)
+        self.btn_narrow.setToolTip("Narrow window (⌘\\)")
+        self.btn_narrow.clicked.connect(self.toggle_narrow)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.btn_narrow)
+        row.addStretch(1)
+        sv.addLayout(row)
+        sv.addSpacing(6)
+        sc = QShortcut(QKeySequence("Ctrl+\\"), self)
+        sc.activated.connect(self.toggle_narrow)
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.dot)
@@ -191,15 +211,17 @@ class MainWindow(QMainWindow):
                     "MIDI": lambda: T.midi_tab(self),
                     "Takes": lambda: TK.takes_tab(self), "Log": lambda: self.logbox}
         self.page_index = {}
+        self._heads = []
         for name, subtitle in self.PAGES:
             actions = [self.btn_blender, self.btn_engine] if name == "Live" else []
             self.page_index[name] = self.stack.addWidget(self._page(name, subtitle, builders[name](), actions))
             it = QListWidgetItem(self.nav)
             it.setToolTip(f"{name} — {subtitle}")
             it.setData(Qt.ItemDataRole.UserRole, name)
-            it.setSizeHint(QSize(64, 46))
+            it.setSizeHint(QSize(self.RAIL, 44))
         self._nav_icons()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.currentRowChanged.connect(lambda i: R.wrap_labels(self.stack.widget(i)))   # (status lines)
         self.nav.setCurrentRow(0)
         self._polish()
 
@@ -209,19 +231,26 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(page)
         v.setContentsMargins(32, 26, 32, 20)
         v.setSpacing(14)
-        head = QHBoxLayout()
+        head = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         col = QVBoxLayout()
         col.setSpacing(2)
         t = QLabel(title)
         t.setObjectName("pagetitle")
         st = QLabel(subtitle)
         st.setObjectName("pagesub")
+        st.setWordWrap(True)
         col.addWidget(t)
         col.addWidget(st)
         head.addLayout(col, 1)
-        for a in actions:
-            head.addWidget(a, 0, Qt.AlignmentFlag.AlignVCenter)
+        if actions:
+            acts = QHBoxLayout()
+            acts.setSpacing(8)
+            for a in actions:
+                acts.addWidget(a, 0, Qt.AlignmentFlag.AlignVCenter)
+            head.addLayout(acts)
         v.addLayout(head)
+        page.setProperty("head", True)
+        self._heads.append((v, head))
         if isinstance(body, QPlainTextEdit):
             v.addWidget(body, 1)
             return page
@@ -254,7 +283,46 @@ class MainWindow(QMainWindow):
             if tbl is not None:
                 tbl.verticalHeader().setVisible(False)
                 tbl.setShowGrid(False)
+        R.adapt(self.stack)                                # every page reflows in a slim window
         self._engine_state(False)
+        self._apply_width()
+
+    MIN_W = 380                                            # (a side panel)
+    RAIL = 56
+    NARROW = 420
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        self._apply_width()
+
+    def _apply_width(self) -> None:
+        """Slim: tighter margins, the page's buttons under its title."""
+        w = self.width()
+        side = 10 if w < 440 else (14 if w < 640 else (22 if w < 820 else 32))
+        for v, head in getattr(self, "_heads", ()):
+            v.setContentsMargins(side, 22 if w < 640 else 26, side, 16 if w < 640 else 20)
+            want = QBoxLayout.Direction.TopToBottom if w < 600 else QBoxLayout.Direction.LeftToRight
+            if head.direction() != want:
+                head.setDirection(want)
+        if hasattr(self, "btn_narrow"):
+            narrow = w <= self.NARROW + 20
+            self.btn_narrow.setText("‹›" if narrow else "›‹")
+            self.btn_narrow.setToolTip(("Wider window" if narrow else "Narrow window") + " (⌘\\)")
+
+    def toggle_narrow(self) -> None:
+        """A slim side panel <-> the width it had (the edge nearest the screen's side stays put)."""
+        g = self.geometry()
+        if g.width() > self.NARROW + 20:
+            self._wide_w, new_w = g.width(), self.NARROW
+        else:
+            new_w = max(self._wide_w, 720) if self._wide_w else 720
+        scr = self.screen().availableGeometry() if self.screen() is not None else None
+        x = g.x()
+        if scr is not None:
+            if g.center().x() > scr.center().x():          # on the right: keep the right edge
+                x = g.right() + 1 - new_w
+            x = max(scr.left(), min(x, scr.right() + 1 - new_w))
+        self.setGeometry(x, g.y(), new_w, g.height())
 
     def _nav_icons(self) -> None:
         """(Re)paint the rail's icons in the current theme's colours."""
@@ -277,25 +345,30 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         # ---- status
         box = QGroupBox("What the character hears")
-        g = QGridLayout(box)
-        g.setHorizontalSpacing(18)
-        g.setVerticalSpacing(12)
+        bv = QVBoxLayout(box)
+        bv.setSpacing(12)
         self.st = {}
         items = [("clock", "Clock"), ("bpm", "Tempo"), ("beat", "Bar . beat"), ("transport", "Transport"),
                  ("state", "Character"), ("section", "Section"), ("behavior", "Doing"), ("camera", "Camera"),
                  ("notes", "Notes / s"), ("peers", "Link peers"), ("tick", "Engine tick"), ("sent", "Frames sent")]
-        for i, (k, label) in enumerate(items):
-            tile = QVBoxLayout()
-            tile.setSpacing(1)
+        tiles = []
+        for k, label in items:
+            tile = QWidget()
+            tv = QVBoxLayout(tile)
+            tv.setContentsMargins(0, 0, 0, 0)
+            tv.setSpacing(1)
             lab = QLabel(label)
             lab.setObjectName("statlabel")
             val = QLabel("–")
             val.setObjectName("statvalue")
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            tile.addWidget(lab)
-            tile.addWidget(val)
-            g.addLayout(tile, i // 4, i % 4)
+            val.setMinimumWidth(40)
+            val.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)   # (a long value: clipped)
+            tv.addWidget(lab)
+            tv.addWidget(val)
+            tiles.append(tile)
             self.st[k] = val
+        bv.addWidget(R.grid_box(tiles, min_cell=104, spacing=12, max_cols=4))    # 4 across, fewer when slim
         beats = QHBoxLayout()
         beats.setSpacing(8)
         self.beat_leds = []
@@ -305,11 +378,11 @@ class MainWindow(QMainWindow):
             beats.addWidget(led)
             self.beat_leds.append(led)
         beats.addStretch(1)
-        g.addLayout(beats, 3, 0, 1, 4)
+        bv.addLayout(beats)
         self._leds_off()
         v.addWidget(box)
         # ---- knobs
-        box = QGroupBox("Character (Auto = the music decides)")
+        box = QGroupBox("Character (Auto = music)")
         form = QFormLayout(box)
         self.cmb_style = QComboBox()
         self.cmb_style.addItems(C.STYLES)
@@ -328,17 +401,21 @@ class MainWindow(QMainWindow):
         v.addWidget(box)
         # ---- moves
         box = QGroupBox("Moves (one-shot)")
-        grid = QGridLayout(box)
-        for i, (label, name) in enumerate(MOVES):
+        mv = QVBoxLayout(box)
+        moves = []
+        for label, name in MOVES:
             b = QPushButton(label)
             b.clicked.connect(lambda _=False, n=name: self.engine.trigger(n))
-            grid.addWidget(b, i // 4, i % 4)
+            moves.append(b)
+        mv.addWidget(R.grid_box(moves, min_cell=120, spacing=8, max_cols=4))
         cam = QPushButton("Camera cut ▸")
         cam.clicked.connect(self._camera_cut)
         self.cmb_shot = QComboBox()
         self.cmb_shot.addItems(C.SHOTS)
-        grid.addWidget(cam, 2, 0)
-        grid.addWidget(self.cmb_shot, 2, 1)
+        row = QHBoxLayout()
+        row.addWidget(cam)
+        row.addWidget(self.cmb_shot, 1)
+        mv.addLayout(row)
         v.addWidget(box)
         v.addStretch(1)
         return w
@@ -355,13 +432,10 @@ class MainWindow(QMainWindow):
         self.chk_link = QCheckBox("Join Ableton Link (tempo + phase; enable LINK and Start Stop Sync in Live)")
         self.chk_link.setChecked(self.s.link)
         form.addRow(self.chk_link)
-        rs = QHBoxLayout()
         self.lbl_rs = QLabel()
-        b = QPushButton("Install / update Remote Script")
+        b = QPushButton("Install Remote Script")
         b.clicked.connect(self._install_rs)
-        rs.addWidget(self.lbl_rs, 1)
-        rs.addWidget(b)
-        form.addRow("Remote Script", rs)
+        form.addRow("Remote Script", R.grid_box([self.lbl_rs, b], min_cell=150, spacing=8, max_cols=2))
         form.addRow(QLabel("After installing: Live > Settings > Link, Tempo & MIDI > Control Surface: Myrmex.\n"
                            "It sends play/stop, tempo and the notes of playing MIDI clips (ahead of time).\n"
                            "A track named “Myrmex” with a Rack: its macros steer the character "
@@ -386,7 +460,7 @@ class MainWindow(QMainWindow):
         self.spin_lat.valueChanged.connect(lambda ms: (setattr(self.s, "latency_ms", ms), self.engine.set_latency(ms)))
         form.addRow("Latency compensation", self.spin_lat)
         v.addWidget(box)
-        box = QGroupBox("MIDI / OSC / audio (VCV Rack, controllers, audio-only sets)")
+        box = QGroupBox("MIDI · OSC · audio")
         form = QFormLayout(box)
         self.spin_osc = QSpinBox()
         self.spin_osc.setRange(1024, 65535)
@@ -510,7 +584,7 @@ class MainWindow(QMainWindow):
         self.cmb_backend.currentIndexChanged.connect(lambda *_: self._fill_looks())
         self._fill_looks()
         v.addWidget(box)
-        box = QGroupBox("New character from a Hunyuan3D GLB")
+        box = QGroupBox("New character (Hunyuan3D GLB)")
         form = QFormLayout(box)
         row = QHBoxLayout()
         self.ed_glb = QLineEdit()
@@ -533,7 +607,7 @@ class MainWindow(QMainWindow):
         self.spin_smooth.setRange(0, 30)
         self.spin_smooth.setValue(6)
         form.addRow("Surface smoothing", self.spin_smooth)
-        self.btn_prepare = QPushButton("Prepare character (auto-rig, ~1 min)")
+        self.btn_prepare = QPushButton("Prepare (auto-rig, ~1 min)")
         self.btn_prepare.clicked.connect(self.prepare_character)
         form.addRow(self.btn_prepare)
         v.addWidget(box)
@@ -934,7 +1008,7 @@ class MainWindow(QMainWindow):
 
     def _prepared(self, out: str, code: int) -> None:
         self.btn_prepare.setEnabled(True)
-        self.btn_prepare.setText("Prepare character (auto-rig, ~1 min)")
+        self.btn_prepare.setText("Prepare (auto-rig, ~1 min)")
         if code == 0 and os.path.exists(out):
             self.s.character = out
             self._fill_characters()
@@ -1012,6 +1086,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, ev) -> None:
         self._collect()
+        self.s.window = bytes(self.saveGeometry().toBase64()).decode("ascii")
         try:
             self.s.save()
         except OSError:

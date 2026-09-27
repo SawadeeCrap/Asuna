@@ -38,7 +38,7 @@ QLabel#enginestate { color: %(text2)s; font-size: 12px; }
 QLabel#badge { color: %(text2)s; background: %(hover)s; border-radius: 9px; padding: 2px 9px; font-size: 11px; }
 
 QListWidget#nav { background: transparent; border: none; padding: 0; }
-QListWidget#nav::item { color: %(text2)s; padding: 0; margin: 2px 9px; border-radius: 10px; }
+QListWidget#nav::item { color: %(text2)s; padding: 0; margin: 2px 8px; border-radius: 10px; }
 QListWidget#nav::item:hover { background: %(hover)s; color: %(text)s; }
 QListWidget#nav::item:selected { background: %(navsel)s; color: %(text)s; }
 
@@ -59,6 +59,9 @@ QPushButton#primary:hover { background: %(accent_h)s; border-color: %(accent_h)s
 QPushButton#primary:pressed { background: %(accent_p)s; border-color: %(accent_p)s; }
 QPushButton#primary[running="true"] { background: %(card)s; color: %(text)s; border: 1px solid %(border2)s; }
 QPushButton#primary[running="true"]:hover { background: %(hover)s; }
+QPushButton#railbtn { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0;
+                      min-height: 0; color: %(text3)s; font-size: 13px; }
+QPushButton#railbtn:hover { background: %(hover)s; color: %(text)s; }
 QPushButton#rec { background: transparent; border: 1px solid %(border2)s; border-radius: 19px; padding: 0;
                   min-height: 0; color: %(err)s; font-size: 17px; }
 QPushButton#rec:hover { background: %(hover)s; border-color: %(err)s; }

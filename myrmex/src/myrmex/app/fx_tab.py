@@ -4,11 +4,12 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QRadioButton, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+                               QLabel, QRadioButton, QSlider, QVBoxLayout, QWidget)
 
 from ..realtime.fx import DEFAULT_RACK, LABELS, PRESET_NAMES, RACK, rack_from_preset
 from . import controllers as C
+from . import responsive as R
 
 PRESET_NOTES = {
     "Afterimage": "the organism leaves copies of itself behind as it moves - made of what it is made of",
@@ -84,16 +85,17 @@ def fx_tab(win) -> QWidget:
     win.fx_sliders = {}
     for title, keys in GROUPS:
         box = QGroupBox(title)
-        grid = QGridLayout(box)
-        for i, k in enumerate(keys):
+        lay = QVBoxLayout(box)
+        cells = []
+        for k in keys:
             sl = QSlider(Qt.Orientation.Horizontal)
             sl.setRange(0, 1000)
             sl.setValue(int(1000 * float(d["rack"].get(k, DEFAULT_RACK[k]))))
             sl.valueChanged.connect(lambda val, key=k: _rack(win, key, val / 1000.0, custom=True))
             sl.setToolTip(f"MIDI: map a knob to fx_{k}")
-            grid.addWidget(QLabel(LABELS[k]), i // 2, (i % 2) * 2)
-            grid.addWidget(sl, i // 2, (i % 2) * 2 + 1)
+            cells.append(R.pair(LABELS[k], sl, label_width=120))
             win.fx_sliders[k] = sl
+        lay.addWidget(R.grid_box(cells, min_cell=260, spacing=10, max_cols=2))
         v.addWidget(box)
 
     def preset(*_):
@@ -131,7 +133,7 @@ def _stage_box(win) -> QGroupBox:
     """The light on the organism: the HDRI you like in Material Preview, on black - for every organism."""
     st = C.stage_settings(win.s)
     win.s.stage = st
-    box = QGroupBox("Light on the organism - the background stays black")
+    box = QGroupBox("Light (the background stays black)")
     form = QFormLayout(box)
     note = QLabel("The HDRI Blender's Material Preview lights with - here it lights the organism and shows in "
                   "its reflections, while the camera sees pure black: live view, FX, Syphon and renders, every "
