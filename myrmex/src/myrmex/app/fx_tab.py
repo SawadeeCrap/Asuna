@@ -1,9 +1,11 @@
 """The FX page: Myrmex FX drawn by Blender itself - the organism's afterimages, traces, echo and glow, on black."""
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QRadioButton, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
+                               QHBoxLayout, QLabel, QRadioButton, QSlider, QVBoxLayout, QWidget)
 
 from ..realtime.fx import DEFAULT_RACK, LABELS, PRESET_NAMES, RACK, rack_from_preset
 from . import controllers as C
@@ -77,6 +79,7 @@ def fx_tab(win) -> QWidget:
     rep.toggled.connect(lambda on: _set(win, "replay", on))
     form.addRow(rep)
     v.addWidget(box)
+    v.addWidget(_stage_box(win))
     # --- the sliders
     win.fx_sliders = {}
     for title, keys in GROUPS:
@@ -119,6 +122,128 @@ def fx_tab(win) -> QWidget:
     v.addWidget(win.lbl_fx)
     v.addStretch(1)
     return w
+
+
+FILE = "\x00file"                          # the "your own HDRI file…" item
+
+
+def _stage_box(win) -> QGroupBox:
+    """The light on the organism: the HDRI you like in Material Preview, on black - for every organism."""
+    st = C.stage_settings(win.s)
+    win.s.stage = st
+    box = QGroupBox("Light on the organism - the background stays black")
+    form = QFormLayout(box)
+    note = QLabel("The HDRI Blender's Material Preview lights with - here it lights the organism and shows in "
+                  "its reflections, while the camera sees pure black: live view, FX, Syphon and renders, every "
+                  "organism. In Blender: Myrmex sidebar > Myrmex Stage > Use This View's Lighting takes the light "
+                  "you set up in a view (its HDRI, strength, rotation) and brings it here.")
+    note.setWordWrap(True)
+    note.setProperty("muted", True)
+    form.addRow(note)
+    win.cmb_stage = QComboBox()
+    _fill_hdris(win, st["hdri"])
+    win.cmb_stage.currentIndexChanged.connect(lambda *_: _stage_hdri(win))
+    form.addRow("HDRI", win.cmb_stage)
+    win.stage_sliders = {}
+    for key, label, top, scale, fmt in (("strength", "Strength", 400, 100.0, "{:.2f}"),
+                                        ("rotation", "Rotation", 360, 1.0, "{:.0f}°")):
+        row = QHBoxLayout()
+        sl = QSlider(Qt.Orientation.Horizontal)
+        sl.setRange(0, top)
+        sl.setValue(int(round(min(top / scale, float(st[key])) * scale)))
+        val = QLabel(fmt.format(st[key]))
+        val.setMinimumWidth(44)
+        sl.valueChanged.connect(lambda x, k=key, f=fmt, sc=scale, lb=val: (lb.setText(f.format(x / sc)),
+                                                                        _stage_set(win, **{k: x / sc})))
+        row.addWidget(sl, 1)
+        row.addWidget(val)
+        form.addRow(label, row)
+        win.stage_sliders[key] = (sl, val, scale, fmt)
+    win.chk_stage_lamps = QCheckBox("Studio lamps too (off: the HDRI alone, like Material Preview)")
+    win.chk_stage_lamps.setChecked(bool(st["lights"]))
+    win.chk_stage_lamps.toggled.connect(lambda on: _stage_set(win, lights=bool(on)))
+    form.addRow(win.chk_stage_lamps)
+    _stage_enable(win)
+    return box
+
+
+def _fill_hdris(win, hdri: str) -> None:
+    cmb = win.cmb_stage
+    cmb.blockSignals(True)
+    cmb.clear()
+    for name, label in C.HDRIS:
+        cmb.addItem(label, name)
+    if hdri and cmb.findData(hdri) < 0:                  # one of yours (installed in Blender, or a file)
+        cmb.addItem(C.hdri_label(hdri), hdri)
+    cmb.addItem("Your HDRI file…", FILE)
+    cmb.setCurrentIndex(max(0, cmb.findData(hdri)))
+    cmb.blockSignals(False)
+
+
+def _stage_hdri(win) -> None:
+    hdri = win.cmb_stage.currentData()
+    if hdri == FILE:
+        path = QFileDialog.getOpenFileName(win, "HDRI", os.path.expanduser("~"), "HDRI (*.exr *.hdr)")[0]
+        if not path:
+            _fill_hdris(win, win.s.stage.get("hdri", ""))        # (cancelled: as it was)
+            return
+        _fill_hdris(win, path)
+        hdri = path
+    _stage_set(win, hdri=hdri or "")
+    _stage_enable(win)
+
+
+def _stage_enable(win) -> None:
+    on = bool(win.s.stage.get("hdri"))
+    for sl, val, *_ in win.stage_sliders.values():
+        sl.setEnabled(on)
+        val.setEnabled(on)
+
+
+def _stage_set(win, **kw) -> None:
+    win.s.stage = {**C.stage_settings(win.s), **kw}
+    win.s.save()
+    _stage_blender(win)
+
+
+def _stage_blender(win, skip=None) -> None:
+    """Every Blender the app opened (live or a take) gets the light at once."""
+    from PySide6.QtCore import QProcess
+    msg = {"cmd": "stage", **C.stage_settings(win.s)}
+    for p in [getattr(win, "blender_proc", None)] + list(getattr(win, "take_procs", [])):
+        if p is not None and p is not skip and p.state() != QProcess.ProcessState.NotRunning and \
+                p.property("myrmex_control"):
+            win._blender_send(p, msg)
+
+
+def on_blender_stage(win, p, d: dict) -> None:
+    """Blender's answer to the light: set there (Use This View's Lighting, its Stage panel) -> kept here for
+    every organism, and the other Blenders follow."""
+    if not d.get("ok"):
+        win.log(f"! Blender: the light on the organism: {d.get('error', 'failed')}")
+        return
+    if not d.get("from_blender"):
+        return
+    win.s.stage = {**C.stage_settings(win.s), **{k: d[k] for k in C.STAGE if k in d}}
+    st = win.s.stage = C.stage_settings(win.s)
+    win.s.save()
+    if getattr(win, "cmb_stage", None) is not None:
+        _fill_hdris(win, st["hdri"])
+        for key, (sl, val, scale, fmt) in win.stage_sliders.items():
+            sl.blockSignals(True)
+            sl.setValue(int(round(min(sl.maximum() / scale, float(st[key])) * scale)))
+            sl.blockSignals(False)
+            val.setText(fmt.format(st[key]))
+        win.chk_stage_lamps.blockSignals(True)
+        win.chk_stage_lamps.setChecked(bool(st["lights"]))
+        win.chk_stage_lamps.blockSignals(False)
+        _stage_enable(win)
+    _stage_blender(win, skip=p)
+    if st["hdri"]:
+        win.log(f"light on the organism from Blender: {C.hdri_label(st['hdri'])}, strength {st['strength']:.2f}, "
+                f"rotation {st['rotation']:.0f}°, lamps {'on' if st['lights'] else 'off'} - the background stays black")
+    else:
+        win.log("light on the organism from Blender: the studio panels - the background stays black")
 
 
 def _show_rack(win, rack: dict) -> None:
@@ -179,4 +304,4 @@ def refresh_fx(win) -> None:
                        f"{r.get('ghosts', 0):.2f} · trails {r.get('trails', 0):.2f}")
 
 
-__all__ = ["fx_tab", "refresh_fx", "RACK"]
+__all__ = ["fx_tab", "refresh_fx", "on_blender_stage", "RACK"]

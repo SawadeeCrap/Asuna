@@ -10,6 +10,7 @@ Live panel - the main workflow:
 """
 
 import json
+import math
 import os
 import tempfile
 
@@ -129,6 +130,84 @@ def _fx_props():
 FX_RACK = ("ghosts", "ghost_life", "ghost_density", "ribbons", "trails", "bloom", "react", "exposure", "contrast",
            "saturation")
 MyrmexFxSettings = type("MyrmexFxSettings", (bpy.types.PropertyGroup,), {"__annotations__": _fx_props()})
+
+
+_HDRI_ITEMS: list = []          # (Blender keeps pointers to the strings: they must stay alive)
+
+
+def _hdri_items(self, context):
+    from . import stage
+    items = [("NONE", "Studio panels", "The organism's own world: soft studio panels (or its saved look's world)")]
+    items += [(n, os.path.splitext(n)[0].replace("_", " ").title(), f"Blender's HDRI {n}") for n in stage.hdri_names()]
+    cur = stage.STAGE["hdri"]
+    if os.path.isabs(cur):
+        items.append(("PATH", os.path.basename(cur), cur))
+    _HDRI_ITEMS[:] = items
+    return _HDRI_ITEMS
+
+
+def _stage_update(self, context):
+    from . import stage
+    if stage.SYNC["busy"]:
+        return
+    hdri = {"NONE": "", "PATH": stage.STAGE["hdri"]}.get(self.hdri, self.hdri)
+    stage.apply({"hdri": hdri, "strength": self.strength, "rotation": math.degrees(self.rotation),
+                 "lights": self.lights}, context.scene)
+    _stage_to_app()
+
+
+def _stage_to_app() -> None:
+    """The app keeps the stage for every organism: it hears what was set here."""
+    from . import control, stage
+    if control.enabled():
+        control.reply({"cmd": "stage", "ok": True, "from_blender": True, **stage.STAGE})
+
+
+class MyrmexStageSettings(bpy.types.PropertyGroup):
+    hdri: EnumProperty(name="HDRI", items=_hdri_items, update=_stage_update,
+                       description="The light the organism is lit by and reflects (the camera sees black)")
+    strength: FloatProperty(name="Strength", default=1.0, min=0.0, max=20.0, soft_max=4.0, update=_stage_update)
+    rotation: FloatProperty(name="Rotation", default=0.0, subtype="ANGLE", update=_stage_update)
+    lights: BoolProperty(name="Lamps", default=True, update=_stage_update,
+                         description="The scene's lamps too (off: the HDRI alone, like Material Preview)")
+
+
+def _view_shading(context):
+    """The 3D view the button was pressed in (else the first one lit by an HDRI)."""
+    from . import stage
+    sp = context.space_data
+    if sp is not None and sp.type == "VIEW_3D":
+        return sp.shading
+    for area in (context.screen.areas if context.screen is not None else ()):
+        for space in area.spaces:
+            if space.type == "VIEW_3D" and stage.view_light(space.shading) is not None:
+                return space.shading
+    return None
+
+
+class MYRMEX_OT_stage_from_view(bpy.types.Operator):
+    bl_idname = "myrmex.stage_from_view"
+    bl_label = "Use This View's Lighting"
+    bl_description = ("Light every organism with this view's HDRI - its strength, rotation and Scene Lights, as "
+                      "in Material Preview - with the background black: live view, FX, Syphon and renders")
+
+    def execute(self, context):
+        from . import stage
+        sh = _view_shading(context)
+        cfg = stage.view_light(sh) if sh is not None else None
+        if cfg is None:
+            self.report({"WARNING"}, "Set this view to Material Preview (Scene World off) with the HDRI you like, "
+                                     "then press again")
+            return {"CANCELLED"}
+        if not stage.hdri_path(cfg["hdri"]):
+            self.report({"WARNING"}, f"Blender does not find the file of the HDRI {cfg['hdri']!r}")
+            return {"CANCELLED"}
+        stage.apply(cfg, context.scene)
+        stage.show_in(context.screen)
+        _stage_to_app()
+        self.report({"INFO"}, f"Stage: {cfg['hdri']}, strength {cfg['strength']:.2f}, rotation "
+                              f"{cfg['rotation']:.0f}° - the background stays black")
+        return {"FINISHED"}
 
 
 def import_any_take(context, path: str, audio: str | None = None, use_camera: bool = True) -> str:
@@ -251,7 +330,8 @@ class MYRMEX_OT_render_take(bpy.types.Operator):
                 ["--python", script, "--", "--take", take, "--render", "--size", s.render_size,
                  "--quality", s.render_quality, "--out", out] + (["--audio", s.take_audio] if s.take_audio else []) + \
                 (["--keep-settings"] if s.keep_settings else [])
-            env = dict(os.environ, MYRMEX_FX=json.dumps(fx.render_settings()), MYRMEX_SRC=os.pathsep.join(
+            from . import stage
+            env = dict(os.environ, MYRMEX_FX=json.dumps(fx.render_settings()), **stage.env(), MYRMEX_SRC=os.pathsep.join(
                 p for p in sys.path if os.path.isdir(os.path.join(p, "myrmex"))))
             subprocess.Popen(cmd, env=env)
             self.report({"INFO"}, f"Rendering with Myrmex FX in the background to {out}")
@@ -356,6 +436,8 @@ class MYRMEX_OT_live_camera_view(bpy.types.Operator):
                     if space.type == "VIEW_3D":
                         space.region_3d.view_perspective = "CAMERA"
                         space.shading.type = "RENDERED" if space.shading.type in ("SOLID", "WIREFRAME", "MATERIAL") else space.shading.type
+                        space.shading.use_scene_world_render = True       # the stage: its light, black behind
+                        space.shading.use_scene_lights_render = True
         return {"FINISHED"}
 
 
@@ -551,9 +633,31 @@ class MYRMEX_PT_fx(bpy.types.Panel):
                 L.label(text=e, icon="ERROR")
 
 
-CLASSES = (MyrmexLiveSettings, MyrmexFxSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop, MYRMEX_OT_live_camera_view,
-           MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take, MYRMEX_OT_render_take,
-           MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_PT_live, MYRMEX_PT_fx)
+class MYRMEX_PT_stage(bpy.types.Panel):
+    bl_label = "Myrmex Stage"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Myrmex"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        st = context.scene.myrmex_stage
+        L = self.layout
+        L.operator("myrmex.stage_from_view", icon="WORLD")
+        col = L.column()
+        col.prop(st, "hdri")
+        sub = col.column()
+        sub.enabled = st.hdri != "NONE"
+        sub.prop(st, "strength", slider=True)
+        sub.prop(st, "rotation")
+        col.prop(st, "lights")
+        L.label(text="Background: always black", icon="SHADING_RENDERED")
+
+
+CLASSES = (MyrmexLiveSettings, MyrmexFxSettings, MyrmexStageSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop,
+           MYRMEX_OT_live_camera_view, MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take,
+           MYRMEX_OT_render_take, MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_OT_stage_from_view, MYRMEX_PT_live,
+           MYRMEX_PT_fx, MYRMEX_PT_stage)
 
 
 def register():
@@ -561,6 +665,7 @@ def register():
         bpy.utils.register_class(c)
     bpy.types.Scene.myrmex_live = PointerProperty(type=MyrmexLiveSettings)
     bpy.types.Scene.myrmex_fx = PointerProperty(type=MyrmexFxSettings)
+    bpy.types.Scene.myrmex_stage = PointerProperty(type=MyrmexStageSettings)
 
 
 def unregister():
@@ -568,5 +673,6 @@ def unregister():
     _stop_link()
     del bpy.types.Scene.myrmex_live
     del bpy.types.Scene.myrmex_fx
+    del bpy.types.Scene.myrmex_stage
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

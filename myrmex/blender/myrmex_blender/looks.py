@@ -5,6 +5,7 @@
   Character type, saves the look Blender shows (Save current look) and loads a look into the running
   Blender without restarting it; live sessions and take renders open the chosen one.
 * A look is saved without the take that happens to be open (its keyframes, shot cameras, markers, song).
+* The stage's HDRI (stage.py) is the app's, for every organism: a look keeps its own world and lamps.
 * Humanoid: the look lives in the character's own .blend (saved in place, next to its rig.json).
 """
 from __future__ import annotations
@@ -177,8 +178,9 @@ def _write_look(path: str, scene: bpy.types.Scene) -> None:
                 ob.modifiers[m_name].show_viewport = True
                 hidden.append(ob.modifiers[m_name])
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    from . import stage
     try:
-        with _without_take(scene):
+        with _without_take(scene), stage.saving(scene):  # (the stage's light is the app's, not the look's)
             bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
     finally:
         for m in hidden:

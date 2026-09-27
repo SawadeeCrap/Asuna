@@ -41,8 +41,9 @@ def main():
     s.render_size = a.size if a.size in {i.identifier for i in s.bl_rna.properties["render_size"].enum_items} else "1920x1080"
     s.render_quality = a.quality if a.quality != "look" else s.render_quality
     s.keep_settings = a.keep_settings or a.quality == "look"
-    from myrmex_blender import fx
+    from myrmex_blender import fx, stage
     st = fx.from_env()                     # Myrmex FX (afterimages, ribbons, picture effects) as set in the app
+    stage.from_env()                       # the light on the organism (the background stays black)
     msg = ui.import_any_take(bpy.context, a.take, a.audio or None, not a.no_camera)
     print("Myrmex:", msg, flush=True)
     if st is not None:
@@ -77,6 +78,8 @@ def main():
                         for sp in area.spaces:
                             if sp.type == "VIEW_3D":
                                 sp.shading.type = "RENDERED"       # the scene's own world: black
+                                sp.shading.use_scene_world_render = True
+                                sp.shading.use_scene_lights_render = True
                                 sp.region_3d.view_perspective = "CAMERA"
                                 if fx.active():            # (the FX picture is drawn with this view's overlays)
                                     sp.overlay.show_overlays = False

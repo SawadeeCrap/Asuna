@@ -79,6 +79,7 @@ class AppSettings:
     looks: dict = field(default_factory=dict)          # organism -> the chosen saved look ("" = default studio)
     td: dict = field(default_factory=dict)             # TouchDesigner link (realtime/touch.py DEFAULTS)
     fx: dict = field(default_factory=dict)             # Myrmex FX in Blender (realtime/fx.py DEFAULTS)
+    stage: dict = field(default_factory=dict)          # the light on every organism, black behind (controllers.STAGE)
 
     @classmethod
     def load(cls) -> "AppSettings":

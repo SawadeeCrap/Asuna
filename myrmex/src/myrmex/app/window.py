@@ -825,6 +825,9 @@ class MainWindow(QMainWindow):
         if cmd == "hello":
             p.setProperty("myrmex_control", True)
             return
+        if cmd == "stage":                                     # the light on every organism (black behind)
+            FT.on_blender_stage(self, p, d)
+            return
         if cmd == "syphon":                                    # Blender's picture for TouchDesigner
             TT.on_blender_syphon(self, d)
             self.log(f"Blender → TouchDesigner: Syphon \"{d.get('name')}\" on" if d.get("on") else
@@ -922,7 +925,7 @@ class MainWindow(QMainWindow):
             self.start_engine()
         cmd, env = C.blender_live_command(blender, self.s.character, self.s.pose_port, self.s.backend,
                                           self.s.keep_blender_settings, self.s.looks,
-                                          {**C.td_env(self.s), **C.fx_env(self.s)})
+                                          {**C.td_env(self.s), **C.fx_env(self.s), **C.stage_env(self.s)})
         look = C.look_file(self.s.backend, self.s.looks) if self.s.backend in C.CREATURE_BACKENDS else ""
         if look:
             self.log(f"using your saved look: {look}")
@@ -956,7 +959,7 @@ class MainWindow(QMainWindow):
                              self.s.render_quality, self.s.keep_blender_settings, self.s.looks)
         p = QProcess(self)
         qenv = QProcessEnvironment.systemEnvironment()
-        for k, val in C.fx_env(self.s).items():                # Myrmex FX: live view and renders alike
+        for k, val in {**C.fx_env(self.s), **C.stage_env(self.s)}.items():    # FX and light: live and renders alike
             qenv.insert(k, val)
         if not render:                                     # the app can save / load looks in this Blender
             qenv.insert("MYRMEX_CONTROL", "stdin")

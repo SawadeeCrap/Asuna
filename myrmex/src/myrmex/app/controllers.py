@@ -145,6 +145,41 @@ def fx_env(s: AppSettings) -> dict:
     return {"MYRMEX_FX": json.dumps(fx_blender(s))}
 
 
+# The stage (blender/myrmex_blender/stage.py): the HDRI every organism is lit by and reflects, as in Blender's
+# Material Preview - the camera sees black.  "" = the organism's own soft studio panels.
+STAGE = {"hdri": "", "strength": 1.0, "rotation": 0.0, "lights": True}
+HDRIS = (("", "Studio panels (the organism's own light)"), ("city.exr", "City"), ("courtyard.exr", "Courtyard"),
+         ("forest.exr", "Forest"), ("interior.exr", "Interior"), ("night.exr", "Night"), ("studio.exr", "Studio"),
+         ("sunrise.exr", "Sunrise"), ("sunset.exr", "Sunset"))
+
+
+def stage_settings(s: AppSettings) -> dict:
+    """The stage with every default filled in (the app keeps it in s.stage)."""
+    d = dict(STAGE)
+    got = s.stage or {}
+    try:
+        if "hdri" in got:
+            d["hdri"] = str(got["hdri"] or "")
+        if "strength" in got:
+            d["strength"] = min(20.0, max(0.0, float(got["strength"])))
+        if "rotation" in got:
+            d["rotation"] = float(got["rotation"]) % 360.0
+        if "lights" in got:
+            d["lights"] = bool(got["lights"])
+    except (TypeError, ValueError):
+        pass
+    return d
+
+
+def stage_env(s: AppSettings) -> dict:
+    import json
+    return {"MYRMEX_STAGE": json.dumps(stage_settings(s))}
+
+
+def hdri_label(hdri: str) -> str:
+    return dict(HDRIS).get(hdri) or os.path.splitext(os.path.basename(hdri))[0].replace("_", " ").title()
+
+
 def install_td_files() -> str:
     """Copy the TD network builder next to the user's TD project; returns its path."""
     os.makedirs(TD_HOME, exist_ok=True)

@@ -49,6 +49,8 @@ def _look_through_camera():
             for space in area.spaces:
                 if space.type == "VIEW_3D":
                     space.shading.type = "RENDERED"
+                    space.shading.use_scene_world_render = True     # the stage: its light, black behind
+                    space.shading.use_scene_lights_render = True
                     space.region_3d.view_perspective = "CAMERA"
                     space.overlay.show_overlays = False
             area.tag_redraw()
@@ -76,6 +78,10 @@ def go_live():
     st = fx.from_env()                     # Myrmex FX as set in the app (the engine's frames then keep it current)
     if st is not None:
         print("Myrmex: FX", "on" if st.get("on") else "off", flush=True)
+    from myrmex_blender import stage
+    st = stage.from_env()                  # the light on the organism (the background stays black)
+    if st is not None:
+        print("Myrmex: stage", st.get("hdri") or "studio panels", flush=True)
     scene = bpy.context.scene
     s = scene.myrmex_live
     if "MYRMEX_KEEP_SETTINGS" in os.environ:

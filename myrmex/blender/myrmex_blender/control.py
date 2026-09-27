@@ -8,7 +8,10 @@ as ``MYRMEX_REPLY {json}``.  Only switched on when the app starts Blender (``MYR
     {"cmd": "save_look", "path": ".../looks/cyber_hive/Neon.blend", "kind": "cyber_hive", "id": 3}
     {"cmd": "load_look", "path": ".../looks/cyber_hive/Neon.blend" | "", "kind": "cyber_hive", "keep": true}
     {"cmd": "syphon", "on": true, "name": "Myrmex", "width": 1280, "height": 720, "fps": 60, "alpha": false}
-    {"cmd": "fx", "on": true, "preset": "Sandevistan", "rack": {"ghosts": 0.8}, "vertical": true, "preview": 1.0}
+    {"cmd": "fx", "on": true, "preset": "Afterimage", "rack": {"ghosts": 0.8}, "vertical": true, "preview": 1.0}
+    {"cmd": "stage", "hdri": "forest.exr", "strength": 1.0, "rotation": 90, "lights": false}
+
+Blender also speaks first: ``{"cmd": "stage", "from_blender": true, ...}`` when the stage is set there.
 """
 from __future__ import annotations
 
@@ -94,6 +97,9 @@ def handle(cmd: dict) -> dict:
         elif name == "fx":                                 # Myrmex FX: on / preset / rack / format / preview
             from . import fx
             out.update(ok=True, **fx.configure(cmd))
+        elif name == "stage":                              # the light on the organism, black behind it
+            from . import stage
+            out.update(ok=True, **stage.apply(cmd))
         elif name == "syphon":                             # the picture for TouchDesigner
             from . import syphon_out
             st = syphon_out.configure(cmd)

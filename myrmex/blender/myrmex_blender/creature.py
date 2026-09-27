@@ -1067,8 +1067,11 @@ def swarm_nodes(cyber: bool = False) -> bpy.types.NodeTree:
 def dark_studio(scene: bpy.types.Scene) -> None:
     """Black stage: one large soft source and two rim lights (they follow the creature), no floor; the world
     is what the organism reflects - the camera only ever sees black (black_stage)."""
-    world = scene.world or bpy.data.worlds.new("MyrmexCreatureWorld")
-    scene.world = world
+    from . import stage
+    world = stage.own_world(scene)                     # (the stage's HDRI, if any, stays on top of it)
+    if world is None:
+        world = bpy.data.worlds.new("MyrmexCreatureWorld")
+        stage.set_own_world(scene, world)
     studio_world(world)
     coll = bpy.data.collections.get("MyrmexStudio") or bpy.data.collections.new("MyrmexStudio")
     if coll.name not in scene.collection.children:
@@ -1101,17 +1104,18 @@ def _hide(ob) -> None:
 
 def black_stage(scene: bpy.types.Scene | None = None) -> None:
     """Only the organism, on black: no floor, no terrain, no impact balls, no prey (they still act, unseen);
-    the camera sees black while the world keeps lighting the organism and showing in its reflections."""
+    the camera sees black while the world - the stage's HDRI (stage.py), else the scene's own soft studio
+    panels - keeps lighting the organism and showing in its reflections."""
+    from . import stage
     scene = scene or bpy.context.scene
     for name in STAGE_HIDDEN:
         _hide(bpy.data.objects.get(name))
     for ob in bpy.data.objects:
         if ob.name.startswith(OBSTACLE):
             _hide(ob)
-    if scene.world is None:
-        scene.world = bpy.data.worlds.get("MyrmexCreatureWorld") or bpy.data.worlds.new("MyrmexCreatureWorld")
-        studio_world(scene.world)
-    camera_black(scene.world)
+    camera_black(stage.world_for(scene))
+    stage.lamps(scene)
+    stage.sync_props(scene)
 
 
 def camera_black(world: bpy.types.World) -> None:
