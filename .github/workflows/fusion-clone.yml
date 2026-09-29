@@ -80,7 +80,7 @@ jobs:
             nm -D --defined-only "$bin" | grep -E ' T init$'
             nm -D --defined-only "$bin" | grep -E ' modelFusionClone$'
             exports=$(nm -D --defined-only "$HOME/Rack-SDK/libRack.so" | awk '{print $NF}')
-            wanted=$(nm -u "$bin" | awk '{print $NF}' | grep -E '^pffft_' || true)
+            wanted=$(nm -D -u "$bin" | awk '{print $NF}' | grep -E '^pffft_' || true)      # the .so is stripped: only its dynamic symbols exist
           fi
           # every pffft function the plugin calls must be exported by Rack (otherwise the first FFT would abort Rack at run time)
           test -n "$wanted"
@@ -91,6 +91,7 @@ jobs:
   rack-smoke:
     name: Load in Rack (${{ matrix.platform }})
     needs: plugin
+    if: ${{ !cancelled() }}      # run even when an inspection step of another platform failed; the artifact download decides
     continue-on-error: true      # experimental: depends on Rack's headless mode and on the download names at vcvrack.com
     timeout-minutes: 15
     strategy:
