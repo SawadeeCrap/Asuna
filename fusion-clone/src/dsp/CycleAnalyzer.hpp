@@ -36,8 +36,8 @@
 // composite repeat every 2 cycles). Harmonic j of the table has frequency j / period.
 #pragma once
 #include <memory>
-#include "Common.hpp"
-#include "FFT.hpp"
+#include "FcCommon.hpp"
+#include "FcFFT.hpp"
 #include "SincInterp.hpp"
 
 namespace fc {

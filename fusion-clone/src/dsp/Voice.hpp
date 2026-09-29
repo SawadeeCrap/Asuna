@@ -1,7 +1,7 @@
 // FusionClone DSP core — virtual voice: personality (deterministic random tolerance set), period table, drift.
 #pragma once
-#include "Common.hpp"
-#include "FFT.hpp"
+#include "FcCommon.hpp"
+#include "FcFFT.hpp"
 #include "Filters.hpp"
 #include "Params.hpp"
 #include "SincInterp.hpp"

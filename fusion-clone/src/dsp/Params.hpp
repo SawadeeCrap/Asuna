@@ -1,6 +1,6 @@
 // FusionClone DSP core — public parameter set and status structures.
 #pragma once
-#include "Common.hpp"
+#include "FcCommon.hpp"
 
 namespace fc {
 

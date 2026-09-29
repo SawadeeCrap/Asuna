@@ -1,5 +1,5 @@
 // Verifies FFT backend against a naive DFT and checks the packed layout + inverse scaling.
-#include "../src/dsp/FFT.hpp"
+#include "../src/dsp/FcFFT.hpp"
 #include <cstdio>
 #include <complex>
 

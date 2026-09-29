@@ -6,7 +6,10 @@ RACK_DIR ?= ../..
 
 # The DSP core is framework independent and is compiled with pffft (bundled with Rack, exported by libRack) as its FFT backend.
 # Rack's build system uses -std=c++11, so the whole core is written in C++11.
-FLAGS += -Isrc -DFC_FFT_PFFFT
+# `-iquote src` (not `-Isrc`): src/ must only be searched for "quoted" includes. With -Isrc, Rack's own <dsp/...> headers would be looked up in
+# our src/dsp/ first, and on a case-insensitive file system (macOS, Windows) <dsp/common.hpp> would silently resolve to a file of ours whose
+# name differs only in case. (For the same reason our headers are called Fc*.hpp.)
+FLAGS += -iquote src -DFC_FFT_PFFFT
 CFLAGS +=
 CXXFLAGS +=
 LDFLAGS +=

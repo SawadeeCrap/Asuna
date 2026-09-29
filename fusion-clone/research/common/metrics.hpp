@@ -3,8 +3,8 @@
 // None of these is *the* quality criterion (see docs/ARCHITECTURE.md §Evaluation) — they are targeted probes for specific
 // failure modes: phase-vocoder smear, chorus-like periodic modulation, comb filtering, transient blur, aliasing, pitch bias.
 #pragma once
-#include "../../src/dsp/Common.hpp"
-#include "../../src/dsp/FFT.hpp"
+#include "../../src/dsp/FcCommon.hpp"
+#include "../../src/dsp/FcFFT.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>

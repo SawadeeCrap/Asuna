@@ -3,8 +3,10 @@
 #   * "Plugin" jobs build against the official Rack SDK and upload a ready-to-install .vcvplugin as a workflow artifact:
 #       Actions -> the run -> Artifacts -> FusionClone-mac-arm64 -> unzip -> double-click the .vcvplugin (or drop it into
 #       ~/Library/Application Support/Rack2/plugins-mac-arm64/ after unzipping the archive there).
-#   * "DSP tests" run tests/ (portable code, pffft as FFT backend) and, on Apple silicon, the CPU benchmark (numbers are those of a shared
-#     GitHub VM, informative only).
+#     The package is then unpacked again and inspected (architecture, linked libraries, exported `init` symbol); a failed inspection fails the job.
+#   * "DSP tests" run tests/ (portable code, pffft as FFT backend) twice - once with plain -O2 and once with the optimisation flags the plugin
+#     itself is built with (Rack's -O3 -funsafe-math-optimizations -march=...) - and, on Apple silicon, the CPU benchmark (numbers are those of a
+#     shared GitHub VM, informative only).
 #
 # The SDK is downloaded from vcvrack.com (RACK_SDK_VERSION = "latest" or e.g. "2.5.2"; pick the version that matches your Rack).
 name: fusion-clone
@@ -37,40 +39,69 @@ jobs:
       - name: Rack SDK
         run: |
           curl -fsSL -o "$RUNNER_TEMP/sdk.zip" "https://vcvrack.com/downloads/Rack-SDK-${RACK_SDK_VERSION}-${{ matrix.platform }}.zip"
-          unzip -q "$RUNNER_TEMP/sdk.zip" -d "$HOME"
+          unzip -q -o "$RUNNER_TEMP/sdk.zip" -d "$HOME"
           ls "$HOME/Rack-SDK" | head -20
+          echo "SDK version (first version number in its changelog): $(grep -m1 -Eo 'v2\.[0-9]+\.[0-9]+' "$HOME/Rack-SDK/CHANGELOG.html" || echo unknown)"
       - name: Tools (macOS)
         if: runner.os == 'macOS'
         run: brew list zstd >/dev/null 2>&1 || brew install zstd
       - name: Build
         working-directory: fusion-clone
         run: make -j3 RACK_DIR="$HOME/Rack-SDK" dist
-      - name: Package listing
-        working-directory: fusion-clone
-        run: ls -l dist
       - uses: actions/upload-artifact@v4
         with:
           name: FusionClone-${{ matrix.platform }}
           path: fusion-clone/dist/*.vcvplugin
           if-no-files-found: error
+      - name: Inspect the package
+        working-directory: fusion-clone
+        run: |
+          ls -l dist
+          pkg=$(ls dist/*.vcvplugin)
+          mkdir -p "$RUNNER_TEMP/pkg"
+          zstd -dc "$pkg" | tar -x -C "$RUNNER_TEMP/pkg"
+          find "$RUNNER_TEMP/pkg" -type f | sort
+          bin=$(ls "$RUNNER_TEMP"/pkg/FusionClone/plugin.*)
+          file "$bin"
+          if [ "$RUNNER_OS" = macOS ]; then
+            lipo -info "$bin"
+            otool -L "$bin"
+            codesign -dv "$bin" 2>&1 || true
+            nm -gU "$bin" | grep -E ' _init$'           # the entry point Rack looks up
+            nm -gU "$bin" | grep -c ' _modelFusionClone$'
+          else
+            ldd "$bin" || true
+            nm -D --defined-only "$bin" | grep -E ' T init$'
+            nm -D --defined-only "$bin" | grep -c ' modelFusionClone$'
+          fi
 
   dsp-tests:
     name: DSP tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-latest]
+        include:
+          - {os: macos-14, march: '-march=armv8-a+fp+simd'}
+          - {os: ubuntu-latest, march: '-march=nehalem'}
     runs-on: ${{ matrix.os }}
+    env:
+      # what Rack's compile.mk builds the plugin with (the plugin itself adds -Wall -Wextra and its own defines)
+      PLUGIN_OPT: -std=c++11 -O3 -funsafe-math-optimizations -fno-omit-frame-pointer ${{ matrix.march }} -Wall -Wextra -Wno-unused-parameter
     steps:
       - uses: actions/checkout@v4
       - name: pffft (FFT backend of the plugin)
         run: git clone --depth 1 https://github.com/marton78/pffft.git "$RUNNER_TEMP/pffft"
-      - name: DSP tests
+      - name: DSP tests (-O2)
         working-directory: fusion-clone/tests
         run: make -j3 PFFFT="$RUNNER_TEMP/pffft" all
+      - name: DSP tests (the plugin's optimisation flags)
+        working-directory: fusion-clone/tests
+        run: |
+          make clean
+          CXXFLAGS="$PLUGIN_OPT" make -j3 PFFFT="$RUNNER_TEMP/pffft" all
       - name: CPU benchmark (Apple silicon only)
         if: runner.os == 'macOS'
         working-directory: fusion-clone/tools
         run: |
-          make PFFFT="$RUNNER_TEMP/pffft" bench
-          { echo '## CPU benchmark on '"$(sysctl -n machdep.cpu.brand_string) ($(sysctl -n hw.ncpu) cores, shared GitHub VM)"; echo; ./bench 4 md; } | tee -a "$GITHUB_STEP_SUMMARY"
+          CXXFLAGS="$PLUGIN_OPT" make PFFFT="$RUNNER_TEMP/pffft" bench
+          { echo '## CPU benchmark on '"$(sysctl -n machdep.cpu.brand_string) ($(sysctl -n hw.ncpu) cores, shared GitHub VM), flags: $PLUGIN_OPT"; echo; ./bench 4 md; } | tee -a "$GITHUB_STEP_SUMMARY"

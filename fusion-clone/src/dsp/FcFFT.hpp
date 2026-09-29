@@ -15,7 +15,7 @@
 //
 // Forward transform is unscaled; inverse(forward(x)) == N * x.
 #pragma once
-#include "Common.hpp"
+#include "FcCommon.hpp"
 
 #if defined(FC_FFT_RACK)
 #include <dsp/fft.hpp>

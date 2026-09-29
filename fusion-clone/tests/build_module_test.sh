@@ -23,7 +23,7 @@ mkdir -p "$BUILD/obj"
 CXX=${CXX:-g++}
 CC=${CC:-gcc}
 case "$(uname -s)" in Darwin) ARCHDEF=-DARCH_MAC ;; MINGW*|MSYS*) ARCHDEF=-DARCH_WIN ;; *) ARCHDEF=-DARCH_LIN ;; esac
-FL="-std=c++11 -O1 -g -DGLFW_INCLUDE_NONE -DVERSION=\"2.0.0\" $ARCHDEF -I$RACK/include -I$DEPINC -I$HERE/src"
+FL="-std=c++11 -O1 -g -DGLFW_INCLUDE_NONE -DVERSION=\"2.0.0\" $ARCHDEF -I$RACK/include -I$DEPINC -iquote $HERE/src"
 
 compile() { # compile <compiler> <flags> <src> <obj>
 	if [ ! -f "$4" ] || [ "$3" -nt "$4" ]; then echo "  cc $(basename "$3")"; $1 $2 -c "$3" -o "$4"; fi

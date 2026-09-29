@@ -1,6 +1,6 @@
 // FusionClone DSP core — small filters used all over the engine.
 #pragma once
-#include "Common.hpp"
+#include "FcCommon.hpp"
 
 namespace fc {
 

@@ -3,7 +3,7 @@
 // Used for (1) angular resampling of the input when extracting cycles, (2) reading clone
 // waveforms from period tables, and (3) the time-domain fall-back read heads.
 #pragma once
-#include "Common.hpp"
+#include "FcCommon.hpp"
 
 // -DFC_NO_SIMD forces the portable scalar dot product (troubleshooting aid for a platform whose intrinsics misbehave)
 #if defined(FC_NO_SIMD)

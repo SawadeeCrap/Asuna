@@ -24,7 +24,7 @@
 // waveform (narrow pulse at a low pitch) would happily "find" a period in a tiny residual ripple. Every lane run therefore also
 // requires the window to carry a minimum share of the input's long-term AC power (kSignificance); otherwise it reports "no estimate".
 #pragma once
-#include "Common.hpp"
+#include "FcCommon.hpp"
 #include "Filters.hpp"
 
 namespace fc {

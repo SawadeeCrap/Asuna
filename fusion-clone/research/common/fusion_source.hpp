@@ -12,8 +12,8 @@
 // stress-tested against *plausible* Fusion-like spectra (period doubling, sidebands, asymmetry) and against a bank of
 // genuinely independent oscillators.
 #pragma once
-#include "../../src/dsp/Common.hpp"
-#include "../../src/dsp/FFT.hpp"
+#include "../../src/dsp/FcCommon.hpp"
+#include "../../src/dsp/FcFFT.hpp"
 #include "../../src/dsp/Filters.hpp"
 #include "../../src/dsp/SincInterp.hpp"
 #include <functional>
