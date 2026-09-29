@@ -62,10 +62,17 @@ shift model **RATIO / HZ**, analog summing saturation, level law), *Randomize se
   filter without unlocking; a pitch step or a waveform change re-acquires.
 * A **sub oscillator** (the composite repeats every two main cycles) is detected automatically, also when the SUB knob is turned up during a
   note; the tube saturation and detune sidebands of the source are part of the spectrum that gets cloned.
+* **Controls never click.** MIX, SUMMING, OUTPUT, level, pan and the FUSION layer are smoothed per sample, voices fade in and out with a
+  zero-slope start, and a voice that has no table yet stays silent until it has one; `tests/test_artifacts.cpp` checks 37 control steps, sweeps and
+  events on a pure tone against a bound derived from theory (`docs/ARCHITECTURE.md` §8.5).
 * **Failure modes** are graceful: silence, DC, noise, out-of-range levels, NaN/Inf and disconnected input produce clean output (the original,
   or silence) and never a stuck or exploding state; polyphonic input uses channel 1.
 
 ## Build and install
+
+Step by step for macOS on Apple silicon: **`docs/INSTALL.md`** (English) / **`docs/INSTALL.ru.md`** (русский). A GitHub Actions workflow
+(`.github/workflows/fusion-clone.yml`) also builds the plugin for macOS arm64 and Linux against the official Rack SDK, runs the DSP tests and the
+CPU benchmark on an Apple-silicon runner, and publishes the `.vcvplugin` as a downloadable artifact.
 
 Requirements: the **Rack 2 SDK** for your platform (https://vcvrack.com/manual/Building), a C++11 compiler (the Rack toolchain). Nothing else.
 
@@ -87,7 +94,8 @@ wrapper) or drop the define to fall back to the built-in radix-2 FFT (slower but
 ```sh
 make -C tests                 # every DSP test with the portable FFT (about ten minutes: components, lock matrix, dynamics, engine, real-time)
 make -C tests quick           # component tests only (FFT, sinc, Hilbert, tracker, analyser), seconds
-make -C tests realtime        # allocation counter + per-sample cost of the audio path
+make -C tests artifacts       # click / zipper / fade / aliasing probes on a pure tone
+make -C tests realtime        # allocation counter, randomised stress, per-sample cost of the audio path
 tests/build_module_test.sh    # headless test of the real Module class (needs a Rack source checkout, see the script)
 make -C tools                 # fusionclone_cli (offline renderer / A-B ladder) and bench (CPU per quality x voices x pitch, bloom table)
 python3 tools/preview_panel.py                  # panel layout preview + overlap / frame / screw checks
@@ -107,6 +115,7 @@ production engine as J; synthetic source model, independent-oscillator reference
 | `docs/RESEARCH.md` | Research report: what is known about the Fusion VCO2, classified CONFIRMED / INFERRED / MEASURED / SPECULATIVE / UNKNOWN, sources, literature. |
 | `docs/ARCHITECTURE.md` | Architecture, why it was chosen, rejected alternatives with numbers, FFT-size and low-frequency study, aliasing, quality modes, latency, acceptance-test mapping, limitations. |
 | `docs/BENCHMARKS.md` | CPU per quality / voices / pitch and bloom-in latency. |
+| `docs/INSTALL.md`, `docs/INSTALL.ru.md` | Installation on macOS (build from source or download the CI package), first use, troubleshooting. |
 | `docs/REFERENCE_PROTOCOL.md` | How to measure a real Fusion VCO2 to settle the open questions. |
 | `docs/MANIFEST.md` | Module manifest (parameters, ports, patch data, versioning). |
 

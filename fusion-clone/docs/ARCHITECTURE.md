@@ -136,6 +136,12 @@ control ticks.
   construction; checked to 1.5·10⁻⁷).
 * **Analog-style summing**: symmetric `k·tanh(x/k)` (k = 20 V equivalent) blended by SUMMING, only while clones are present.
 * MIX crossfades dry input against the processed sum; OUTPUT is a smoothed trim.
+* **Nothing steps.** MIX (10 ms), SUMMING (20 ms), OUTPUT and the level normalisation (20 ms) are smoothed per sample; per-voice level and pan
+  follow their control-tick targets with a 6 ms one-pole; the FUSION layer's gain and its HZ-mode crossfade, every voice gain and the lock
+  weight use **two cascaded one-pole stages**, so a fade starts with zero slope (no kink in the amplitude envelope); the RATIO and HZ shift models
+  of the FUSION layer are cross-faded while the model is being switched. Clones keep running until
+  their gain has faded out (VOICES lowered, ORIGINAL ONLY, quality switch); a voice that has no table yet stays silent, and its table is built at
+  once when VOICES is raised. Details and evidence in §8.5.
 
 ## 4. Candidates tested, and why this one
 
@@ -149,7 +155,7 @@ source model with the same tuning offsets (`renderBank`). Letters as in the spec
 | B | identity phase locking | Laroche–Dolson peak locking, N = 4096 / 16384 (`B`, `B'`) | prototyped |
 | C | sinusoidal modelling / partial tracking | STFT peaks + McAulay–Quatieri tracking + additive resynthesis | prototyped |
 | D | additive partial resynthesis | harmonic heterodyne with an **oracle f0** (an upper bound for STFT partial methods) | prototyped |
-| E | frequency-domain shifting | additive-Hz single-sideband shift (Bode style, Hilbert FIR), fundamental-matched | prototyped |
+| E | frequency-domain spectral bin shifting | additive-Hz single-sideband shift (Bode style, Hilbert FIR), fundamental-matched: the exact time-domain equivalent of shifting every bin by the same number of Hz; a literal FFT bin shifter would add the resolution limits of A/B on top | prototyped in its ideal form |
 | F | time-domain pitch shifting | F1 rotating two-tap delay (chorus / classic shifter); F2 period-synchronous resampler with jump-by-period | prototyped |
 | G | PSOLA-like | pitch-synchronous overlap-add on the same period source | prototyped |
 | H | hybrid time-frequency | 2-band multi-resolution identity-locked PV (16384 below 300 Hz, 2048 above) | prototyped |
@@ -179,7 +185,7 @@ pitch. The discriminating conditions are low pitch, many voices and transients.
 
 | candidate | lvl\|dB\| | spread × | IH dB | ripple |
 |---|---|---|---|---|
-| **J (this work)** | **0.39** | **1.00** | **−79.7** | **0.32** |
+| **J (this work)** | **0.40** | **1.00** | **−79.7** | **0.33** |
 | A phase vocoder 4096 | 1.07 | 0.99 | −44.1 | 0.94 |
 | A′ phase vocoder 16384 | 0.62 | 1.00 | −54.3 | 0.38 |
 | B identity locking 4096 | 0.86 | 0.50 | −44.7 | 1.66 |
@@ -196,7 +202,7 @@ pitch. The discriminating conditions are low pitch, many voices and transients.
 
 | candidate | lvl\|dB\| | spread × | IH dB | ripple |
 |---|---|---|---|---|
-| **J** | **0.18** | **1.00** | **−96.8** | 0.17 |
+| **J** | **0.19** | **1.00** | **−96.8** | 0.17 |
 | A 4096 / A′ 16384 | 0.58 / 0.49 | 1.00 / 0.98 | −57.3 / −86.9 | 0.50 / 0.50 |
 | B 4096 / B′ 16384 | 0.60 / 0.53 | 1.00 / 0.99 | −58.4 / −88.5 | 0.50 / 0.50 |
 | C sinusoidal | 0.58 | 1.01 | −101.0 | 0.50 |
@@ -207,7 +213,7 @@ pitch. The discriminating conditions are low pitch, many voices and transients.
 | G PSOLA | 0.12 | 1.01 | −87.7 | 0.15 |
 | H multi-resolution PV | 0.67 | 1.00 | −78.8 | 0.56 |
 
-*Saw + Doppler-style DETUNE stage (source hypothesis), 110 Hz, N = 8* (reference: `IH` −48.0 dB, `ripple` 0.17, `recur` 0.48): J 0.22 / 1.00 /
+*Saw + Doppler-style DETUNE stage (source hypothesis), 110 Hz, N = 8* (reference: `IH` −48.0 dB, `ripple` 0.17, `recur` 0.48): J 0.22 / 1.01 /
 −52.6 / **0.30**; B 0.24 / 1.01 / −48.0 / 0.17; G 0.22 / 1.03 / −47.4 / 0.12; H 0.19 / 1.01 / −48.2 / 0.13; E 0.22 / 0.83 / −48.4 / 0.00;
 F2 1.19 / 1.10 / **−28.0** / 1.00. J's `recur` is 0.68 against 0.48 for the reference: see limitation 9.2 (sideband modulation is shared by
 all clones).
@@ -216,13 +222,13 @@ Texture statistics over many random realisations (`research/results/texture.txt`
 
 | scene | independent bank (reference) | **J** | F1 rotating delay | evenly spaced detunes ("supersaw") |
 |---|---|---|---|---|
-| saw 110 Hz, N = 8 | 0.504 ± 0.026 / 0.468 ± 0.197 | **0.499 ± 0.016 / 0.476 ± 0.178** | 0.508 / 0.359 | 0.468 / **0.997** |
-| saw 110 Hz, N = 16 | 0.502 / 0.226 | **0.513 / 0.246** | 0.504 / 0.194 | 0.490 / **0.994** |
-| saw 220 Hz, N = 8 | 0.503 / 0.470 | **0.494 / 0.471** | 0.497 / 0.455 | 0.457 / **0.999** |
+| saw 110 Hz, N = 8 | 0.504 ± 0.026 / 0.468 ± 0.197 | **0.495 ± 0.020 / 0.465 ± 0.185** | 0.508 / 0.359 | 0.468 / **0.997** |
+| saw 110 Hz, N = 16 | 0.502 / 0.226 | **0.510 / 0.251** | 0.504 / 0.194 | 0.490 / **0.994** |
+| saw 220 Hz, N = 8 | 0.503 / 0.470 | **0.493 / 0.467** | 0.497 / 0.455 | 0.457 / **0.999** |
 | saw 55 Hz, N = 8 | 0.500 / 0.468 | **0.499 / 0.465** | 0.503 / 0.481 | 0.512 / **1.000** |
 
 Transients (`research/results/transient.txt`, N = 8, note-on with a 2 ms attack at 110 Hz; the offline candidates get their best case, no
-extra lag): pre-attack echo relative to the steady level — reference −0.0 dB, **J −3.6**, A +0.9, B +6.0, C +1.5, F2 +0.5, G +2.4, H −7.0 (but
+extra lag): pre-attack echo relative to the steady level — reference −0.0 dB, **J −3.7**, A +0.9, B +6.0, C +1.5, F2 +0.5, G +2.4, H −7.0 (but
 96 ms rise); overshoot — reference 2.4 dB, **J 0.1**, B 9.1, C 6.1, G 2.4. J's clones *bloom in* over a few periods while the untouched original
 provides the attack; the price is the bloom time (§6).
 
@@ -275,16 +281,17 @@ two good hops and periodicity > 0.30. A 0.6 s watchdog abandons an acquisition t
 within a few ms (onsets, pitch steps, waveform switches; slow natural modulation never opens that gap); 2 tracker mismatch — three confident
 tracker estimates incompatible with P, P/2, 2P; 3 coherence < 0.6 or periodicity < 0.12 twice in a row; 4 re-lock at the *doubled* period
 (the SUB knob turned up during a held note: the tracker now reports 2P and the single-period model explains the signal poorly). On a drop the
-lock weight falls in ≈1.2 ms and the original carries on alone.
+lock weight falls (two cascaded 0.6 ms stages, ≈2 ms from 90 % to 10 %; 3 ms stages for a user-triggered drop such as a QUALITY switch) and the
+original carries on alone; a new lock waits until the clones of the previous one have faded out.
 
 **Glides and vibrato** do not drop the lock: the Kalman slope carries them (D1: ±15 cent 5 Hz vibrato at 55 / 110 / 220 / 880 Hz, zero drops,
 clone-versus-source pitch error 5.2 / 1.8 / 0.7 / 0.08 cent rms in BALANCED; 11.4 / 3.7 / 1.4 / 0.15 in HIGH — M = 4 doubles the measurement
 latency, physics rather than tuning: §7). A 110 → 220 Hz glide over 1 s: 0 unlocked samples, clone pitch error 0.19 cent.
 
 **Latency.** The original path has **0 samples** of latency (a direct connection; measured exactly 0 in `tests/test_engine.cpp`). The clones
-*bloom in*: the time until the clone weight exceeds 90 % after an onset — 267 ms at 20 Hz, 183 ms at 41 Hz, 66–78 ms at 110 Hz, 21 ms at
-440 Hz, 10 ms at 1.76 kHz, essentially independent of QUALITY (`docs/BENCHMARKS.md`); it is a few periods of the tracked unit, not a fixed
-delay. A pitch step re-acquires in 3–6 ms at 110 Hz (T2, `research/results/transient.txt`).
+*bloom in*: the time until the clone weight exceeds 90 % after an onset — 257 ms at 20 Hz, 172 ms at 41 Hz, 61–73 ms at 110 Hz, 20 ms at
+440 Hz, 9 ms at 1.76 kHz, essentially independent of QUALITY (`docs/BENCHMARKS.md`); it is a few periods of the tracked unit, not a fixed
+delay. A pitch step re-acquires in 3.5–6.5 ms at 110 Hz (T2, `research/results/transient.txt`).
 
 ## 7. FFT-size / analysis-window study, low-frequency operation, quality modes
 
@@ -345,7 +352,7 @@ non-harmonic energy between harmonics* (M = 4: two extra bins between harmonics,
 **20 Hz.** A 20 Hz saw with a sub oscillator repeats every 100 ms (4800 samples): at 48 kHz BALANCED analyses 2 units (200 ms) on a 4096-point
 grid (step 1.17 samples), HIGH/ULTRA 4 units (400 ms) on 8192 points. Lock matrix: every waveform family locks at 20 Hz in every mode; C0
 (16.35 Hz) locks in 0.20 s (`research/results/engine_checks.txt`); the analyser's steady-state frequency jitter at 20 Hz is 0.001 cent rms.
-The price is the bloom time (267 ms), and vibrato tracking at ≤ 55 Hz (S2).
+The price is the bloom time (257 ms), and vibrato tracking at ≤ 55 Hz (S2).
 
 ## 8. Implementation notes
 
@@ -365,11 +372,18 @@ The price is the bloom time (267 ms), and vibrato tracking at ≤ 55 Hz (S2).
   Function-local statics (interpolation kernels, log₂ table) are built in `prepare()`.
 * **Time slicing.** Cost peaks are removed rather than averaged: an analysis hop is a resumable job (fill 512 grid points per sample, then FFT,
   extraction, alignment/publish); a voice table is built in ≤ 5 stages, one per sample, one voice at a time; the period refinement is one FFT
-  correlation. Worst *single-sample* cost at 16 voices went from 0.3 … 3 ms to **100 … 165 µs including the acquisition of a note** (21 … 131 µs in
-  steady state; R2, min of three identical runs to remove scheduler noise), mean 1.0 … 3.3 µs per sample; see `docs/BENCHMARKS.md`.
+  correlation. Worst *single-sample* cost at 16 voices went from 0.3 … 3 ms to **100 … 170 µs including the acquisition of a note** (21 … 135 µs in
+  steady state; R2, min of three identical runs to remove scheduler noise), mean 1.1 … 3.6 µs per sample; see `docs/BENCHMARKS.md`.
 * **SIMD.** The 16/32-tap sinc dot product (the inner loop of every read) is explicit SSE2 / NEON / scalar (`kernelDot`), verified against a
   double-precision reference (`tests/test_sinc.cpp`) and syntax/codegen-checked for aarch64 with clang; the FFT is pffft (SSE/NEON).
 * FFT plans, windows, tables and rings are allocated in `prepare()` for the largest configuration; quality switches only re-configure.
+* **Safety nets.** A table with a non-finite value is never installed; an output sample that is non-finite or beyond ±1e6 resets the engine and
+  passes the input through; both increment `guardHits()`, which every test asserts to be 0 (they have never fired since the one race they were
+  written for was fixed).
+* **Randomised stress** (`tests/test_realtime.cpp` R4): random control changes at random moments (bursts of 1–4 controls, on average every
+  5 ms), random quality/VOICES/mode changes, random notes (waveform mixes, sub, tube, DETUNE sidebands, 20 Hz – 4 kHz, gates, silence, DC, noise
+  bursts), 6 seeds × 12 s: finite output, no heap operation, no safety-net hit. It found a genuine race (a CHARACTER change between two stages
+  of a table build divided by zero) that the scripted scenarios had missed, and is verified to detect it again if the fix is removed.
 
 ### 8.3 Determinism and patch state
 Per-voice seeds: a *personality* `(seed, voice)` (detune quantile, pan, level, tilt, bells, dispersion, drive, bias, LFO phase/rate), plus
@@ -380,6 +394,27 @@ patch reproduces the same population; RANDOMIZE draws a new seed; the same seed 
 ### 8.4 Failure modes (all tested in `tests/test_engine.cpp`, `research/exp_engine_checks.cpp`)
 Silence, DC, white noise, ±1e9 garbage, NaN/Inf, hard-clipped saw, a chord, sample rates 44.1 … 192 kHz, disconnected input, polyphonic input
 (channel 1 only): output stays finite and bounded, no lock on garbage (noise/DC never lock), clean fall-back to the original.
+
+### 8.5 Clicks, zipper noise and other artefacts — objective probes (`tests/test_artifacts.cpp`)
+Listening is not possible here, so the "zero-artifact" list of the specification is covered by probes with a bound derived from theory.
+The **click detector** feeds a *pure 110 Hz tone*: every voice is then a plain sine, the output is a sum of at most K smooth sinusoids below
+f_max, and its second difference is bounded by `ω_max² · Σ Aᵢ` with `Σ Aᵢ ≤ RMS·√(2K)` (Cauchy–Schwarz), evaluated on the louder of the windows
+before and after the change. A step of 0.2 % of the signal (−54 dB) already exceeds the bound by an order of magnitude; the tests require the
+worst second difference to stay below 1× the bound.
+
+| probe | worst case (× bound) |
+|---|---|
+| A1 — 24 controls stepped at once (MIX, VOICES 8→16/1/2, SPREAD, DRIFT, CHARACTER, PHASE, HARMONIC, WIDTH, OUTPUT ±, SUMMING, LEVEL LAW, ORIGINAL ONLY, DETUNE RANGE, FUSION layer on/off in RATIO and HZ, shift model RATIO↔HZ) | 0.12 – 0.37 |
+| A2 — 10 continuous controls swept in 10 ms steps over 1 s (a knob at a 100 Hz update rate) | 0.13 – 0.51 (OUTPUT) |
+| A3 — VOICES 1→16→1 (150 ms per step) / QUALITY switches (drop, re-lock, bloom) / ORIGINAL ONLY toggled every 0.5 s | 0.31 / 0.60 / 0.37 |
+| A4 — gate on (2 ms), gate off (2 ms), phase-continuous pitch step, hard note change: output never exceeds 1.6 × the *input's own* second difference + the smooth allowance | output 0.4 – 1.17 × the input's |
+| A5 — sawtooth at 1.7 kHz (harmonics to 22 kHz) plus one clone at +38 cents: energy off both harmonic series (aliasing, intermodulation, noise) | −74.2 dB re the harmonic energy (bound −60 dB) |
+
+Before the smoothing work the same probes measured 16 × to 750 × the bound (MIX, VOICES → 1 and ORIGINAL ONLY cut the clones off instantly,
+a raised VOICES started new voices at a fraction of full gain the moment their table arrived, the FUSION layer and SUMMING switched
+instantly, CHARACTER/DRIFT stepped the per-voice level, a QUALITY switch muted the clones and a fast re-lock cut a fade in half).
+Not covered by a probe: zipper noise from parameters that only change *what the tables contain* (HARMONIC, PHASE, CHARACTER at HIGH/ULTRA) — those
+are cross-faded between tables over ≈85 % of the publication interval, and the A1/A2 rows for them show the cross-fade is click-free on a tone.
 
 ## 9. Limitations (scientific and practical)
 
@@ -399,7 +434,7 @@ SSB is undecided without a measurement; `docs/REFERENCE_PROTOCOL.md`).
 **9.3 Monophonic, quasi-periodic sources only.** A chord, a noise source, or heavy FM has no single period: the engine does not lock and the
 original passes unchanged. Polyphonic input uses channel 1 only.
 
-**9.4 Bloom-in.** Clones appear a few periods after a note onset or pitch step (267 ms at 20 Hz … 10 ms at 1.76 kHz). Fast pitch modulation
+**9.4 Bloom-in.** Clones appear a few periods after a note onset or pitch step (257 ms at 20 Hz … 9 ms at 1.76 kHz). Fast pitch modulation
 (vibrato > ~8 Hz at ≤ 55 Hz, or a pitch *step*) is followed by a re-acquisition, not seamlessly.
 
 **9.5 Band edge.** The analysis kernel droops above 0.30·fs (16 taps: 1.4 dB at 19 kHz; 32 taps: 0.13 dB) and reaches −6 dB at 0.46·fs; the
@@ -424,4 +459,5 @@ describes the measurements that would settle it.
 | 14, 15 | MIX = 0 → original only; MIX = 100 % → processed sum | `test_engine` TESTS 14/15, `test_module` | exact / differs by 0.79 rel. |
 
 Further suites: `test_lock` (waveform × pitch matrix, 168 cells per quality mode), `test_dynamics` (vibrato, SUB sweep, WAVE switch, note gap),
-`test_analyzer`, `test_pitch`, `test_sinc`, `test_fft`, `test_hilbert`, `test_realtime`, `test_module` (real `Module` class, headless).
+`test_artifacts` (clicks, zipper steps, fades, aliasing — §8.5), `test_realtime` (allocations, finiteness, randomised stress, per-sample cost),
+`test_analyzer`, `test_pitch`, `test_sinc`, `test_fft`, `test_hilbert`, `test_module` (real `Module` class, headless).

@@ -5,7 +5,9 @@
 #pragma once
 #include "Common.hpp"
 
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+// -DFC_NO_SIMD forces the portable scalar dot product (troubleshooting aid for a platform whose intrinsics misbehave)
+#if defined(FC_NO_SIMD)
+#elif defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
 #include <emmintrin.h>
 #define FC_SIMD_SSE 1
 #elif defined(__ARM_NEON) || defined(__aarch64__)

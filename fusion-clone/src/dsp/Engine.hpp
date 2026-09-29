@@ -98,6 +98,7 @@ public:
 			shGain_ = shGainMid_ = params_.algorithm == ALGO_FUSION ? 0.55f * std::sqrt(clampT(params_.fusionShift, 0.f, 1.f)) : 0.f;
 			fusionAmt_ = (shGain_ / 0.55f) * (shGain_ / 0.55f);
 			hzBlend_ = hzMid_ = shGain_ > 1e-4f ? 1.f : 0.f;
+			modeW_ = modeMid_ = params_.shiftMode == SHIFT_HZ ? 1.f : 0.f;
 		}
 		if (qChanged)
 			applyQuality(params_.quality);
@@ -180,6 +181,7 @@ public:
 		mixSm_ = params_.mix;
 		sumSm_ = 0.f;
 		fusionAmt_ = shGain_ = shGainMid_ = hzBlend_ = hzMid_ = 0.f;
+		modeW_ = modeMid_ = params_.shiftMode == SHIFT_HZ ? 1.f : 0.f;
 	}
 
 	/** Process one sample. `in` is normalised so that 1.0 = the nominal 5 V audio level. */
@@ -228,11 +230,18 @@ public:
 				shGain_ = shGainMid_ = gTarget;
 			fusionAmt_ = (shGain_ / 0.55f) * (shGain_ / 0.55f); // the smoothed amount that drives LFO rate and depth
 			fusionOn_ = shGain_ > 1e-4f || gTarget > 1e-4f;
+			const float mTarget = params_.shiftMode == SHIFT_HZ ? 1.f : 0.f;
+			modeMid_ += (mTarget - modeMid_) * gainSlew_;
+			modeW_ += (modeMid_ - modeW_) * gainSlew_;
+			if (std::fabs(mTarget - modeW_) < 1e-4f && std::fabs(mTarget - modeMid_) < 1e-4f)
+				modeW_ = modeMid_ = mTarget;
 			if (fusionOn_) {
 				fusionNorm_ = 1.f / std::sqrt(1.f + 2.f * shGain_ * shGain_);
 				// HZ mode: the main path is the Hilbert pair's in-phase branch, which is a delayed copy of the input; cross-fade to it
 				hzMid_ += ((gTarget > 1e-4f ? 1.f : 0.f) - hzMid_) * gainSlew_;
 				hzBlend_ += (hzMid_ - hzBlend_) * gainSlew_;
+			} else {
+				hzMid_ = hzBlend_ = 0.f;
 			}
 		}
 		float wetMid = 0.f, wetL = 0.f, wetR = 0.f;
@@ -855,7 +864,7 @@ private:
 		s.curve.build(s.vp, h, ph, s.tiltDrift.x, fs_ / P);
 		// anti-aliasing limit for this voice: harmonic j sits at j*ratio/P cycles/sample and must stay below 0.49. In the FUSION layer's RATIO mode
 		// two more copies of the table run up to (1 + shiftFrac) faster than the main oscillator.
-		const double rmax = s.ratioTarget * 1.004 * (fusionOn_ && params_.shiftMode == SHIFT_RATIO ? 1.0 + (double) s.shiftFrac : 1.0);
+		const double rmax = s.ratioTarget * 1.004 * (fusionOn_ && (params_.shiftMode == SHIFT_RATIO || modeW_ < 0.9999f) ? 1.0 + (double) s.shiftFrac : 1.0);
 		const int Jaa = (int) std::floor(0.49 * P / rmax);
 		const int J = std::min(std::min(pubJ_, Jaa), Nc / 2 - 1);
 		bldJ_ = J;
@@ -958,12 +967,15 @@ private:
 		return a + s.alpha * (b - a);
 	}
 
-	/** One output sample of a clone: the main oscillator plus (FUSION algorithm) the two detune-cluster lines. */
+	/** One output sample of a clone: the main oscillator plus (FUSION algorithm) the two detune-cluster lines. The two shift models are
+	    cross-faded (modeW_: 0 = RATIO, 1 = HZ) while the model is being switched, so that the switch does not click. */
 	template <int TAPS>
 	inline float renderVoice(VoiceState& s, double omega) {
 		float y = readMix<TAPS>(s, s.phase);
 		if (fusionOn_) {
-			if (params_.shiftMode == SHIFT_RATIO) {
+			const float y0main = y;
+			float yR = y0main, yH = y0main;
+			if (modeW_ < 0.9999f) {
 				// two extra oscillators whose ratio is pushed apart by a soft-square LFO (the Doppler / time-varying-delay reading of the
 				// BBD "frequency shifter": multiplicative pitch offsets that swap sign every half LFO cycle)
 				s.lfoPhase += s.lfoInc;
@@ -975,17 +987,19 @@ private:
 				s.xPhase[0] -= std::floor(s.xPhase[0]);
 				s.xPhase[1] -= std::floor(s.xPhase[1]);
 				const float y0 = readMix<TAPS>(s, s.xPhase[0]), y1 = readMix<TAPS>(s, s.xPhase[1]);
-				y = (y + shGain_ * (y0 + y1)) * fusionNorm_;
-			} else {
+				yR = (y0main + shGain_ * (y0 + y1)) * fusionNorm_;
+			}
+			if (modeW_ > 1e-4f) {
 				// literal single-sideband reading: constant additive offsets (+D, -D') in Hz on all partials
 				float i, q;
-				s.hil.process(y, i, q);
+				s.hil.process(y0main, i, q);
 				s.carrier[0].step();
 				s.carrier[1].step();
 				const float up = i * s.carrier[0].c + q * s.carrier[0].s; // sign convention verified in tests/test_hilbert.cpp
 				const float dn = i * s.carrier[1].c - q * s.carrier[1].s;
-				y = (y + hzBlend_ * (i - y) + shGain_ * (up + dn)) * fusionNorm_;
+				yH = (y0main + hzBlend_ * (i - y0main) + shGain_ * (up + dn)) * fusionNorm_;
 			}
+			y = modeW_ < 1e-4f ? yR : (modeW_ > 0.9999f ? yH : yR + modeW_ * (yH - yR));
 		}
 		if (s.alpha < 1.f) {
 			s.alpha += s.alphaInc;
@@ -1139,7 +1153,7 @@ private:
 	int dropCount_[5] = {0, 0, 0, 0, 0};
 	bool paramsSeen_ = false;
 	bool fusionOn_ = false;
-	float fusionNorm_ = 1.f, fusionAmt_ = 0.f, shGain_ = 0.f, shGainMid_ = 0.f, hzBlend_ = 0.f, hzMid_ = 0.f;
+	float fusionNorm_ = 1.f, fusionAmt_ = 0.f, shGain_ = 0.f, shGainMid_ = 0.f, hzBlend_ = 0.f, hzMid_ = 0.f, modeW_ = 0.f, modeMid_ = 0.f;
 	float mixSm_ = 1.f, mixSlew_ = 0.002f, ctrlSlew_ = 0.003f, sumSm_ = 0.f;
 	float overrideCents_[kMaxVoices] = {0};
 	bool overrideActive_ = false;

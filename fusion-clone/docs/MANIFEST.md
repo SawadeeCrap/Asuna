@@ -78,5 +78,5 @@ Bypass routes: `AUDIO_INPUT` → `L_OUTPUT` and `R_OUTPUT`.
   `onSampleRateChange()` (called by Rack on the engine thread when the module is added or the rate changes).
 * The analysis hop is a resumable job (one bounded piece per sample) and table construction is time-sliced (one voice at a time, up to five
   short stages, one stage per sample) and double-buffered with a cross-fade; parameter changes are smoothed per sample; a QUALITY change
-  reconfigures without reallocating. The worst single `process()` call measured is 100 – 165 µs at 16 voices (`docs/BENCHMARKS.md`).
+  reconfigures without reallocating. The worst single `process()` call measured is 100 – 170 µs at 16 voices (`docs/BENCHMARKS.md`).
 * The GUI reads a seqlock-protected status snapshot written every 1024 samples; it never touches the DSP state.

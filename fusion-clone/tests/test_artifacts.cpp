@@ -11,6 +11,9 @@
 //   A3  VOICES stepped through 1 .. 16 and back, quality switches, original-only toggle: no click
 //   A4  note gate (2 ms attack), gate off, pitch step: the output never has a larger second difference than the input's own event shape allows
 //   A5  aliasing: a sawtooth close to the top of the range, one detuned clone: energy that belongs to neither harmonic series
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers" // Case entries without a `pre` hook
+#endif
 #include "../research/common/fusion_source.hpp"
 #include "../research/common/metrics.hpp"
 #include "../src/dsp/Engine.hpp"
@@ -61,6 +64,7 @@ struct Case {
 	const char* name;
 	std::function<void(fc::EngineParams&)> apply;
 	int K; // number of sinusoids in the worst case
+	std::function<void(fc::EngineParams&)> pre; // optional: changes the parameters the run starts with
 };
 
 static fc::EngineParams baseParams() {
@@ -77,7 +81,7 @@ int main() {
 	printf("A1  step of every control at t = 2 s, pure 110 Hz tone: worst second difference / bound (must be < 1)\n");
 	const Case cases[] = {
 	    {"MIX 1 -> 0", [](fc::EngineParams& p) { p.mix = 0.f; }, 16},
-	    {"MIX 0 -> 1 (from 0)", nullptr, 16}, // handled below
+	    {"MIX 0 -> 1 (from 0)", nullptr, 16, nullptr}, // handled below
 	    {"VOICES 8 -> 16", [](fc::EngineParams& p) { p.voices = 16; }, 16},
 	    {"VOICES 8 -> 1", [](fc::EngineParams& p) { p.voices = 1; }, 16},
 	    {"VOICES 8 -> 2", [](fc::EngineParams& p) { p.voices = 2; }, 16},
@@ -96,6 +100,14 @@ int main() {
 	    {"DETUNE RANGE 20 -> 60", [](fc::EngineParams& p) { p.detuneRangeCents = 60.f; }, 16},
 	    {"FUSION layer on (RATIO)", [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 1.f; }, 48},
 	    {"FUSION layer on (HZ)", [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 1.f; p.shiftMode = fc::SHIFT_HZ; }, 48},
+	    {"FUSION shift model RATIO -> HZ", [](fc::EngineParams& p) { p.shiftMode = fc::SHIFT_HZ; }, 48,
+	     [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 0.8f; p.shiftMode = fc::SHIFT_RATIO; }},
+	    {"FUSION shift model HZ -> RATIO", [](fc::EngineParams& p) { p.shiftMode = fc::SHIFT_RATIO; }, 48,
+	     [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 0.8f; p.shiftMode = fc::SHIFT_HZ; }},
+	    {"FUSION layer off (was on)", [](fc::EngineParams& p) { p.algorithm = fc::ALGO_CLASSIC; }, 48,
+	     [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 1.f; }},
+	    {"FUSION layer off (was on, HZ)", [](fc::EngineParams& p) { p.algorithm = fc::ALGO_CLASSIC; }, 48,
+	     [](fc::EngineParams& p) { p.algorithm = fc::ALGO_FUSION; p.fusionShift = 1.f; p.shiftMode = fc::SHIFT_HZ; }},
 	};
 	for (const Case& c : cases) {
 		fc::Engine e;
@@ -104,6 +116,8 @@ int main() {
 		bool fromZero = std::string(c.name).find("from 0") != std::string::npos;
 		if (fromZero)
 			p.mix = 0.f;
+		if (c.pre)
+			c.pre(p);
 		e.setParams(p);
 		std::vector<float> y(x.size());
 		for (size_t i = 0; i < x.size(); i++) {
@@ -229,20 +243,24 @@ int main() {
 
 	printf("A4  source events on a pure tone (the input's own second difference is the yardstick): output / input\n");
 	{
-		// gate with a 2 ms attack at 1.0 s, release (2 ms) at 2.5 s, then a pitch step (110 -> 165 Hz, phase-continuous) at 3.5 s
-		const size_t n = (size_t) (5.0 * FS);
+		// gate with a 2 ms attack at 1.0 s, release (2 ms) at 2.5 s, then a phase-continuous pitch step (110 -> 165 Hz) at 3.5 s and a hard
+		// note change (new note starts at phase 0, 165 -> 220 Hz: the input itself has a step there) at 4.5 s
+		const size_t n = (size_t) (6.0 * FS);
 		std::vector<float> xs(n);
 		double ph = 0;
 		for (size_t i = 0; i < n; i++) {
 			const double t = (double) i / FS;
-			const double f = t < 3.5 ? 110.0 : 165.0;
+			const double f = t < 3.5 ? 110.0 : (t < 4.5 ? 165.0 : 220.0);
 			ph += 2.0 * fc::kPi * f / FS;
+			if (i == (size_t) (4.5 * FS))
+				ph = 0.0;
 			double g = 1.0;
 			if (t < 1.0) g = 0.0;
 			else if (t < 1.002) g = (t - 1.0) / 0.002;
-			else if (t > 2.5 + 0.002) g = 0.0;
-			else if (t > 2.5) g = 1.0 - (t - 2.5) / 0.002;
-			xs[i] = (float) (4.0 * g * std::sin(ph));
+			else if (t > 2.5 + 0.002 && t < 2.6) g = 0.0;
+			else if (t > 2.5 && t < 2.6) g = 1.0 - (t - 2.5) / 0.002;
+			else if (t >= 2.6 && t < 2.602) g = (t - 2.6) / 0.002;
+			xs[i] = (float) (1.6 * g * std::sin(ph));
 		}
 		fc::Engine e;
 		e.prepare(FS);
@@ -254,14 +272,15 @@ int main() {
 			y[i] = l;
 		}
 		struct Win { const char* name; double t0, t1; };
-		const Win wins[] = {{"gate on  (2 ms attack)", 0.99, 1.30}, {"gate off (2 ms release)", 2.49, 2.80}, {"pitch step 110 -> 165 Hz", 3.49, 3.80}};
+		const Win wins[] = {{"gate on  (2 ms attack)", 0.99, 1.30}, {"gate off (2 ms release)", 2.49, 2.60}, {"pitch step 110 -> 165 Hz", 3.49, 3.80},
+		                    {"hard note change 165 -> 220 Hz", 4.49, 4.80}};
 		for (const Win& w : wins) {
 			const size_t i0 = (size_t) (w.t0 * FS), i1 = (size_t) (w.t1 * FS);
 			const double din = maxD2(xs, i0, i1), dout = maxD2(y, i0, i1);
-			// the original path contributes the input's own event shape at gain <= ~1.3 (level law), the clones bloom in over >= 3 ms:
+			// the original path contributes the input's own event shape at gain <= ~1.3 (level law), the clones fade over >= 3 ms:
 			// the output's worst second difference may exceed the input's by the clones' smooth part only
-			const double smooth = bound(rmsOf(y, i0, i1), 16, 165.0 * 1.1 + 9.0);
-			CHECK(dout <= 1.6 * din + smooth, "%-26s input %.4f, output %.4f (bound %.4f)", w.name, din, dout, 1.6 * din + smooth);
+			const double smooth = bound(rmsOf(y, i0, i1), 16, 220.0 * 1.1 + 9.0);
+			CHECK(dout <= 1.6 * din + smooth, "%-30s input %.3e, output %.3e (allowed %.3e)", w.name, din, dout, 1.6 * din + smooth);
 		}
 	}
 

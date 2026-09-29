@@ -1,21 +1,21 @@
 scene                          N      system                                      CV mean+-sd recur mean+-sd
 saw 110 Hz, sigma 6c           8      independent oscillators (reference)       0.504+-0.026  0.468+-0.197   (band k=8)
-                               8      J  this work                              0.499+-0.016  0.476+-0.178   (band k=8)
+                               8      J  this work                              0.495+-0.020  0.465+-0.185   (band k=8)
                                8      F1 rotating-delay chorus                  0.508+-0.028  0.359+-0.122   (band k=8)
                                8      evenly spaced detunes (supersaw)          0.468+-0.071  0.997+-0.004   (band k=8)
 
 saw 110 Hz, sigma 6c           16     independent oscillators (reference)       0.502+-0.026  0.226+-0.061   (band k=8)
-                               16     J  this work                              0.513+-0.024  0.246+-0.093   (band k=8)
+                               16     J  this work                              0.510+-0.019  0.251+-0.086   (band k=8)
                                16     F1 rotating-delay chorus                  0.504+-0.022  0.194+-0.036   (band k=8)
                                16     evenly spaced detunes (supersaw)          0.490+-0.064  0.994+-0.007   (band k=8)
 
 saw 220 Hz, sigma 3c           8      independent oscillators (reference)       0.503+-0.026  0.470+-0.194   (band k=8)
-                               8      J  this work                              0.494+-0.025  0.471+-0.180   (band k=8)
+                               8      J  this work                              0.493+-0.025  0.467+-0.184   (band k=8)
                                8      F1 rotating-delay chorus                  0.497+-0.021  0.455+-0.175   (band k=8)
                                8      evenly spaced detunes (supersaw)          0.457+-0.068  0.999+-0.001   (band k=8)
 
 saw 55 Hz, sigma 10c           8      independent oscillators (reference)       0.500+-0.012  0.468+-0.195   (band k=10)
-                               8      J  this work                              0.499+-0.024  0.465+-0.192   (band k=10)
+                               8      J  this work                              0.499+-0.028  0.465+-0.186   (band k=10)
                                8      F1 rotating-delay chorus                  0.503+-0.019  0.481+-0.184   (band k=10)
                                8      evenly spaced detunes (supersaw)          0.512+-0.073  1.000+-0.010   (band k=10)
 

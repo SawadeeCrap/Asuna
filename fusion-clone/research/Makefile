@@ -7,7 +7,15 @@
 #   make PFFFT=/path/to/pffft     use pffft instead of the built-in FFT
 #   make clean
 CXX ?= g++
-CXXFLAGS ?= -std=c++11 -O2 -march=native -Wall -Wextra -Wno-unused-parameter
+# -march=native and -msse2 are x86 options; Apple silicon / aarch64 builds use the compiler's default target (NEON is always available)
+ifneq ($(filter arm64 aarch64,$(shell uname -m)),)
+  ARCH_CXX :=
+  ARCH_CC :=
+else
+  ARCH_CXX := -march=native
+  ARCH_CC := -msse2
+endif
+CXXFLAGS ?= -std=c++11 -O2 $(ARCH_CXX) -Wall -Wextra -Wno-unused-parameter
 ifdef PFFFT
   PFFFT_INC := $(firstword $(wildcard $(PFFFT)/include/pffft $(PFFFT)))
   CXXFLAGS += -DFC_FFT_PFFFT -I$(PFFFT_INC)
@@ -18,7 +26,7 @@ EXPS := exp_sanity exp_compare exp_transient exp_texture exp_engine_checks exp_f
 HDRS := $(wildcard common/*.hpp candidates/*.hpp ../src/dsp/*.hpp)
 
 all: $(EXPS)
-pffft.o: ; $(CC) -O3 -c -msse2 $(PFFFT)/src/pffft.c -I$(PFFFT_INC) -I$(PFFFT)/src -o $@
+pffft.o: ; $(CC) -O3 -c $(ARCH_CC) $(PFFFT)/src/pffft.c -I$(PFFFT_INC) -I$(PFFFT)/src -o $@
 pffft_common.o: ; $(CC) -O3 -c $(PFFFT)/src/pffft_common.c -I$(PFFFT_INC) -I$(PFFFT)/src -o $@
 exp_%: exp_%.cpp $(HDRS) $(PFFFT_OBJS) ; $(CXX) $(CXXFLAGS) $< $(PFFFT_OBJS) -o $@
 

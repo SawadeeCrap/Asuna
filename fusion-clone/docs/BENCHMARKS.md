@@ -20,34 +20,34 @@ make -C tests PFFFT=/path/to/pffft realtime                      # allocation co
 
 | quality | pitch | 1 voice | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|---|
-| ECO | 20 Hz | 3.07 | 3.53 | 3.94 | 5.06 | 7.63 |
-| ECO | 110 Hz | 2.34 | 2.59 | 2.91 | 3.67 | 4.88 |
-| ECO | 440 Hz | 3.35 | 3.83 | 4.09 | 5.02 | 6.17 |
-| ECO | 3520 Hz | 2.71 | 3.07 | 3.37 | 4.06 | 5.43 |
-| BALANCED | 20 Hz | 2.93 | 3.43 | 3.95 | 4.84 | 7.06 |
-| BALANCED | 110 Hz | 2.47 | 2.86 | 3.45 | 4.08 | 5.82 |
-| BALANCED | 440 Hz | 3.37 | 3.88 | 4.16 | 4.86 | 6.66 |
-| BALANCED | 3520 Hz | 2.68 | 3.06 | 3.45 | 4.28 | 6.00 |
-| HIGH | 20 Hz | 6.21 | 6.95 | 8.59 | 11.36 | 18.02 |
-| HIGH | 110 Hz | 2.94 | 3.29 | 3.78 | 4.85 | 7.19 |
-| HIGH | 440 Hz | 3.84 | 4.30 | 4.91 | 6.16 | 8.33 |
-| HIGH | 3520 Hz | 3.66 | 4.22 | 5.07 | 5.71 | 8.18 |
-| ULTRA | 20 Hz | 6.10 | 7.00 | 8.46 | 11.57 | 18.10 |
-| ULTRA | 110 Hz | 3.45 | 4.00 | 4.63 | 6.01 | 9.01 |
-| ULTRA | 440 Hz | 4.10 | 4.54 | 5.10 | 6.59 | 9.79 |
-| ULTRA | 3520 Hz | 3.73 | 4.02 | 4.75 | 5.81 | 8.58 |
+| ECO | 20 Hz | 3.10 | 3.79 | 4.46 | 6.71 | 9.13 |
+| ECO | 110 Hz | 2.38 | 2.65 | 3.01 | 3.86 | 5.30 |
+| ECO | 440 Hz | 3.53 | 3.74 | 4.21 | 4.83 | 6.17 |
+| ECO | 3520 Hz | 2.85 | 3.46 | 3.60 | 4.53 | 6.18 |
+| BALANCED | 20 Hz | 3.04 | 3.53 | 4.22 | 6.09 | 8.62 |
+| BALANCED | 110 Hz | 2.74 | 3.13 | 3.50 | 4.30 | 6.32 |
+| BALANCED | 440 Hz | 3.64 | 3.83 | 4.19 | 4.84 | 6.50 |
+| BALANCED | 3520 Hz | 2.83 | 3.17 | 3.54 | 4.38 | 6.62 |
+| HIGH | 20 Hz | 6.02 | 7.11 | 8.84 | 12.21 | 18.82 |
+| HIGH | 110 Hz | 3.04 | 3.49 | 3.99 | 5.26 | 7.61 |
+| HIGH | 440 Hz | 3.98 | 4.27 | 4.97 | 6.65 | 8.55 |
+| HIGH | 3520 Hz | 3.78 | 4.08 | 4.75 | 5.92 | 8.30 |
+| ULTRA | 20 Hz | 5.93 | 7.23 | 8.86 | 12.56 | 20.73 |
+| ULTRA | 110 Hz | 3.57 | 4.00 | 4.60 | 6.02 | 9.00 |
+| ULTRA | 440 Hz | 4.01 | 4.46 | 5.05 | 6.61 | 9.33 |
+| ULTRA | 3520 Hz | 3.71 | 4.03 | 4.70 | 6.03 | 8.76 |
 
 Reading the table:
 
 * **The "1 voice" column is not free.** VOICES = 1 leaves the original untouched, but tracker, level detector and analyser keep running so that
-  raising VOICES (or a VOICES CV) finds the lock already established: 2.3 – 6.2 % of a core. This is a deliberate design choice (immediate
+  raising VOICES (or a VOICES CV) finds the lock already established: 2.4 – 6.0 % of a core. This is a deliberate design choice (immediate
   response over idle CPU); a lower-power idle mode would delay the bloom-in by its full analysis time (§4).
-* **Marginal cost of one clone** ((16 voices − 1 voice)/15): ECO 0.17 – 0.30 %, BALANCED 0.22 – 0.28 %, HIGH 0.28 – 0.30 % (0.79 % at 20 Hz),
-  ULTRA 0.32 – 0.38 % (0.80 % at 20 Hz) of a core. Oscillator reads scale with the voice count; table rebuilds (one IFFT of up to 8192
+* **Marginal cost of one clone** ((16 voices − 1 voice)/15): ECO 0.18 – 0.22 % (0.40 % at 20 Hz), BALANCED 0.19 – 0.25 % (0.37 % at 20 Hz),
+  HIGH 0.30 % (0.85 % at 20 Hz), ULTRA 0.34 – 0.36 % (0.99 % at 20 Hz) of a core. Oscillator reads scale with the voice count; table rebuilds (one IFFT of up to 8192
   points per voice per publication interval) dominate at very low pitch, where the tables are largest and HIGH/ULTRA publish every 4–5 ms.
 * Pitch has little influence except at 20 Hz in HIGH/ULTRA (large tables, 4-period windows, 32-tap resampling).
-* FUSION algorithm layer (two extra table readers per clone, 16 voices, BALANCED, 110 Hz): RATIO mode 10.9 %, HZ mode (Hilbert pair per clone)
-  9.9 % of a core, against 5.8 % in CLASSIC mode.
+* FUSION algorithm layer (two extra table readers per clone, 16 voices, BALANCED, 110 Hz): RATIO mode 10.74 %, HZ mode (Hilbert pair per clone)
+  8.43 % of a core, against 6.3 % in CLASSIC mode.
 
 ## 2. Worst case — the most expensive audio block
 
@@ -56,31 +56,31 @@ Most expensive 256-sample block at 16 voices, as a percentage of the block's rea
 
 | quality | 20 Hz | 110 Hz | 440 Hz | 3520 Hz |
 |---|---|---|---|---|
-| ECO | 16.4 | 7.9 | 7.7 | 8.1 |
-| BALANCED | 13.4 | 8.3 | 10.6 | 7.5 |
-| HIGH | 27.7 | 13.0 | 10.9 | 9.1 |
-| ULTRA | 31.6 | 15.2 | 13.3 | 9.4 |
+| ECO | 17.5 | 8.1 | 8.6 | 8.1 |
+| BALANCED | 18.6 | 8.4 | 7.6 | 9.9 |
+| HIGH | 28.3 | 11.2 | 9.4 | 9.3 |
+| ULTRA | 29.3 | 13.7 | 14.3 | 10.1 |
 
 Cost of a **single call** of `process()` (`tests/test_realtime.cpp`, R2; 16 voices, saw + sub oscillator, CHARACTER 0.5, FUSION layer on; *every*
 sample of the 3 s run counts, including the acquisition of the note; budget per sample at 48 kHz is 20.8 µs):
 
 | quality | pitch | mean µs | 99.9 % µs | 99.99 % µs | max µs | samples > 100 µs |
 |---|---|---|---|---|---|---|
-| ECO | 20 Hz | 1.35 | 56.8 | 57.8 | 145.8 | 1 |
-| ECO | 110 Hz | 1.03 | 44.6 | 52.8 | 119.6 | 1 |
-| ECO | 880 Hz | 1.35 | 14.5 | 17.8 | 102.5 | 1 |
-| BALANCED | 20 Hz | 1.30 | 56.6 | 58.9 | 147.4 | 1 |
-| BALANCED | 110 Hz | 1.14 | 45.2 | 58.9 | 109.8 | 1 |
-| BALANCED | 880 Hz | 1.41 | 15.0 | 17.8 | 102.5 | 1 |
-| HIGH | 20 Hz | 3.27 | 76.9 | 86.8 | 162.0 | 5 |
-| HIGH | 110 Hz | 1.55 | 30.9 | 39.4 | 119.9 | 1 |
-| HIGH | 880 Hz | 1.69 | 19.3 | 26.5 | 113.4 | 1 |
-| ULTRA | 20 Hz | 3.25 | 76.8 | 82.2 | 145.8 | 2 |
-| ULTRA | 110 Hz | 1.99 | 31.0 | 39.4 | 109.1 | 1 |
-| ULTRA | 880 Hz | 1.87 | 19.1 | 26.1 | 109.0 | 1 |
+| ECO | 20 Hz | 1.49 | 56.0 | 57.1 | 144.8 | 1 |
+| ECO | 110 Hz | 1.08 | 44.5 | 47.1 | 114.0 | 1 |
+| ECO | 880 Hz | 1.37 | 14.4 | 17.6 | 121.2 | 1 |
+| BALANCED | 20 Hz | 1.46 | 56.5 | 61.6 | 152.0 | 1 |
+| BALANCED | 110 Hz | 1.19 | 44.5 | 55.2 | 128.9 | 1 |
+| BALANCED | 880 Hz | 1.41 | 14.3 | 17.0 | 103.1 | 1 |
+| HIGH | 20 Hz | 3.64 | 84.6 | 113.4 | 163.5 | 49 |
+| HIGH | 110 Hz | 1.62 | 30.8 | 39.0 | 135.5 | 1 |
+| HIGH | 880 Hz | 1.72 | 19.2 | 26.0 | 102.7 | 1 |
+| ULTRA | 20 Hz | 3.59 | 87.2 | 104.5 | 167.1 | 31 |
+| ULTRA | 110 Hz | 2.09 | 30.9 | 38.2 | 125.3 | 1 |
+| ULTRA | 880 Hz | 1.91 | 19.3 | 26.2 | 113.4 | 1 |
 
-The **maximum single-sample cost is 100 – 165 µs** (one event per note: the acquisition, which runs the period refinement and starts the
-first table builds); in steady state it is 21 – 131 µs. Before the real-time hardening the worst single sample was 0.3 – 3 ms. The remaining
+The **maximum single-sample cost is 100 – 170 µs** (one event per note: the acquisition, which runs the period refinement and starts the
+first table builds); in steady state it is 21 – 135 µs. Before the real-time hardening the worst single sample was 0.3 – 3 ms. The remaining
 peaks are the FFT stage of an analysis hop (≤ 100 µs at 32 768 points), the finishing stage (harmonic alignment and publication), the first
 stage of a table build, and the acquisition.
 
@@ -103,17 +103,17 @@ every output sample finite and bounded (R3).
 
 * **Original path: 0 samples** (direct connection, no delay line; measured exactly 0 in `tests/test_engine.cpp`).
 * **Clone bloom-in** — the time from a note onset (2 ms attack) until the clone weight exceeds 90 %; it is a few periods of the tracked
-  repeating unit plus a fixed ≈ 8 ms tracker/lock overhead, essentially independent of QUALITY:
+  repeating unit plus a fixed ≈ 8 ms tracker/lock overhead, essentially independent of QUALITY (the weight itself is a two-stage smoother):
 
 | pitch | ECO | BALANCED | HIGH | ULTRA |
 |---|---|---|---|---|
-| 20.0 Hz | 267.3 ms | 267.3 ms | 267.8 ms | 267.8 ms |
-| 41.2 Hz | 186.8 ms | 182.7 ms | 183.1 ms | 181.0 ms |
-| 110.0 Hz | 77.9 ms | 68.8 ms | 69.0 ms | 66.0 ms |
-| 440.0 Hz | 20.7 ms | 20.7 ms | 20.9 ms | 20.9 ms |
-| 1760.0 Hz | 10.2 ms | 10.2 ms | 10.4 ms | 10.4 ms |
+| 20.0 Hz | 256.6 ms | 256.6 ms | 257.1 ms | 257.1 ms |
+| 41.2 Hz | 176.0 ms | 172.0 ms | 172.3 ms | 170.3 ms |
+| 110.0 Hz | 73.0 ms | 63.9 ms | 64.1 ms | 61.1 ms |
+| 440.0 Hz | 19.5 ms | 19.5 ms | 19.7 ms | 19.7 ms |
+| 1760.0 Hz | 9.1 ms | 9.1 ms | 9.3 ms | 9.3 ms |
 
-* Pitch steps: the clones re-acquire in 3 ms (fifth up) to 6 ms (semitone) at 110 Hz (`research/results/transient.txt`, T2); the original is
+* Pitch steps: the clones re-acquire in 3.5 ms (fifth up) to 6.5 ms (semitone) at 110 Hz (`research/results/transient.txt`, T2); the original is
   heard throughout.
 * The module shows the bloom time for the current pitch (`(M + 3)` periods) in its context menu; the Rack module reports **0 samples** of
   latency for the audio path, because the original is never delayed.
