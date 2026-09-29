@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
 	const int voices[] = {1, 2, 4, 8, 16};
 	const char* qn[] = {"ECO", "BALANCED", "HIGH", "ULTRA"};
 	printf("FFT backend: %s   sample rate %.0f Hz   %.0f s of audio per cell\n\n", fc::RealFFT::backendName(), fs, seconds);
-	printf("CPU load, %% of one core (lower is better; 100%% = real-time limit of one core on THIS machine)\n\n");
+	printf("CPU load, %% of one core (lower is better; 100%% = real-time limit of one core on THIS machine; fastest of 3 identical runs per cell)\n\n");
 	if (md) printf("| quality | pitch | 1 voice | 2 | 4 | 8 | 16 |\n|---|---|---|---|---|---|---|\n");
 	else printf("%-9s %-8s %8s %8s %8s %8s %8s\n", "quality", "pitch", "1 voice", "2", "4", "8", "16");
 	for (int q = 0; q < 4; q++) {
@@ -33,20 +33,60 @@ int main(int argc, char** argv) {
 			auto x = makeSaw(f0, fs, seconds);
 			double cpu[5];
 			for (int vi = 0; vi < 5; vi++) {
-				fc::Engine e; e.prepare(fs);
-				fc::EngineParams p; p.voices = voices[vi]; p.quality = q; p.spread = 0.5f; p.drift = 0.3f; p.character = 0.3f; p.harmonic = 0.3f; p.phase = 0.7f; p.width = 0.3f;
-				p.algorithm = fc::ALGO_CLASSIC; e.setParams(p);
-				std::vector<float> l(x.size()), r(x.size());
-				// warm up 1 s (lock + first tables), then time the rest
-				size_t warm = (size_t) fs;
-				for (size_t i = 0; i < warm; i++) e.process(x[i], l[i], r[i]);
-				auto t0 = std::chrono::steady_clock::now();
-				for (size_t i = warm; i < x.size(); i++) e.process(x[i], l[i], r[i]);
-				double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-				cpu[vi] = 100.0 * dt / ((double) (x.size() - warm) / fs);
+				cpu[vi] = 1e30;
+				for (int run = 0; run < 3; run++) { // the engine is deterministic: the fastest of three identical runs is the compute cost without scheduler noise
+					fc::Engine e; e.prepare(fs);
+					fc::EngineParams p; p.voices = voices[vi]; p.quality = q; p.spread = 0.5f; p.drift = 0.3f; p.character = 0.3f; p.harmonic = 0.3f; p.phase = 0.7f; p.width = 0.3f;
+					p.algorithm = fc::ALGO_CLASSIC; e.setParams(p);
+					std::vector<float> l(x.size()), r(x.size());
+					// warm up 1 s (lock + first tables), then time the rest
+					size_t warm = (size_t) fs;
+					for (size_t i = 0; i < warm; i++) e.process(x[i], l[i], r[i]);
+					auto t0 = std::chrono::steady_clock::now();
+					for (size_t i = warm; i < x.size(); i++) e.process(x[i], l[i], r[i]);
+					double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+					cpu[vi] = std::min(cpu[vi], 100.0 * dt / ((double) (x.size() - warm) / fs));
+				}
 			}
 			if (md) printf("| %s | %.0f Hz | %.2f | %.2f | %.2f | %.2f | %.2f |\n", qn[q], f0, cpu[0], cpu[1], cpu[2], cpu[3], cpu[4]);
 			else printf("%-9s %-8.0f %8.2f %8.2f %8.2f %8.2f %8.2f\n", qn[q], f0, cpu[0], cpu[1], cpu[2], cpu[3], cpu[4]);
+			fflush(stdout);
+		}
+	}
+
+	// ---- worst-case cost of one audio block ---------------------------------------------------------------------------------------
+	// Rack calls process() once per sample inside the audio driver's block (typically 256 frames): what matters for dropouts is the most expensive block,
+	// not the mean. The engine is deterministic, so identical runs are repeated and each block's cost is the minimum over the runs (scheduler noise out).
+	{
+		const int kBlock = 256, kRuns = 3;
+		printf("\nWORST BLOCK at 16 voices: most expensive 256-sample block as %% of the block's real-time budget (%.2f ms), min of %d identical runs; steady state\n\n", 1000.0 * kBlock / fs, kRuns);
+		if (md) printf("| quality | 20 Hz | 110 Hz | 440 Hz | 3520 Hz |\n|---|---|---|---|---|\n");
+		else printf("%-9s %8s %8s %8s %8s\n", "quality", "20 Hz", "110 Hz", "440 Hz", "3520 Hz");
+		for (int q = 0; q < 4; q++) {
+			double worst[4];
+			for (int pi = 0; pi < 4; pi++) {
+				auto x = makeSaw(pitches[pi], fs, std::min(seconds, 5.0));
+				const size_t warm = (size_t) fs;
+				const size_t nBlocks = (x.size() - warm) / kBlock;
+				std::vector<double> best(nBlocks, 1e30);
+				for (int run = 0; run < kRuns; run++) {
+					fc::Engine e; e.prepare(fs);
+					fc::EngineParams p; p.voices = 16; p.quality = q; p.spread = 0.5f; p.drift = 0.3f; p.character = 0.3f; p.harmonic = 0.3f; p.phase = 0.7f; p.width = 0.3f;
+					p.algorithm = fc::ALGO_CLASSIC; e.setParams(p);
+					float l, r;
+					for (size_t i = 0; i < warm; i++) e.process(x[i], l, r);
+					for (size_t b = 0; b < nBlocks; b++) {
+						auto t0 = std::chrono::steady_clock::now();
+						for (int i = 0; i < kBlock; i++) e.process(x[warm + b * kBlock + i], l, r);
+						best[b] = std::min(best[b], std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+					}
+				}
+				double mx = 0;
+				for (double v : best) mx = std::max(mx, v);
+				worst[pi] = 100.0 * mx / ((double) kBlock / fs);
+			}
+			if (md) printf("| %s | %.1f | %.1f | %.1f | %.1f |\n", qn[q], worst[0], worst[1], worst[2], worst[3]);
+			else printf("%-9s %8.1f %8.1f %8.1f %8.1f\n", qn[q], worst[0], worst[1], worst[2], worst[3]);
 			fflush(stdout);
 		}
 	}

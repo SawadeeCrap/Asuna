@@ -106,10 +106,10 @@ the reference (see `research/`). None of it validates the model against a real F
 
 | What | Where |
 |---|---|
-| Architecture comparison A–K on perceptual proxies (cluster spread, inter-harmonic cleanliness, comb ripple, envelope statistics, recurrence, level law) | `research/results/*.txt`, `docs/ARCHITECTURE.md` §4 |
-| Transient handling (attacks, steps, gates) | `research/results/transient_raw.txt` |
-| Texture / voice-count scaling | `research/results/texture_raw.txt` |
-| FFT-size / window-length study, low-frequency (20 Hz) operation, bloom-in latency | `docs/ARCHITECTURE.md` §7, `docs/BENCHMARKS.md` |
+| Architecture comparison (candidates A–H prototyped, I folded into A/B/J, K = order tracking inside J) on perceptual proxies (cluster spread, inter-harmonic cleanliness, comb ripple, envelope statistics, recurrence, level law) | `research/results/compare_*.txt`, `docs/ARCHITECTURE.md` §4 |
+| Transient handling (attacks, steps, gates) | `research/results/transient.txt` |
+| Texture / voice-count scaling | `research/results/texture.txt` |
+| FFT-size / window-length study, low-frequency (20 Hz) operation, bloom-in latency | `research/results/fft_study.txt`, `docs/ARCHITECTURE.md` §7, `docs/BENCHMARKS.md` |
 | Frequency-tracker accuracy on steady, gliding and vibrato input | `tests/test_analyzer.cpp`, `tests/test_dynamics.cpp` |
 | Lock robustness over waveform × pitch × quality | `tests/test_lock.cpp` |
 

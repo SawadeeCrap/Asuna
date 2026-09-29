@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
 			y = normalizeTo(y, tgt, a);
 			Psd py = welch(y, FS, nfft, a);
 			Clusters cy = harmonicClusters(py, f0, K, 0.03);
-			double lv = 0, sp = 0; int cnt = 0;
+			double lv = 0, sp = 0;
 			double meanD = 0;
 			for (int k = 0; k < K; k++) meanD += dbPow(cy.energy[k] / std::max(cref.energy[k], 1e-30));
 			meanD /= K;

@@ -11,12 +11,11 @@
   <!-- title band -->
   <rect x="0" y="0" width="240" height="28" fill="#15181c"/>
   <rect x="0" y="27" width="240" height="1.5" fill="#ffb030" opacity="0.85"/>
-  <!-- section frames: primary / secondary / mode -->
-  <rect x="8" y="126" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
-  <rect x="8" y="186" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
-  <rect x="8" y="246" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
-  <!-- CV / audio sections -->
-  <rect x="8" y="294" width="224" height="52" rx="4" fill="#20252b" stroke="#39414b" stroke-width="1"/>
-  <rect x="8" y="330" width="224" height="46" rx="4" fill="#15181c" stroke="#39414b" stroke-width="1"/>
+  <!-- section frames: primary / secondary / mode (rows of controls), CV inputs, audio (keep in sync with src/PanelLayout.hpp) -->
+  <rect x="8" y="112" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="172" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="232" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="292" width="224" height="36" rx="4" fill="#20252b" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="328" width="224" height="44" rx="4" fill="#15181c" stroke="#39414b" stroke-width="1"/>
   <rect id="components" x="0" y="0" width="0" height="0" fill="none"/>
 </svg>

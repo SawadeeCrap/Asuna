@@ -2,11 +2,15 @@
 //   R1  no heap allocation, ever, inside process() (global operator new/delete are replaced by counting versions that are armed only around
 //       process()) — over lock, unlock, pitch steps, glides, parameter sweeps, quality switches, VOICES changes, hostile input.
 //   R2  worst-case duration of a single process() call per quality mode (analysis, table builds and FFTs are the expensive events) and the
-//       99.9th percentile, reported against the audio budget of one sample.
+//       99.9th percentile, reported against the audio budget of one sample. Every sample of the run counts, including the acquisition of a
+//       note (period refinement, first tables of all voices).
 //   R3  no NaN / Inf on any output sample.
 //
 // Timing figures depend on the machine; only the allocation and NaN checks fail the test. The spikes are reported so that regressions
 // (an FFT that is no longer time-sliced, say) are visible.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete" // the replaced operator new/delete below are a matched malloc/free pair (diagnosed at inlined header code)
+#endif
 #include "../research/common/fusion_source.hpp"
 #include "../src/dsp/Engine.hpp"
 #include <algorithm>
@@ -14,10 +18,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
-
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete" // the replaced operator new/delete below are a matched malloc/free pair
-#endif
 
 static bool g_armed = false;
 static long g_allocs = 0;
@@ -149,7 +149,7 @@ int main() {
 	// The engine is deterministic, so the same input can be run several times and each sample's cost taken as the minimum over the runs: that
 	// removes scheduler noise and interrupts (which show up as spikes of a millisecond or more on a shared machine) and leaves the compute cost.
 	const int kRuns = 3;
-	printf("R2  per-sample cost of process() in us (min of %d identical runs per sample; budget at 48 kHz: 20.8 us per sample, 256-sample block = 5.3 ms)\n", kRuns);
+	printf("R2  per-sample cost of process() in us (all samples incl. note acquisition; min of %d identical runs per sample; budget at 48 kHz: 20.8 us per sample, 256-sample block = 5.3 ms)\n", kRuns);
 	printf("      quality   pitch     mean us   99.9%% us   99.99%% us   max us   samples > 100 us   > 250 us\n");
 	static const char* qn[] = {"ECO", "BALANCED", "HIGH", "ULTRA"};
 	for (int q = 0; q < 4; q++) {
@@ -179,7 +179,7 @@ int main() {
 			}
 			Stats st;
 			int n100 = 0, n250 = 0;
-			for (size_t i = (size_t) (0.5 * FS); i < x.size(); i++) {
+			for (size_t i = 0; i < x.size(); i++) { // everything, including the acquisition (first tables of all voices) and the lock event
 				st.add(best[i]);
 				n100 += best[i] > 100.0;
 				n250 += best[i] > 250.0;

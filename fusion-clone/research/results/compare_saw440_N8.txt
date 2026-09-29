@@ -1,0 +1,16 @@
+scene                                    candidate                                       lvl|dB| spread x    IH dB   ripple     CV  recur
+                                         (reference: N independent oscillators)                                                          
+saw 440 Hz N=8                           REFERENCE (independent bank)                          -      1.0    -84.2     0.06  0.544  0.340
+                                         J  harmonic-locked oscillator bank (this work)     0.01     1.01    -90.7     0.06  0.484  0.316  [0.9s]
+                                         A  phase vocoder (smb) N=4096                      0.10     1.02    -84.8     0.15  0.497  0.265  [0.8s]
+                                         A' phase vocoder (smb) N=16384                     0.06     1.01    -84.7     0.11  0.542  0.315  [1.0s]
+                                         B  PV + identity locking N=4096                    0.07     1.02    -83.7     0.06  0.496  0.261  [0.9s]
+                                         B' PV + identity locking N=16384                   0.06     1.01    -84.6     0.08  0.535  0.318  [0.9s]
+                                         C  sinusoidal MQ tracking (N=4096)                 0.02     1.01    -93.3     0.05  0.467  0.285  [4.3s]
+                                         D  harmonic heterodyne, oracle f0 (N=4096)         0.03     1.01    -93.4     0.04  0.495  0.261  [3.4s]
+                                         E  SSB frequency shift (additive Hz), fundamental-matched     0.06     0.21    -84.5     0.00  0.509  0.321  [0.4s]
+                                         F1 rotating 2-tap delay (chorus-style), 40 ms      0.89     1.00    -84.3     0.92  0.504  0.416  [0.3s]
+                                         F2 period-synchronous resampler (YIN period)       0.05     1.01    -80.3     0.01  0.534  0.300  [4.6s]
+                                         G  PSOLA (pitch-synchronous OLA)                   0.04     1.01    -82.6     0.04  0.509  0.321  [4.7s]
+                                         H  multi-res PV+IPL (16384|2048 @300Hz)            0.09     1.01    -80.4     0.07  0.496  0.261  [1.8s]
+

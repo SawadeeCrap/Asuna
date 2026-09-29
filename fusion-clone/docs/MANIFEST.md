@@ -20,7 +20,7 @@ Generated from `src/FusionCloneModule.hpp` (the single source of truth for ids, 
 | `VOICES_PARAM` | Voices (1 original + N−1 clones) | 1 … 16 | 8 | yes | 1 = original only |
 | `SPREAD_PARAM` | Spread (detune) | 0 … 1 | 0.35 | | shaped by `SPREAD_CURVE_PARAM` |
 | `DRIFT_PARAM` | Drift | 0 … 1 | 0.25 | | σ = 1.2 cents × value, correlation time from `DRIFT_RATE_PARAM` |
-| `CHARACTER_PARAM` | Character | 0 … 1 | 0.30 | | level/colour tolerance, saturation asymmetry, noise |
+| `CHARACTER_PARAM` | Character | 0 … 1 | 0.30 | | level/colour tolerance, saturation asymmetry (HIGH/ULTRA), pitch jitter |
 | `PHASE_PARAM` | Phase divergence | 0 … 1 | 0.60 | | fresh random draw per lock event |
 | `HARMONIC_PARAM` | Harmonic divergence | 0 … 1 | 0.30 | | smooth, correlated across harmonics |
 | `WIDTH_PARAM` | Stereo width | 0 … 1 | 0 | | linear pan, L+R = mono sum for any value |
@@ -76,6 +76,7 @@ Bypass routes: `AUDIO_INPUT` → `L_OUTPUT` and `R_OUTPUT`.
 
 * `process()` allocates nothing, takes no locks, and never calls into the OS. All buffers, FFT plans and tables are allocated in
   `onSampleRateChange()` (called by Rack on the engine thread when the module is added or the rate changes).
-* Table construction is time-sliced (one voice per sample) and double-buffered with a cross-fade; parameter changes are smoothed
-  per sample; a QUALITY change reconfigures without reallocating.
+* The analysis hop is a resumable job (one bounded piece per sample) and table construction is time-sliced (one voice at a time, up to five
+  short stages, one stage per sample) and double-buffered with a cross-fade; parameter changes are smoothed per sample; a QUALITY change
+  reconfigures without reallocating. The worst single `process()` call measured is 100 – 165 µs at 16 voices (`docs/BENCHMARKS.md`).
 * The GUI reads a seqlock-protected status snapshot written every 1024 samples; it never touches the DSP state.

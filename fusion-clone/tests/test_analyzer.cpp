@@ -1,4 +1,6 @@
-// Cycle analyser: frequency tracker convergence from a deliberately wrong period, steady-state jitter.
+// Cycle analyser: frequency tracker convergence from a deliberately wrong period, steady-state jitter, coherence. Runs both window lengths
+// (M = 2 and 4 periods) unless one is given on the command line, and fails if any case misses its bound:
+//   |error| at t = 1.6 s <= 0.25 cent (0.5 with a DETUNE stage), jitter over the last 0.5 s <= 0.15 cent (0.5), coherence >= 0.99 (0.98).
 #include "../research/common/fusion_source.hpp"
 #include "../src/dsp/CycleAnalyzer.hpp"
 #include <cstdio>
@@ -9,7 +11,13 @@ static double cents(double a, double b) { return 1200.0 * std::log2(a / b); }
 
 int main(int argc, char** argv) {
 	const double fs = 48000;
-	int M = argc > 1 ? atoi(argv[1]) : 2;
+	int failures = 0;
+	std::vector<int> Ms;
+	if (argc > 1)
+		Ms.push_back(atoi(argv[1]));
+	else
+		Ms = {2, 4};
+	for (int M : Ms) {
 	printf("=== convergence from a +8 cent period error, M=%d ===\n", M);
 	printf("%-18s %8s | %s\n", "signal", "unit Hz", "frequency error (cents) at t = 0.1 0.2 0.4 0.8 1.6 s  | steady-state jitter (cents rms, last 0.5s) | coherence");
 	struct C { const char* name; double f0; double sub; double saw, tri, pulse; int det; double detK; };
@@ -42,7 +50,14 @@ int main(int argc, char** argv) {
 				if (t > 1.2) { double e = cents(ca.omega() * truePeriod, 1.0); jit += e * e; jn++; cohAvg += ca.coherence(); }
 			}
 		}
-		printf("%-18s %8.1f | %+6.2f %+6.2f %+6.2f %+6.2f %+6.2f | %6.3f | %.3f\n", c.name, fs / truePeriod, cs[0], cs[1], cs[2], cs[3], cs[4], jn ? std::sqrt(jit / jn) : 0, jn ? cohAvg / jn : 0);
+		const double jitter = jn ? std::sqrt(jit / jn) : 1e9, coh = jn ? cohAvg / jn : 0;
+		const bool det = c.det != DETUNE_NONE;
+		const bool bad = std::fabs(cs[4]) > (det ? 0.5 : 0.25) || jitter > (det ? 0.5 : 0.15) || coh < (det ? 0.98 : 0.99);
+		if (bad)
+			failures++;
+		printf("%-18s %8.1f | %+6.2f %+6.2f %+6.2f %+6.2f %+6.2f | %6.3f | %.3f %s\n", c.name, fs / truePeriod, cs[0], cs[1], cs[2], cs[3], cs[4], jitter, coh, bad ? " FAIL" : "");
 	}
-	return 0;
+	}
+	printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
+	return failures ? 1 : 0;
 }

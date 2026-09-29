@@ -33,7 +33,7 @@ struct VoicePersonality {
 	float dispPhase[2];
 	float drive = 0.f;        // 0..1, saturation strength for CHARACTER
 	float bias = 0.f;         // -1..1, saturation asymmetry
-	float noiseGain = 0.f;    // unit noise-floor tolerance
+	float noiseGain = 0.f;    // reserved (unused): still drawn so that the sequence of personality values stays stable
 	float startPhase = 0.f;   // 0..1, random initial phase (PHASE = 1)
 	float lfoPhase = 0.f;     // Fusion detune-cluster LFO phase
 	float lfoRate = 1.f;      // relative LFO rate tolerance

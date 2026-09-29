@@ -67,7 +67,7 @@ struct FusionClone : Module {
 		paramQuantities[VOICES_PARAM]->snapEnabled = true;
 		configParam(SPREAD_PARAM, 0.f, 1.f, 0.35f, "Spread (detune)", "%", 0.f, 100.f);
 		configParam(DRIFT_PARAM, 0.f, 1.f, 0.25f, "Drift (slow analog instability)", "%", 0.f, 100.f);
-		configParam(CHARACTER_PARAM, 0.f, 1.f, 0.3f, "Character (saturation asymmetry, noise, level tolerance)", "%", 0.f, 100.f);
+		configParam(CHARACTER_PARAM, 0.f, 1.f, 0.3f, "Character (level tolerance, saturation asymmetry, pitch jitter)", "%", 0.f, 100.f);
 		configParam(PHASE_PARAM, 0.f, 1.f, 0.6f, "Phase divergence", "%", 0.f, 100.f);
 		configParam(HARMONIC_PARAM, 0.f, 1.f, 0.3f, "Harmonic divergence", "%", 0.f, 100.f);
 		configParam(WIDTH_PARAM, 0.f, 1.f, 0.f, "Stereo width (0 = mono-compatible)", "%", 0.f, 100.f);

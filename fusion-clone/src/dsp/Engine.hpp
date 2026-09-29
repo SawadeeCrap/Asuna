@@ -4,7 +4,7 @@
 //           │                                                                                    ├─► sum ─► summing ─► mix ─► out
 //           ├─► PitchTracker (5 decimated YIN lanes) ─► period acquisition                        │
 //           │        │                                                                             │
-//           └─► CycleAnalyzer (angular resampling, Hann-FFT, harmonic coefficients, phase-slope PLL)
+//           └─► CycleAnalyzer (angular resampling, Hann-FFT, harmonic coefficients, phase-slope frequency measurement + Kalman tracker)
 //                    │  aligned complex harmonic set c_j, tracked frequency omega
 //                    ▼
 //              per-voice period tables (IFFT of c_j * per-voice divergence, anti-aliased for the voice's own ratio)
@@ -461,7 +461,7 @@ private:
 			if (estStreak_ >= 2 && (double) (ring_.count() - dropSample_) >= need)
 				beginAcquisition(refinePeriod(e.period));
 		} else if (state_ == ST_LOCKED) {
-			// verification: repeated confident estimates that match neither the PLL period nor a simple multiple of it
+			// verification: repeated confident estimates that match neither the tracked period nor a simple multiple of it
 			if (e.valid && e.conf > 0.9f) {
 				const double ratio = e.period / analyzer_.period();
 				bool consistent = std::fabs(ratio - 1.0) < 0.05 || std::fabs(ratio - 0.5) < 0.03 || std::fabs(ratio - 2.0) < 0.08;

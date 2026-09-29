@@ -37,14 +37,10 @@ struct PanelLabels : TransparentWidget {
 			nvgText(args.vg, layout::kLabels[i].x, layout::kLabels[i].y, layout::kLabels[i].text, NULL);
 		}
 		// title
-		nvgFontSize(args.vg, 15.f);
+		nvgFontSize(args.vg, layout::kTitleSize);
 		nvgFillColor(args.vg, kAmber);
 		nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE);
-		nvgText(args.vg, 15.f, 22.f, "FUSION CLONE", NULL);
-		nvgFontSize(args.vg, 7.5f);
-		nvgFillColor(args.vg, kInk);
-		nvgTextAlign(args.vg, NVG_ALIGN_RIGHT | NVG_ALIGN_BASELINE);
-		nvgText(args.vg, box.size.x - 15.f, 22.f, "1 REAL VCO2 -> N VIRTUAL", NULL);
+		nvgText(args.vg, layout::kTitleX, layout::kTitleY, "FUSION CLONE", NULL);
 	}
 };
 
@@ -105,7 +101,7 @@ struct CloneDisplay : TransparentWidget {
 			nvgText(vg, W - 6.f, 22.f, b2, NULL);
 
 			// source spectrum bars (harmonics 1..48, 0..-60 dB)
-			const float x0 = 78.f, x1 = W - 6.f, yb = 60.f, hmax = 30.f;
+			const float x0 = 78.f, x1 = W - 6.f, yb = 56.f, hmax = 26.f;
 			const int nb = fc::EngineStatus::kSpecBins;
 			const float bw = (x1 - x0) / nb;
 			for (int i = 0; i < nb; i++) {
@@ -119,7 +115,7 @@ struct CloneDisplay : TransparentWidget {
 			nvgFontSize(vg, 6.5f);
 			nvgTextAlign(vg, NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE);
 			nvgFillColor(vg, kAmberDim);
-			nvgText(vg, x0, 69.f - 30.f - 10.f + 20.f, "SOURCE PARTIALS", NULL);
+			nvgText(vg, x0, 12.f, "PARTIALS", NULL);
 
 			// detune density strip: original at 0 (bright), clones as dots at their static+drift offset
 			const float ys = H - 8.f;
@@ -251,10 +247,22 @@ struct FusionCloneWidget : ModuleWidget {
 		    [=](size_t v) { m->params[FusionClone::SHIFT_MODE_PARAM].setValue(v ? 1.f : 0.f); }));
 		menu->addChild(new ui::MenuSeparator);
 		menu->addChild(createMenuItem("Randomize voice seeds", "", [=]() { m->seed = random::u32(); }));
-		menu->addChild(createMenuLabel("Original path: direct (0 samples). Clones bloom in ~4 periods after an onset/step."));
-		char buf[64];
+		menu->addChild(createMenuLabel("Original path: direct (0 samples). Clones bloom in a few periods after an onset/step."));
+		char buf[96];
+		fc::EngineStatus st;
+		int voices = 0, quality = 0, algorithm = 0;
+		float range = 0.f;
+		bool connected = false, poly = false;
+		if (m->readSnapshot(st, voices, quality, algorithm, range, connected, poly)) {
+			if (st.locked)
+				snprintf(buf, sizeof buf, "Locked: repeating unit %.2f Hz, bloom time %.0f ms at this pitch", st.unitFreqHz, (double) st.bloomMs);
+			else
+				snprintf(buf, sizeof buf, "Not locked (%s)", connected ? (st.acquiring ? "acquiring" : "no periodic input") : "no input");
+			menu->addChild(createMenuLabel(buf));
+		}
 		snprintf(buf, sizeof buf, "Voice seed: %08X", (unsigned) m->seed);
 		menu->addChild(createMenuLabel(buf));
+		menu->addChild(createMenuLabel("The clones are perceptually, not electrically, equivalent to real oscillators."));
 	}
 };
 

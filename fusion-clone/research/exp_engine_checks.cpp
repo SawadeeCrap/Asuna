@@ -70,7 +70,7 @@ int main() {
 		fc::Engine e; e.prepare(FS); e.setParams(p);
 		std::vector<float> l(x.size()), rr(x.size()); int unl = 0; double maxErr = 0, maxErrClone = 0;
 		for (size_t i = 0; i < x.size(); i++) { e.process(x[i], l[i], rr[i]); double t = i / FS; if (t > 1.6 && t < 2.4) { if (!e.lockedNow()) unl++; else { double f = e.analyzer().omega() * FS; double tr = s.f0Track[i]; maxErr = std::max(maxErr, std::fabs(1200 * std::log2(f / tr))); maxErrClone = std::max(maxErrClone, std::fabs(1200 * std::log2(e.cloneUnitFreq() / tr))); } } }
-		printf("unlocked samples during glide: %d of %d; max pitch error while locked: PLL %.2f cents, clones (with slope lead) %.2f cents\n", unl, (int) (0.8 * FS), maxErr, maxErrClone);
+		printf("unlocked samples during glide: %d of %d; max pitch error while locked: tracker %.2f cents, clones (with slope lead) %.2f cents\n", unl, (int) (0.8 * FS), maxErr, maxErrClone);
 	}
 	printf("\n=== 5. hostile inputs (N=16): must stay finite, bounded, no lock on garbage ===\n");
 	{

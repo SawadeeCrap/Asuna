@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="760" viewBox="0 0 240 380" font-family="monospace">
+<rect width="240" height="380" fill="#1b1e24"/>
+<defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#252a31"/>
+      <stop offset="1" stop-color="#1a1e23"/>
+    </linearGradient>
+  </defs>
+  <rect id="background" x="0" y="0" width="240" height="380" fill="url(#bg)"/>
+  <!-- title band -->
+  <rect x="0" y="0" width="240" height="28" fill="#15181c"/>
+  <rect x="0" y="27" width="240" height="1.5" fill="#ffb030" opacity="0.85"/>
+  <!-- section frames: primary / secondary / mode (rows of controls), CV inputs, audio (keep in sync with src/PanelLayout.hpp) -->
+  <rect x="8" y="112" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="172" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="232" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="292" width="224" height="36" rx="4" fill="#20252b" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="328" width="224" height="44" rx="4" fill="#15181c" stroke="#39414b" stroke-width="1"/>
+  <rect id="components" x="0" y="0" width="0" height="0" fill="none"/>
+
+<rect x="15" y="30" width="210" height="78" rx="3" fill="#0b0d10" stroke="#ffb030" stroke-width="0.6"/>
+<g transform="translate(15,30)" font-family="monospace">
+<text x="8" y="46" font-size="46" fill="#ffb030">8</text>
+<text x="9" y="58" font-size="7" fill="rgba(255,176,48,0.27)">VOICES</text>
+<text x="204" y="12" font-size="8" fill="#40d8c8" text-anchor="end">LOCK 110.0 Hz</text>
+<text x="204" y="22" font-size="8" fill="rgba(255,176,48,0.27)" text-anchor="end">BAL  CLASSIC</text>
+<rect x="78.5" y="30" width="1.625" height="26" fill="#ffb030"/>
+<rect x="81.125" y="32.6089" width="1.625" height="23.3911" fill="rgba(255,176,48,0.59)"/>
+<rect x="83.75" y="34.1351" width="1.625" height="21.8649" fill="rgba(255,176,48,0.59)"/>
+<rect x="86.375" y="35.2179" width="1.625" height="20.7821" fill="rgba(255,176,48,0.59)"/>
+<rect x="89" y="36.0577" width="1.625" height="19.9423" fill="rgba(255,176,48,0.59)"/>
+<rect x="91.625" y="36.744" width="1.625" height="19.256" fill="rgba(255,176,48,0.59)"/>
+<rect x="94.25" y="37.3242" width="1.625" height="18.6758" fill="rgba(255,176,48,0.59)"/>
+<rect x="96.875" y="37.8268" width="1.625" height="18.1732" fill="rgba(255,176,48,0.59)"/>
+<rect x="99.5" y="38.2701" width="1.625" height="17.7299" fill="rgba(255,176,48,0.59)"/>
+<rect x="102.125" y="38.6667" width="1.625" height="17.3333" fill="rgba(255,176,48,0.59)"/>
+<rect x="104.75" y="39.0254" width="1.625" height="16.9746" fill="rgba(255,176,48,0.59)"/>
+<rect x="107.375" y="39.3529" width="1.625" height="16.6471" fill="rgba(255,176,48,0.59)"/>
+<rect x="110" y="39.6542" width="1.625" height="16.3458" fill="rgba(255,176,48,0.59)"/>
+<rect x="112.625" y="39.9331" width="1.625" height="16.0669" fill="rgba(255,176,48,0.59)"/>
+<rect x="115.25" y="40.1928" width="1.625" height="15.8072" fill="rgba(255,176,48,0.59)"/>
+<rect x="117.875" y="40.4357" width="1.625" height="15.5643" fill="rgba(255,176,48,0.59)"/>
+<rect x="120.5" y="40.6639" width="1.625" height="15.3361" fill="rgba(255,176,48,0.59)"/>
+<rect x="123.125" y="40.879" width="1.625" height="15.121" fill="rgba(255,176,48,0.59)"/>
+<rect x="125.75" y="41.0825" width="1.625" height="14.9175" fill="rgba(255,176,48,0.59)"/>
+<rect x="128.375" y="41.2756" width="1.625" height="14.7244" fill="rgba(255,176,48,0.59)"/>
+<rect x="131" y="41.4592" width="1.625" height="14.5408" fill="rgba(255,176,48,0.59)"/>
+<rect x="133.625" y="41.6343" width="1.625" height="14.3657" fill="rgba(255,176,48,0.59)"/>
+<rect x="136.25" y="41.8016" width="1.625" height="14.1984" fill="rgba(255,176,48,0.59)"/>
+<rect x="138.875" y="41.9618" width="1.625" height="14.0382" fill="rgba(255,176,48,0.59)"/>
+<rect x="141.5" y="42.1155" width="1.625" height="13.8845" fill="rgba(255,176,48,0.59)"/>
+<rect x="144.125" y="42.2631" width="1.625" height="13.7369" fill="rgba(255,176,48,0.59)"/>
+<rect x="146.75" y="42.4052" width="1.625" height="13.5948" fill="rgba(255,176,48,0.59)"/>
+<rect x="149.375" y="42.542" width="1.625" height="13.458" fill="rgba(255,176,48,0.59)"/>
+<rect x="152" y="42.6741" width="1.625" height="13.3259" fill="rgba(255,176,48,0.59)"/>
+<rect x="154.625" y="42.8017" width="1.625" height="13.1983" fill="rgba(255,176,48,0.59)"/>
+<rect x="157.25" y="42.9251" width="1.625" height="13.0749" fill="rgba(255,176,48,0.59)"/>
+<rect x="159.875" y="43.0446" width="1.625" height="12.9554" fill="rgba(255,176,48,0.59)"/>
+<rect x="162.5" y="43.1605" width="1.625" height="12.8395" fill="rgba(255,176,48,0.59)"/>
+<rect x="165.125" y="43.2728" width="1.625" height="12.7272" fill="rgba(255,176,48,0.59)"/>
+<rect x="167.75" y="43.3819" width="1.625" height="12.6181" fill="rgba(255,176,48,0.59)"/>
+<rect x="170.375" y="43.488" width="1.625" height="12.512" fill="rgba(255,176,48,0.59)"/>
+<rect x="173" y="43.5911" width="1.625" height="12.4089" fill="rgba(255,176,48,0.59)"/>
+<rect x="175.625" y="43.6915" width="1.625" height="12.3085" fill="rgba(255,176,48,0.59)"/>
+<rect x="178.25" y="43.7892" width="1.625" height="12.2108" fill="rgba(255,176,48,0.59)"/>
+<rect x="180.875" y="43.8845" width="1.625" height="12.1155" fill="rgba(255,176,48,0.59)"/>
+<rect x="183.5" y="43.9775" width="1.625" height="12.0225" fill="rgba(255,176,48,0.59)"/>
+<rect x="186.125" y="44.0682" width="1.625" height="11.9318" fill="rgba(255,176,48,0.59)"/>
+<rect x="188.75" y="44.1567" width="1.625" height="11.8433" fill="rgba(255,176,48,0.59)"/>
+<rect x="191.375" y="44.2433" width="1.625" height="11.7567" fill="rgba(255,176,48,0.59)"/>
+<rect x="194" y="44.3278" width="1.625" height="11.6722" fill="rgba(255,176,48,0.59)"/>
+<rect x="196.625" y="44.4106" width="1.625" height="11.5894" fill="rgba(255,176,48,0.59)"/>
+<rect x="199.25" y="44.4915" width="1.625" height="11.5085" fill="rgba(255,176,48,0.59)"/>
+<rect x="201.875" y="44.5708" width="1.625" height="11.4292" fill="rgba(255,176,48,0.59)"/>
+<text x="78" y="12" font-size="6.5" fill="rgba(255,176,48,0.27)">PARTIALS</text>
+<line x1="8" y1="70" x2="202" y2="70" stroke="rgba(255,176,48,0.27)" stroke-width="0.7"/>
+<circle cx="188.002" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="80.0464" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="7.35" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="167.036" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="202.65" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="7.35" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<circle cx="7.35" cy="70" r="2.6" fill="rgba(64,216,200,0.78)"/>
+<rect x="103.5" y="64" width="3" height="12" fill="#ffb030"/>
+<text x="8" y="64" font-size="6.5" fill="rgba(255,176,48,0.27)">-12c</text>
+<text x="202" y="64" font-size="6.5" fill="rgba(255,176,48,0.27)" text-anchor="end">+12c</text>
+<text x="105" y="62" font-size="6.5" fill="rgba(255,176,48,0.27)" text-anchor="middle">REAL VCO2</text>
+</g>
+<text x="34" y="21" font-size="13" fill="#ffb030">FUSION CLONE</text>
+<circle cx="34" cy="139" r="23" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="94" cy="137" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="152" cy="137" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="210" cy="137" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="34" cy="197" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="94" cy="197" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="152" cy="197" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="210" cy="197" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="34" cy="257" r="19" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="94" cy="257" r="13" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<rect x="136" y="244" width="14" height="26" rx="2" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<rect x="174" y="244" width="14" height="26" rx="2" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<rect x="209" y="250" width="14" height="14" rx="2" fill="#3a3f48" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="150" cy="9" r="4" fill="#40d8c8" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="172" cy="9" r="4" fill="#40d8c8" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="194" cy="9" r="4" fill="#40d8c8" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="29" cy="314" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="72" cy="314" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="115" cy="314" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="158" cy="314" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="201" cy="314" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="29" cy="352" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="172" cy="352" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="210" cy="352" r="12" fill="#252a31" stroke="#8a929e" stroke-width="0.5"/>
+<circle cx="22.5" cy="7.5" r="6" fill="#b8bcc4" stroke="#6c727c" stroke-width="0.6"/>
+<circle cx="217.5" cy="7.5" r="6" fill="#b8bcc4" stroke="#6c727c" stroke-width="0.6"/>
+<circle cx="22.5" cy="372.5" r="6" fill="#b8bcc4" stroke="#6c727c" stroke-width="0.6"/>
+<circle cx="217.5" cy="372.5" r="6" fill="#b8bcc4" stroke="#6c727c" stroke-width="0.6"/>
+<text x="34" y="170.5" font-size="9" fill="#d8dce2" text-anchor="middle">VOICES</text>
+<text x="94" y="167" font-size="9" fill="#d8dce2" text-anchor="middle">SPREAD</text>
+<text x="152" y="167" font-size="9" fill="#d8dce2" text-anchor="middle">DRIFT</text>
+<text x="210" y="167" font-size="7.5" fill="#d8dce2" text-anchor="middle">CHARACTER</text>
+<text x="34" y="227" font-size="9" fill="#d8dce2" text-anchor="middle">PHASE</text>
+<text x="94" y="227" font-size="8" fill="#d8dce2" text-anchor="middle">HARMONIC</text>
+<text x="152" y="227" font-size="9" fill="#d8dce2" text-anchor="middle">WIDTH</text>
+<text x="210" y="227" font-size="9" fill="#d8dce2" text-anchor="middle">MIX</text>
+<text x="34" y="287" font-size="9" fill="#d8dce2" text-anchor="middle">OUTPUT</text>
+<text x="94" y="287" font-size="9" fill="#d8dce2" text-anchor="middle">QUALITY</text>
+<text x="143" y="287" font-size="9" fill="#d8dce2" text-anchor="middle">MODE</text>
+<text x="181" y="287" font-size="9" fill="#d8dce2" text-anchor="middle">ORIG</text>
+<text x="216" y="287" font-size="9" fill="#d8dce2" text-anchor="middle">RAND</text>
+<text x="29" y="300.5" font-size="6.5" fill="#d8dce2" text-anchor="middle">CV VOICES</text>
+<text x="72" y="300.5" font-size="6.5" fill="#d8dce2" text-anchor="middle">CV SPREAD</text>
+<text x="115" y="300.5" font-size="6.5" fill="#d8dce2" text-anchor="middle">CV DRIFT</text>
+<text x="158" y="300.5" font-size="6.5" fill="#d8dce2" text-anchor="middle">CV CHAR</text>
+<text x="201" y="300.5" font-size="6.5" fill="#d8dce2" text-anchor="middle">CV MIX</text>
+<text x="29" y="338.5" font-size="7" fill="#d8dce2" text-anchor="middle">AUDIO IN</text>
+<text x="172" y="338.5" font-size="7" fill="#d8dce2" text-anchor="middle">OUT L</text>
+<text x="210" y="338.5" font-size="7" fill="#d8dce2" text-anchor="middle">OUT R</text>
+<text x="150" y="22" font-size="6" fill="#d8dce2" text-anchor="middle">LOCK</text>
+<text x="172" y="22" font-size="6" fill="#d8dce2" text-anchor="middle">ACQ</text>
+<text x="194" y="22" font-size="6" fill="#d8dce2" text-anchor="middle">POLY</text>
+<text x="13" y="169" font-size="7" fill="#d8dce2" text-anchor="middle">1</text>
+<text x="56" y="169" font-size="7" fill="#d8dce2" text-anchor="middle">16</text>
+</svg>

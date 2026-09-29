@@ -14,7 +14,7 @@ struct EngineParams {
 	int voices = 8;            // 1..16 total voices: 1 original + (voices-1) clones
 	float spread = 0.35f;      // detune amount
 	float drift = 0.25f;       // slow independent pitch/timbre drift
-	float character = 0.30f;   // analog individuality: saturation asymmetry, noise, level tolerance
+	float character = 0.30f;   // analog individuality: level tolerance, saturation asymmetry, pitch jitter
 	float phase = 0.60f;       // phase divergence between voices
 	float harmonic = 0.30f;    // harmonic divergence (smooth spectral tilt/bells, odd/even, HF rolloff)
 	float width = 0.0f;        // stereo micro-positioning

@@ -2,7 +2,7 @@
 //
 // Purpose: robust *acquisition and verification* of the period of a monophonic oscillator signal, including
 // period doubling caused by a sub oscillator (main + sub repeats every 2 main cycles). Precision is refined later by
-// the cycle analyser's phase-slope PLL, so ~1 % accuracy here is enough.
+// the cycle analyser's phase-slope frequency measurement and Kalman tracker, so ~1 % accuracy here is enough.
 //
 // Frequencies below are *repeating-unit* frequencies (a sub oscillator halves them).
 //
