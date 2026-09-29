@@ -80,6 +80,7 @@ def fx_tab(win) -> QWidget:
     rep.toggled.connect(lambda on: _set(win, "replay", on))
     form.addRow(rep)
     v.addWidget(box)
+    v.addWidget(_gfx_box(win))
     v.addWidget(_stage_box(win))
     # --- the sliders
     win.fx_sliders = {}
@@ -124,6 +125,137 @@ def fx_tab(win) -> QWidget:
     v.addWidget(win.lbl_fx)
     v.addStretch(1)
     return w
+
+
+GFX_PRESETS = (("quality", "Quality", "as before: the body always at full viewport detail, every part of every "
+                                        "afterimage"),
+               ("balanced", "Balanced", "close-ups as before, wide shots only as detailed as they are seen; at most 10 "
+                                        "afterimages; live picture at most 75 %"),
+               ("performance", "Performance", "a coarser body, afterimages of the body only (6), live picture at "
+                                              "most 50 %"),
+               ("max_fps", "Max FPS", "the coarsest body, 4 afterimages; if Myrmex may set EEVEE: half-resolution "
+                                      "view, no shadows"),
+               ("custom", "Custom", "your own settings below"))
+
+
+def _gfx_box(win) -> QGroupBox:
+    """Blender's live graphics (realtime/gfx.py): what the live view draws, so it keeps up with the music."""
+    from PySide6.QtWidgets import QSpinBox
+    d = C.gfx_settings(win.s)
+    box = QGroupBox("Blender graphics (the live view)")
+    form = QFormLayout(box)
+    note = QLabel("The body is rebuilt every frame on Blender's main thread - its detail is the biggest cost of a "
+                  "live frame; each afterimage is a translucent copy of the organism. Renders of takes always keep "
+                  "full detail.")
+    note.setWordWrap(True)
+    note.setProperty("muted", True)
+    form.addRow(note)
+    win.cmb_gfx = QComboBox()
+    for key, label, _ in GFX_PRESETS:
+        win.cmb_gfx.addItem(label, key)
+    win.cmb_gfx.setCurrentIndex(max(0, win.cmb_gfx.findData(d["preset"])))
+    form.addRow("Preset", win.cmb_gfx)
+    win.lbl_gfx_note = QLabel(next(n for k, _, n in GFX_PRESETS if k == d["preset"]))
+    win.lbl_gfx_note.setWordWrap(True)
+    win.lbl_gfx_note.setProperty("muted", True)
+    form.addRow(win.lbl_gfx_note)
+    win.chk_gfx_auto = QCheckBox("Auto quality: a lighter preset while the view is slower")
+    win.chk_gfx_auto.setChecked(bool(d["auto"]))
+    form.addRow(win.chk_gfx_auto)
+    win.spin_gfx_fps = QSpinBox()
+    win.spin_gfx_fps.setRange(15, 120)
+    win.spin_gfx_fps.setSuffix(" fps")
+    win.spin_gfx_fps.setValue(int(d["target_fps"]))
+    win.spin_gfx_fps.setToolTip("Auto quality steps down under this, and back up with 8 fps to spare")
+    form.addRow("Keep at least", win.spin_gfx_fps)
+    win.gfx_knobs = {}
+    sl = QSlider(Qt.Orientation.Horizontal)
+    sl.setRange(15, 120)
+    sl.setValue(int(round(1000 * float(d["body_res"]))))
+    sl.setToolTip("The body's viewport resolution in close-ups (0.030 = the look's own; higher = coarser, faster)")
+    win.gfx_knobs["body_res"] = sl
+    form.addRow("Body detail", sl)
+    win.chk_gfx_far = QCheckBox("Coarser in wide shots (as detailed as the shot shows it)")
+    win.chk_gfx_far.setChecked(bool(d["body_auto"]))
+    form.addRow(win.chk_gfx_far)
+    gm = QSpinBox()
+    gm.setRange(1, 16)
+    gm.setValue(int(d["ghost_max"]))
+    win.gfx_knobs["ghost_max"] = gm
+    form.addRow("Afterimages at most", gm)
+    win.cmb_gfx_parts = QComboBox()
+    win.cmb_gfx_parts.addItem("every part of the organism", "all")
+    win.cmb_gfx_parts.addItem("the body only (far lighter)", "body")
+    win.cmb_gfx_parts.setCurrentIndex(max(0, win.cmb_gfx_parts.findData(d["ghost_parts"])))
+    form.addRow("Afterimages of", win.cmb_gfx_parts)
+    win.lbl_gfx = QLabel("Blender: -")
+    win.lbl_gfx.setWordWrap(True)
+    win.lbl_gfx.setProperty("muted", True)
+    form.addRow(win.lbl_gfx)
+
+    def preset(*_):
+        key = win.cmb_gfx.currentData()
+        win.lbl_gfx_note.setText(next(n for k, _, n in GFX_PRESETS if k == key))
+        if key == "custom":
+            win.s.gfx = {**(win.s.gfx or {}), "preset": "custom"}
+        else:
+            keep = {k: v for k, v in (win.s.gfx or {}).items() if k in ("auto", "target_fps", "eevee")}
+            win.s.gfx = {**keep, "preset": key}
+            _gfx_show(win)
+        _gfx_send(win)
+
+    def knob(key, value):
+        if getattr(win, "_gfx_busy", False):
+            return
+        win.s.gfx = {**(win.s.gfx or {}), key: value}
+        if key not in ("auto", "target_fps"):
+            win.s.gfx["preset"] = "custom"
+            win._gfx_busy = True
+            win.cmb_gfx.setCurrentIndex(win.cmb_gfx.findData("custom"))
+            win.lbl_gfx_note.setText(next(n for k, _, n in GFX_PRESETS if k == "custom"))
+            win._gfx_busy = False
+        _gfx_send(win)
+    win.cmb_gfx.currentIndexChanged.connect(lambda *_: None if getattr(win, "_gfx_busy", False) else preset())
+    win.chk_gfx_auto.toggled.connect(lambda on: knob("auto", bool(on)))
+    win.spin_gfx_fps.valueChanged.connect(lambda val: knob("target_fps", float(val)))
+    sl.valueChanged.connect(lambda val: knob("body_res", val / 1000.0))
+    win.chk_gfx_far.toggled.connect(lambda on: knob("body_auto", bool(on)))
+    gm.valueChanged.connect(lambda val: knob("ghost_max", int(val)))
+    win.cmb_gfx_parts.currentIndexChanged.connect(lambda *_: knob("ghost_parts", win.cmb_gfx_parts.currentData()))
+    return box
+
+
+def _gfx_show(win) -> None:
+    """The knobs show the settings in force (after a preset was chosen)."""
+    d = C.gfx_settings(win.s)
+    win._gfx_busy = True
+    try:
+        win.gfx_knobs["body_res"].setValue(int(round(1000 * float(d["body_res"]))))
+        win.gfx_knobs["ghost_max"].setValue(int(d["ghost_max"]))
+        win.chk_gfx_far.setChecked(bool(d["body_auto"]))
+        win.cmb_gfx_parts.setCurrentIndex(max(0, win.cmb_gfx_parts.findData(d["ghost_parts"])))
+    finally:
+        win._gfx_busy = False
+
+
+def _gfx_send(win) -> None:
+    """Save, and every Blender the app opened follows at once."""
+    from PySide6.QtCore import QProcess
+    win.s.save()
+    msg = {"cmd": "gfx", **C.gfx_settings(win.s)}
+    for p in [getattr(win, "blender_proc", None)] + list(getattr(win, "take_procs", [])):
+        if p is not None and p.state() != QProcess.ProcessState.NotRunning and p.property("myrmex_control"):
+            win._blender_send(p, msg)
+
+
+def on_blender_gfx_stats(win, d: dict) -> None:
+    """What Blender's live view manages (gfx_stats, every 2 s while live)."""
+    lbl = getattr(win, "lbl_gfx", None)
+    if lbl is None:
+        return
+    lbl.setText(f"Blender: {d.get('fps', 0):.0f} fps · organism {d.get('poll_ms', 0):.1f} ms · body "
+                f"{d.get('eval_ms', 0):.1f} ms (detail {d.get('res', 0):.3f})"
+                + (f" · auto: {d.get('level')}" if d.get("auto") else ""))
 
 
 FILE = "\x00file"                          # the "your own HDRI file…" item
@@ -306,4 +438,4 @@ def refresh_fx(win) -> None:
                        f"{r.get('ghosts', 0):.2f} · trails {r.get('trails', 0):.2f}")
 
 
-__all__ = ["fx_tab", "refresh_fx", "on_blender_stage", "RACK"]
+__all__ = ["fx_tab", "refresh_fx", "on_blender_stage", "on_blender_gfx_stats", "RACK"]

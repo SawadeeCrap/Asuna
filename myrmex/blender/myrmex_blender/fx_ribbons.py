@@ -174,7 +174,7 @@ class Ribbons:
         V = np.empty((kk, M, 2, 3))
         V[:, :, 0] = (H - half).transpose(1, 0, 2)
         V[:, :, 1] = (H + half).transpose(1, 0, 2)
-        me.vertices.foreach_set("co", V.astype(np.float32).ravel())
+        compat.set_positions(me, V)
         me.update()
         nt = ob.active_material.node_tree if ob.active_material is not None else None
         if nt is not None and "MyrmexRibbonGain" in nt.nodes:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import bpy
 import numpy as np
 
-from . import compat
+from . import compat, gfx
 
 COLL = "MyrmexFX"
 PREFIX = "MyrmexGhost"
@@ -386,7 +386,7 @@ class Ghosts:
         self.last_t = t
         density = float(rack.get("ghost_density", 0.35))
         life = 0.15 + 1.6 * float(rack.get("ghost_life", 0.45))
-        n = int(round(4 + 12 * density))
+        n = min(int(round(4 + 12 * density)), gfx.ghost_limits()[0])      # (graphics: copies at most)
         min_dt = 0.16 - 0.13 * density
         spacing = max(0.02, float(size) * (0.9 - 0.8 * density))
         com = np.asarray(com, float)
@@ -409,6 +409,9 @@ class Ghosts:
 
     def spawn(self, scene, t: float, n: int) -> None:
         srcs = sources(scene)
+        _, body_only, _ = gfx.ghost_limits()
+        if body_only and any(o.type == "META" for o in srcs):             # (graphics: copies of the body only)
+            srcs = [o for o in srcs if o.type == "META"]
         sig = tuple(sorted((o.name, o.type) for o in srcs))
         if sig != self.signature:                             # another organism: other parts
             self.clear(remove=True)
@@ -434,10 +437,9 @@ class Ghosts:
                     if mc is not None and mc.type == "MESH_CACHE":
                         co = _pc2_frame(mc, scene.frame_current)
                     if co is None:
-                        co = np.empty(3 * len(src.data.vertices), np.float32)
-                        src.data.vertices.foreach_get("co", co)
+                        co = compat.get_positions(src.data)
                     if co.size == 3 * len(ob.data.vertices):
-                        ob.data.vertices.foreach_set("co", np.ascontiguousarray(co, np.float32).ravel())
+                        compat.set_positions(ob.data, co)
                         _copy_attributes(src.data, ob.data)
                         ob.data.update()
                 ob.matrix_world = src.matrix_world
@@ -474,7 +476,7 @@ class Ghosts:
             ob = bpy.data.objects.new(name, mb)
             self._link(ob, coll)
         mb, sm = ob.data, src.data
-        mb.resolution = max(0.02, sm.resolution * 1.6)              # a copy may be a little coarser
+        mb.resolution = max(0.02, sm.resolution * gfx.ghost_limits()[2])   # a copy may be coarser (graphics)
         mb.render_resolution = max(0.012, sm.render_resolution * 1.5)
         mb.threshold = sm.threshold
         want = [ghost_variant(m) for m in sm.materials] or [ghost_variant(None)]
@@ -527,9 +529,7 @@ class Ghosts:
                 if old.users == 0:
                     bpy.data.meshes.remove(old)
             return ob
-        co = np.empty(3 * n, np.float32)
-        ev.data.vertices.foreach_get("co", co)
-        ob.data.vertices.foreach_set("co", co)
+        compat.set_positions(ob.data, compat.get_positions(ev.data))
         ob.data.update()
         return ob
 

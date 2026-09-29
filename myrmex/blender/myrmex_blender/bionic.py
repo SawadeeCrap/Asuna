@@ -21,6 +21,7 @@ import numpy as np
 
 from myrmex.creature.bionic import meshes
 
+from . import compat
 from .creature import OBSTACLE, _attr, _hide, _math, _principled, _simple_material, _value
 
 KIND_OF = {"tensor": 0, "fold": 1, "arbor": 2, "ferro": 3, "truss": 4}
@@ -335,7 +336,7 @@ def _build(name: str, part: meshes.Part, coll) -> bpy.types.Object:
 
 def _set(ob: bpy.types.Object, part: meshes.Part) -> None:
     me = ob.data
-    me.vertices.foreach_set("co", np.ascontiguousarray(part.verts, np.float32).ravel())
+    compat.set_positions(me, part.verts)
     for a, vals in part.attrs.items():
         at = me.attributes.get(a)
         if at is not None:

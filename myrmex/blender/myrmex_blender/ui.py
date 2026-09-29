@@ -633,6 +633,107 @@ class MYRMEX_PT_fx(bpy.types.Panel):
                 L.label(text=e, icon="ERROR")
 
 
+# ---------------------------------------------------------------------- graphics (gfx.py)
+_GFX_KNOBS = ("body_res", "body_auto", "body_px", "ghost_max", "ghost_parts", "ghost_coarse", "picture", "shadows",
+              "shadow_scale", "eevee", "auto", "target_fps")
+
+
+def _gfx_preset(self, context):
+    from . import gfx
+    if not gfx.SYNC["busy"] and self.preset != "custom":
+        gfx.configure({"preset": self.preset})
+
+
+def _gfx_update(self, context):
+    from . import gfx
+    if gfx.SYNC["busy"]:
+        return
+    d = {k: getattr(self, k) for k in _GFX_KNOBS}
+    d["pixel_size"] = int(self.pixel_size)
+    gfx.configure(d)
+
+
+class MyrmexGfxSettings(bpy.types.PropertyGroup):
+    preset: EnumProperty(name="Preset", update=_gfx_preset, default="balanced", items=(
+        ("quality", "Quality", "As before: the body always at its full viewport detail, every part of every afterimage"),
+        ("balanced", "Balanced", "Close-ups as before; wide shots only as detailed as they are seen; at most 10 "
+                                 "afterimages, the live picture at 75 %"),
+        ("performance", "Performance", "A coarser body, afterimages of the body only (at most 6), the live picture "
+                                       "at half size"),
+        ("max_fps", "Max FPS", "The coarsest body, 4 afterimages; with Set EEVEE: half-resolution viewport, no "
+                               "shadows"),
+        ("custom", "Custom", "Your own settings below")))
+    body_res: FloatProperty(name="Body detail", default=0.03, min=0.015, max=0.12, step=0.1, precision=3,
+                            update=_gfx_update, description="The body's viewport resolution in close-ups (smaller = "
+                            "finer, dearer; 0.03 = the look's own). Renders keep their own")
+    body_auto: BoolProperty(name="Coarser in wide shots", default=True, update=_gfx_update,
+                            description="Keep a body cell at most this many pixels wide on the 1920 picture: wide "
+                            "shots get coarser, close-ups stay as set")
+    body_px: FloatProperty(name="Cell on screen (px)", default=8.0, min=2.0, max=30.0, update=_gfx_update)
+    ghost_max: IntProperty(name="Afterimages at most", default=10, min=1, max=16, update=_gfx_update)
+    ghost_parts: EnumProperty(name="Afterimages of", update=_gfx_update, default="all", items=(
+        ("all", "Every part", "Copies of the whole organism (tendons, plates, fins ...)"),
+        ("body", "The body", "Copies of the body only - far fewer translucent triangles")))
+    ghost_coarse: FloatProperty(name="Afterimage coarseness", default=1.9, min=1.0, max=4.0, update=_gfx_update,
+                                description="How much coarser an afterimage's body is than the body itself")
+    picture: FloatProperty(name="Live picture", default=0.75, min=0.25, max=1.0, subtype="FACTOR",
+                           update=_gfx_update, description="The size of the picture the effects (echo, glow) are "
+                           "drawn on - a second render of the scene")
+    eevee: BoolProperty(name="Set EEVEE viewport", default=False, update=_gfx_update,
+                        description="Also set the viewport's pixel size and shadows (off: your file's own)")
+    pixel_size: EnumProperty(name="Pixel size", update=_gfx_update, default="1",
+                             items=(("1", "1x", ""), ("2", "2x", ""), ("4", "4x", ""), ("8", "8x", "")))
+    shadows: BoolProperty(name="Shadows", default=True, update=_gfx_update)
+    shadow_scale: FloatProperty(name="Shadow resolution", default=0.5, min=0.1, max=1.0, update=_gfx_update)
+    auto: BoolProperty(name="Auto quality", default=False, update=_gfx_update,
+                       description="Step the preset down when the view shows fewer frames a second than the target, "
+                       "back up when there is room")
+    target_fps: FloatProperty(name="Target fps", default=50.0, min=15.0, max=120.0, update=_gfx_update)
+
+
+class MYRMEX_PT_graphics(bpy.types.Panel):
+    bl_label = "Myrmex Graphics"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Myrmex"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        from . import gfx
+        p = context.scene.myrmex_gfx
+        L = self.layout
+        L.prop(p, "preset", expand=False)
+        row = L.row(align=True)
+        row.prop(p, "auto")
+        sub = row.row(align=True)
+        sub.enabled = p.auto
+        sub.prop(p, "target_fps", text="")
+        st = gfx.S["stats"]
+        if st["frames"]:
+            box = L.box()
+            box.label(text=f"{st['fps']:.0f} fps · organism {st['poll_ms']:.1f} ms · body {st['eval_ms']:.1f} ms",
+                      icon="TIME")
+            box.label(text=f"body detail {st['res']:.3f}" + (f" · auto: {st['level']}" if p.auto else ""))
+        col = L.column(heading="Body")
+        col.prop(p, "body_res")
+        col.prop(p, "body_auto")
+        sub = col.column()
+        sub.enabled = p.body_auto
+        sub.prop(p, "body_px")
+        col = L.column(heading="Afterimages")
+        col.prop(p, "ghost_max")
+        col.prop(p, "ghost_parts")
+        col.prop(p, "ghost_coarse")
+        L.prop(p, "picture", slider=True)
+        col = L.column(heading="EEVEE")
+        col.prop(p, "eevee")
+        sub = col.column()
+        sub.enabled = p.eevee
+        sub.prop(p, "pixel_size")
+        sub.prop(p, "shadows")
+        sub.prop(p, "shadow_scale")
+
+
 class MYRMEX_PT_stage(bpy.types.Panel):
     bl_label = "Myrmex Stage"
     bl_space_type = "VIEW_3D"
@@ -657,7 +758,7 @@ class MYRMEX_PT_stage(bpy.types.Panel):
 CLASSES = (MyrmexLiveSettings, MyrmexFxSettings, MyrmexStageSettings, MYRMEX_OT_live_start, MYRMEX_OT_live_stop,
            MYRMEX_OT_live_camera_view, MYRMEX_OT_setup_live_scene, MYRMEX_OT_export_rig, MYRMEX_OT_import_take,
            MYRMEX_OT_render_take, MYRMEX_OT_save_look, MYRMEX_OT_forget_look, MYRMEX_OT_stage_from_view, MYRMEX_PT_live,
-           MYRMEX_PT_fx, MYRMEX_PT_stage)
+           MYRMEX_PT_fx, MYRMEX_PT_stage, MyrmexGfxSettings, MYRMEX_PT_graphics)
 
 
 def register():
@@ -666,6 +767,7 @@ def register():
     bpy.types.Scene.myrmex_live = PointerProperty(type=MyrmexLiveSettings)
     bpy.types.Scene.myrmex_fx = PointerProperty(type=MyrmexFxSettings)
     bpy.types.Scene.myrmex_stage = PointerProperty(type=MyrmexStageSettings)
+    bpy.types.Scene.myrmex_gfx = PointerProperty(type=MyrmexGfxSettings)
 
 
 def unregister():
@@ -674,5 +776,6 @@ def unregister():
     del bpy.types.Scene.myrmex_live
     del bpy.types.Scene.myrmex_fx
     del bpy.types.Scene.myrmex_stage
+    del bpy.types.Scene.myrmex_gfx
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

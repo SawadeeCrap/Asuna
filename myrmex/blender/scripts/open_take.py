@@ -44,6 +44,8 @@ def main():
     from myrmex_blender import fx, stage
     st = fx.from_env()                     # Myrmex FX (afterimages, ribbons, picture effects) as set in the app
     stage.from_env()                       # the light on the organism (the background stays black)
+    from myrmex_blender import gfx
+    gfx.from_env()                         # graphics (afterimages, the live picture's size)
     msg = ui.import_any_take(bpy.context, a.take, a.audio or None, not a.no_camera)
     print("Myrmex:", msg, flush=True)
     if st is not None:

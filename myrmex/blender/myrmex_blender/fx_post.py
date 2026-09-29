@@ -402,7 +402,9 @@ def _pump():
 def output_size(scene) -> tuple[int, int]:
     from . import fx
     r = scene.render
-    s = float(fx.S["cfg"].get("preview", 1.0)) * float(_M.get("scale", 1.0)) if not bpy.app.background else 1.0
+    from . import gfx
+    s = min(float(fx.S["cfg"].get("preview", 1.0)), gfx.picture_scale()) * float(_M.get("scale", 1.0)) \
+        if not bpy.app.background else 1.0                     # (graphics: the preset's size is a ceiling)
     s = min(1.0, max(0.25, s))
     return max(16, int(r.resolution_x * r.resolution_percentage / 100 * s)), \
         max(16, int(r.resolution_y * r.resolution_percentage / 100 * s))
@@ -439,6 +441,8 @@ def _draw() -> None:
     if scene is None or space is None or space.type != "VIEW_3D" or region is None or scene.camera is None:
         return
     in_cam = space.region_3d is not None and space.region_3d.view_perspective == "CAMERA"
+    if not fx.picture_on() and not syphon_out.wants_fx():
+        return            # nothing to add to the picture: no second render of the scene - the view shows it as it is
     try:
         why = _why_not(scene, space)
         if why:

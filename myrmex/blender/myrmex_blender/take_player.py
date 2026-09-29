@@ -13,6 +13,8 @@ import os
 import bpy
 import numpy as np
 
+from . import compat
+
 _P: dict = {"key": None}
 
 
@@ -110,7 +112,7 @@ def _build(scene: bpy.types.Scene, d: dict) -> None:
         if ob is not None and "links" in d:
             pts = tendon_points(pos, d["links"][f].astype(float), up, t, ar, TENDON_THICK.get(style, 1.0))
             if len(pts) == len(ob.data.vertices):
-                ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+                compat.set_positions(ob.data, pts)
                 ob.data.update()
         ob = bpy.data.objects.get(FINS)
         if ob is not None:
@@ -119,7 +121,7 @@ def _build(scene: bpy.types.Scene, d: dict) -> None:
             com = d["com"][f] if "com" in d else pos.mean(0)
             pts = fin_points(style, hist, up, com, float(d["heading"][f]) if "heading" in d else 0.0, t)
             if len(pts) == len(ob.data.vertices):
-                ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+                compat.set_positions(ob.data, pts)
                 ob.data.update()
         return
     if style == 2:                                   # Cyber Hive: rails + panels carry their light
@@ -142,7 +144,7 @@ def _build(scene: bpy.types.Scene, d: dict) -> None:
         links = d["links"][f].astype(float)
         pts = bone_points(pos, links, up, t, ar) if style == 1 else strut_points(pos, links, len(links))
         if len(pts) == len(ob.data.vertices):
-            ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            compat.set_positions(ob.data, pts)
             ob.data.update()
     ob = bpy.data.objects.get(SCUTES if style == 1 else PLATES)
     if ob is not None and "plate" in d:
@@ -151,7 +153,7 @@ def _build(scene: bpy.types.Scene, d: dict) -> None:
         pts = scute_points(pos, up, plate, rad, float(d["heading"][f]) if "heading" in d else 0.0) if style == 1 \
             else plate_points(pos, up, plate, rad)
         if len(pts) == len(ob.data.vertices):
-            ob.data.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            compat.set_positions(ob.data, pts)
             ob.data.update()
 
 

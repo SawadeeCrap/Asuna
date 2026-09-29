@@ -82,6 +82,10 @@ def go_live():
     st = stage.from_env()                  # the light on the organism (the background stays black)
     if st is not None:
         print("Myrmex: stage", st.get("hdri") or "studio panels", flush=True)
+    from myrmex_blender import gfx
+    st = gfx.from_env()                    # graphics: the preset, the body's detail, afterimages, auto quality
+    if st is not None:
+        print("Myrmex: graphics", st.get("preset"), "(auto)" if st.get("auto") else "", flush=True)
     scene = bpy.context.scene
     s = scene.myrmex_live
     if "MYRMEX_KEEP_SETTINGS" in os.environ:

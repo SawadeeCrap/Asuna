@@ -137,6 +137,8 @@ class LiveLink:
                             m.show_viewport = False
         self.running = True
         _ACTIVE["link"] = self
+        from . import gfx
+        gfx.start()
         for h in _HANDLERS:
             lst = getattr(bpy.app.handlers, h)
             if _data_reloaded not in lst:
@@ -168,6 +170,8 @@ class LiveLink:
 
     def stop(self) -> None:
         self.running = False
+        from . import gfx
+        gfx.stop()
         if _ACTIVE.get("link") is self:
             _ACTIVE["link"] = None
             for h in _HANDLERS:
@@ -189,7 +193,10 @@ class LiveLink:
         if not self.running:
             return None
         try:
+            t0 = time.perf_counter()
             if self.poll():
+                from . import gfx
+                gfx.after_frame(time.perf_counter() - t0)      # evaluate + measure (the body), auto quality
                 _tag_redraw()
         except ReferenceError:                 # objects re-created (undo, file load): find them again
             self.refresh()

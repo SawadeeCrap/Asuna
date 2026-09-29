@@ -149,6 +149,24 @@ def fx_blender(s: AppSettings) -> dict:
             "monitor": bool(d.get("monitor", True))}
 
 
+def gfx_settings(s: AppSettings) -> dict:
+    """Blender's live graphics (realtime/gfx.py) with every default filled in.  EEVEE's viewport options are
+    Myrmex's to set only when "Keep my Blender settings" is off (unless chosen here explicitly)."""
+    from ..realtime.gfx import normalize
+    got = dict(s.gfx or {})
+    d = normalize({k: v for k, v in got.items() if k != "preset"})
+    if got.get("preset"):
+        d = normalize({"preset": got["preset"]}, d) if got["preset"] != "custom" else {**d, "preset": "custom"}
+    if "eevee" not in got:
+        d["eevee"] = not s.keep_blender_settings
+    return d
+
+
+def gfx_env(s: AppSettings) -> dict:
+    import json
+    return {"MYRMEX_GFX": json.dumps(gfx_settings(s))}
+
+
 def fx_env(s: AppSettings) -> dict:
     import json
     return {"MYRMEX_FX": json.dumps(fx_blender(s))}

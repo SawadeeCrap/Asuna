@@ -10,6 +10,7 @@ as ``MYRMEX_REPLY {json}``.  Only switched on when the app starts Blender (``MYR
     {"cmd": "syphon", "on": true, "name": "Myrmex", "width": 1280, "height": 720, "fps": 60, "alpha": false}
     {"cmd": "fx", "on": true, "preset": "Afterimage", "rack": {"ghosts": 0.8}, "vertical": true, "preview": 1.0}
     {"cmd": "stage", "hdri": "forest.exr", "strength": 1.0, "rotation": 90, "lights": false}
+    {"cmd": "gfx", "preset": "balanced", "ghost_max": 8, "auto": true, "target_fps": 50}
 
 Blender also speaks first: ``{"cmd": "stage", "from_blender": true, ...}`` when the stage is set there.
 """
@@ -97,6 +98,9 @@ def handle(cmd: dict) -> dict:
         elif name == "fx":                                 # Myrmex FX: on / preset / rack / format / preview
             from . import fx
             out.update(ok=True, **fx.configure(cmd))
+        elif name == "gfx":                                # graphics: presets, the body's detail, afterimages
+            from . import gfx
+            out.update(ok=True, **gfx.configure(cmd))
         elif name == "stage":                              # the light on the organism, black behind it
             from . import stage
             out.update(ok=True, **stage.apply(cmd))

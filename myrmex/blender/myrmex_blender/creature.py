@@ -13,7 +13,7 @@ import math
 import bpy
 import numpy as np
 
-from . import compat
+from . import compat, gfx
 
 COLL = "MyrmexCreature"
 META = "CreatureBody"
@@ -714,7 +714,7 @@ def set_cyber_mesh(ob: bpy.types.Object, pts: np.ndarray, flow: np.ndarray, ligh
     me = ob.data
     if len(pts) != len(me.vertices):
         return
-    me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+    compat.set_positions(me, pts)
     if "flow" in me.attributes:
         me.attributes["flow"].data.foreach_set("value", flow)
         me.attributes["light"].data.foreach_set("value", light)
@@ -1193,6 +1193,23 @@ def studio_world(world: bpy.types.World) -> None:
     out.location = (600, 0)
 
 
+def set_elements(mb, pos, radius, stretch, kind) -> None:
+    """The metaball's elements from a frame, as arrays (``foreach_set``: 0.03 ms for 128 elements where setting
+    them one property at a time takes 0.7 - 1.3 ms).  An element whose radius is below 1 cm is hidden."""
+    els = mb.elements
+    n = len(els)
+    if n == 0:
+        return
+    r = np.asarray(radius, np.float32)[:n]
+    st = 0.55 * np.asarray(stretch, np.float32)[:n]
+    els.foreach_set("hide", r < 0.01)
+    els.foreach_set("co", np.ascontiguousarray(np.asarray(pos, np.float32)[:n]).ravel())
+    els.foreach_set("radius", np.ascontiguousarray(r))
+    for a, ax in enumerate(("size_x", "size_y", "size_z")):
+        els.foreach_set(ax, np.ascontiguousarray(st[:, a]))
+    els.foreach_set("stiffness", np.where(np.asarray(kind)[:n] == 0, 2.0, 1.6).astype(np.float32))
+
+
 class CreatureView:
     def __init__(self, scene: bpy.types.Scene | None = None, resolution: float = 0.03):
         self.scene = scene or bpy.context.scene
@@ -1368,7 +1385,7 @@ class CreatureView:
             ob.show_in_front = True
             ob.display_type = "WIRE"
         ob.hide_viewport = False
-        ob.data.vertices.foreach_set("co", fr.pos.astype(np.float32).ravel())
+        compat.set_positions(ob.data, fr.pos)
         ob.data.update()
         self.debug_obj = ob
 
@@ -1440,7 +1457,7 @@ class CreatureView:
         if getattr(self, "swarm", None) is None or len(self.swarm.data.vertices) != n:
             self.make_hive(n, int(getattr(fr, "style", 0)))
         me = self.swarm.data
-        me.vertices.foreach_set("co", np.asarray(fr.particles, np.float32).ravel())
+        compat.set_positions(me, fr.particles)
         me.update()
 
     def _apply_colony(self, fr) -> None:
@@ -1463,7 +1480,7 @@ class CreatureView:
             pts = scute_points(fr.pos, fr.nrm, fr.plate, fr.radius, float(fr.heading)) if style == 1 else \
                 plate_points(fr.pos, fr.nrm, fr.plate, fr.radius)
             me = self.plates.data
-            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            compat.set_positions(me, pts)
             me.update()
         lx, ly, lz, lr = (float(v) for v in fr.lure)
         self.lure.location = (lx, ly, lz)
@@ -1479,11 +1496,11 @@ class CreatureView:
         if style >= 3:
             pts = tendon_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal), TENDON_THICK.get(style, 1.0))
             me = self.lattice.data
-            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            compat.set_positions(me, pts)
             me.update()
             fins = self._fins(len(fr.pos))
             fp = fin_points(style, self.hist, up, fr.com, float(fr.heading), float(fr.t))
-            fins.data.vertices.foreach_set("co", fp.astype(np.float32).ravel())
+            compat.set_positions(fins.data, fp)
             fins.data.update()
         elif style == 2:
             pts = rail_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal))
@@ -1493,7 +1510,7 @@ class CreatureView:
             pts = bone_points(fr.pos, fr.links, up, float(fr.t), float(fr.arousal)) if style == 1 else \
                 strut_points(fr.pos, fr.links, len(fr.links))
             me = self.lattice.data
-            me.vertices.foreach_set("co", pts.astype(np.float32).ravel())
+            compat.set_positions(me, pts)
             me.update()
         for k, o in enumerate(self.obstacles):
             if k < len(fr.obstacles) and fr.obstacles[k, 3] > 0:
@@ -1524,18 +1541,9 @@ class CreatureView:
             self._apply_colony(fr)
         if getattr(fr, "particles", None) is not None:
             self._apply_hive(fr)
-        els = self.mb.elements
-        for i, e in enumerate(els):
-            r = float(fr.radius[i])
-            if r < 0.01:
-                e.hide = True
-                continue
-            e.hide = False
-            e.co = fr.pos[i]
-            e.radius = r
-            sx, sy, sz = fr.stretch[i]
-            e.size_x, e.size_y, e.size_z = 0.55 * sx, 0.55 * sy, 0.55 * sz
-            e.stiffness = 2.0 if fr.kind[i] == 0 else 1.6
+        set_elements(self.mb, fr.pos, fr.radius, fr.stretch, fr.kind)
+        if n:
+            gfx.set_body(self.scene, self.mb, fr.com)            # the body's detail follows the shot (gfx)
         nt = self.mb.materials[0].node_tree if self.mb.materials and self.mb.materials[0] else None
         if nt is not None:
             if "MyrmexTime" in nt.nodes:

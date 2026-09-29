@@ -178,9 +178,10 @@ def _write_look(path: str, scene: bpy.types.Scene) -> None:
                 ob.modifiers[m_name].show_viewport = True
                 hidden.append(ob.modifiers[m_name])
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    from . import stage
+    from . import gfx, stage
     try:
-        with _without_take(scene), stage.saving(scene):  # (the stage's light is the app's, not the look's)
+        with _without_take(scene), stage.saving(scene), gfx.saving():  # (the stage's light is the app's;
+            # the body's resolution is the look's own, not the live shot's)
             bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
     finally:
         for m in hidden:
