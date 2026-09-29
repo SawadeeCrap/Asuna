@@ -86,8 +86,15 @@ public:
 		}
 		grid_.alloc(maxL);
 		spec_.alloc(maxL);
-		win_.assign(maxL, 0.f);
-		curWinN_ = 0;
+		// one Hann window per FFT size, computed here (a cosine per point: recomputing it on the audio thread when the window length changed
+		// cost 0.4 ms at L = 32768)
+		win_.clear();
+		for (size_t k = 0; k < fftSizes_.size(); k++) {
+			const int L = fftSizes_[k];
+			win_.push_back(std::vector<float>((size_t) L, 0.f));
+			for (int i = 0; i < L; i++)
+				win_[k][(size_t) i] = hannPeriodic(i, L);
+		}
 		int maxJ = maxCfg.maxNc / 2;
 		cur_.re.assign(maxJ + 2, 0.f);
 		cur_.im.assign(maxJ + 2, 0.f);
@@ -104,12 +111,12 @@ public:
 		cfg_.maxNc = std::min(cfg.maxNc, maxCfg_.maxNc);
 		M_ = cfg.M;
 		lag_ = cfg.taps / 2 + 2;
-		curWinN_ = 0;
 		reset();
 	}
 
 	void reset() {
 		active_ = false;
+		job_.running = false;
 		nu_ = 0.0;
 		nuDot_ = 0.0;
 		theta_ = 0.0;
@@ -125,6 +132,7 @@ public:
 	void start(double periodSamples, uint64_t nowSample) {
 		nu_ = nuGood_ = 1.0 / periodSamples;
 		rejected_ = 0;
+		job_.running = false;
 		nuDot_ = nuDotWarp_ = 0.0;
 		prevBias_ = 0.0;
 		histPos_ = histCount_ = 0;
@@ -148,11 +156,17 @@ public:
 		nextHop_ = std::ceil(theta_ * Q) / Q; // hop boundaries are at multiples of 1/Q in theta
 	}
 
-	void stop() { active_ = false; }
+	void stop() {
+		active_ = false;
+		job_.running = false;
+	}
 	bool active() const { return active_; }
 
 	/** Advance the tracker by one sample. Must be called after `ring.push()` for that sample. Returns true when a new
-	    harmonic set (available via set()) was produced. */
+	    harmonic set (available via set()) was produced.
+	    An analysis hop is a resumable job: the window geometry is fixed the moment the hop is due, then the work (resampling of the window onto
+	    the angle grid, FFT, harmonic extraction, alignment and tracker update) is spread over the following samples, one bounded piece per call,
+	    so that no single sample pays for a whole hop (up to ~0.5 ms at 20 Hz). Small windows (high pitch) are cheap and run in a single call. */
 	bool step(const MirrorRing& ring) {
 		if (!active_)
 			return false;
@@ -160,15 +174,17 @@ public:
 		const double om = omegaAt(nowT_);
 		theta_ += om; // the reference phase follows the predicted frequency, so successive windows differ by only a tiny shift
 		lastSample_ = ring.count();
+		if (job_.running)
+			return advanceJob(ring);
 		// the reference instant lags the newest sample by lag_ samples (the sinc reader needs future samples)
 		const double thetaRef = theta_ - lag_ * om;
 		if (thetaRef < nextHop_)
 			return false;
-		bool ok = analyse(ring, thetaRef);
-		int Q = hopsPerPeriod(1.0 / omega());
+		const bool started = beginJob(ring, thetaRef);
+		const int Q = hopsPerPeriod(1.0 / omega());
 		Q_ = Q;
 		nextHop_ = (std::floor(thetaRef * Q + 1e-9) + 1.0) / Q;
-		return ok;
+		return started && job_.inlineRun ? advanceJob(ring) : false;
 	}
 
 	const HarmonicSet& set() const { return cur_; }
@@ -213,21 +229,38 @@ public:
 	double lastMeasurementTime() const { return lastNuTime_; }
 	/** Number of discarded measurements / numerical resets since start() (diagnostic). */
 	int rejectedMeasurements() const { return rejected_; }
-	double dbgDtc = 0, dbgDTheta = 0, dbgTc = 0, dbgNuC = 0, dbgAc = 0; int dbgJMax = 0; bool dbgFreeze = false;
-	/** Test hook: overwrite the tracker state (frequency in cycles/sample, slope in cycles/sample^2) valid from absolute sample time t. */
-	void dbgSetState(double nu, double nuDot, double t) { nu_ = nu; nuDot_ = nuDot; nuDotWarp_ = nuDot; tState_ = t; }
 	int currentNc() const { return cur_.Nc; }
 
 private:
 	static inline double sq(double x) { return x * x; }
 
+	/** e^{i j theta} for j = 1, 2, 3, ... by complex rotation (one multiply per harmonic instead of a sin/cos pair; renormalised every 256 steps so the
+	    magnitude cannot drift). The per-harmonic trigonometry dominated the cost of an analysis hop at low pitch (J up to ~2000 harmonics). */
+	struct PhaseRamp {
+		double c, s, dc, ds;
+		int n;
+		explicit PhaseRamp(double theta) : c(1.0), s(0.0), dc(std::cos(theta)), ds(std::sin(theta)), n(0) {}
+		/** Advance to the next harmonic; (c, s) then hold e^{i j theta}. */
+		inline void next() {
+			const double nc = c * dc - s * ds;
+			s = c * ds + s * dc;
+			c = nc;
+			if ((++n & 255) == 0) {
+				const double g = 1.0 / std::sqrt(c * c + s * s);
+				c *= g;
+				s *= g;
+			}
+		}
+	};
+
 	/** Multiply harmonic j by exp(j*2*pi*j*cycles). */
 	static void rotateSet(float* re, float* im, int J, double cycles) {
 		if (cycles == 0.0)
 			return;
+		PhaseRamp ramp(kTwoPi * cycles);
 		for (int j = 1; j <= J; j++) {
-			double a = kTwoPi * frac((double) j * cycles);
-			float cr = (float) std::cos(a), ci = (float) std::sin(a);
+			ramp.next();
+			const float cr = (float) ramp.c, ci = (float) ramp.s;
 			float r = re[j] * cr - im[j] * ci, i = re[j] * ci + im[j] * cr;
 			re[j] = r;
 			im[j] = i;
@@ -248,7 +281,7 @@ private:
 		for (int j = 0; j <= J; j++) {
 			for (int m = 1; m < M; m++) {
 				int b = M * j + m;
-				if (b >= curWinN_ / 2)
+				if (b >= job_.L / 2)
 					break;
 				double pr = 0, pi = 0;
 				if (m == 1 && j >= 1) {
@@ -272,11 +305,12 @@ private:
 		return (float) (eH / (eH + eNon + 1e-30));
 	}
 
-	RealFFT* fftFor(int L) {
+	/** Plan index for window length L (-1 if there is none). */
+	int planFor(int L) const {
 		for (size_t i = 0; i < fftSizes_.size(); i++)
 			if (fftSizes_[i] == L)
-				return fft_[i].get();
-		return nullptr;
+				return (int) i;
+		return -1;
 	}
 
 	/** Kalman update of (nu, nuDot) with a frequency measurement `z` (cycles/sample, variance R) that refers to time tMeas. */
@@ -324,7 +358,10 @@ private:
 		}
 	}
 
-	bool analyse(const MirrorRing& ring, double thetaRef) {
+	/** Fix the geometry of the analysis window that ends `lag_` samples before the newest sample and arm the job. Returns false (no job) when the
+	    window cannot be built yet (not enough history, no tracked frequency). */
+	bool beginJob(const MirrorRing& ring, double thetaRef) {
+		job_.running = false;
 		// ---- window geometry: Nc, centre time and centre frequency -------------------------------------------------------
 		const double T = (double) (ring.count() - 1) - lag_; // window end: `lag_` samples before the newest sample
 		const double nuEnd = omegaGridAt(T);
@@ -343,8 +380,8 @@ private:
 		int Nc = nextPow2((int) std::ceil(1.15 * P0));
 		Nc = clampT(Nc, cfg_.minNc, cfg_.maxNc);
 		const int L = M_ * Nc;
-		RealFFT* fft = fftFor(L);
-		if (!fft)
+		const int plan = planFor(L);
+		if (plan < 0)
 			return false;
 		// The Hann window is periodic (centre at grid index L/2). Grid index i sits b_i = (L-1-i)/Nc - aC table cycles before the window
 		// centre, so aC = M/2 - 1/Nc cycles separate the window end from its centre.
@@ -370,56 +407,127 @@ private:
 		if (disc0 < 0.25 * nuC * nuC)
 			disc0 = 0.25 * nuC * nuC;
 		const double tFirst = tc - 2.0 * bMax / (nuC + std::sqrt(disc0));
-		const double oldest = (double) ring.count() - (double) ring.size() + 64.0;
+		// the job reads the ring for up to (L / kFillChunk + 3) more samples after it starts: keep that margin to the oldest sample still stored
+		const double oldest = (double) ring.count() - (double) ring.size() + 64.0 + (double) (L / kFillChunk + 3);
 		if (tFirst - lag_ - 2 < oldest)
 			return false; // not enough history yet
-		if (warp) {
-			for (int i = 0; i < L; i++) {
-				const double b = (double) (L - 1 - i) / Nc - aC;
+		Job& j = job_;
+		j.T = T;
+		j.tc = tc;
+		j.nuC = nuC;
+		j.aC = aC;
+		j.P = P;
+		j.chirp = chirp;
+		j.warp = warp;
+		j.thetaRef = thetaRef;
+		j.Nc = Nc;
+		j.L = L;
+		j.Q = Q_;
+		j.plan = plan;
+		j.fillPos = 0;
+		j.stepS = P / Nc; // samples per grid point (uniform grid)
+		j.t0 = tc - ((double) (L - 1) / Nc - aC) * P;
+		j.inlineRun = L <= kInlineWindow;
+		j.stage = kStageFill;
+		j.running = true;
+		return true;
+	}
+
+	/** Run the next piece of the current job (all pieces at once for an inline job). Returns true when the job has finished and published a set. */
+	bool advanceJob(const MirrorRing& ring) {
+		Job& j = job_;
+		if (j.inlineRun) {
+			fillGrid(ring, j.L);
+			transformStage();
+			extractStage();
+			return finishStage();
+		}
+		switch (j.stage) {
+			case kStageFill:
+				fillGrid(ring, kFillChunk);
+				if (j.fillPos >= j.L)
+					j.stage = kStageTransform;
+				return false;
+			case kStageTransform:
+				transformStage();
+				j.stage = kStageExtract;
+				return false;
+			case kStageExtract:
+				extractStage();
+				j.stage = kStageFinish;
+				return false;
+			default:
+				return finishStage();
+		}
+	}
+
+	/** Resample up to `count` further points of the window onto the angle grid. */
+	void fillGrid(const MirrorRing& ring, int count) {
+		Job& j = job_;
+		const int i0 = j.fillPos;
+		const int i1 = std::min(j.L, i0 + count);
+		const int Nc = j.Nc, L = j.L;
+		const bool t32 = cfg_.taps == 32;
+		if (j.warp) {
+			const double nuC = j.nuC, chirp = j.chirp;
+			for (int i = i0; i < i1; i++) {
+				const double b = (double) (L - 1 - i) / Nc - j.aC;
 				double d = nuC * nuC - 2.0 * chirp * b;
 				if (d < 0.25 * nuC * nuC)
 					d = 0.25 * nuC * nuC;
-				const double pos = tc - 2.0 * b / (nuC + std::sqrt(d));
-				grid_[i] = (cfg_.taps == 32) ? ring.readSinc<32>(pos) : ring.readSinc<16>(pos);
+				const double pos = j.tc - 2.0 * b / (nuC + std::sqrt(d));
+				grid_[i] = t32 ? ring.readSinc<32>(pos) : ring.readSinc<16>(pos);
 			}
+		} else if (t32) {
+			for (int i = i0; i < i1; i++)
+				grid_[i] = ring.readSinc<32>(j.t0 + i * j.stepS);
 		} else {
-			const double step = P / Nc; // samples per grid point
-			const double t0 = tc - ((double) (L - 1) / Nc - aC) * P;
-			if (cfg_.taps == 32) {
-				for (int i = 0; i < L; i++)
-					grid_[i] = ring.readSinc<32>(t0 + i * step);
-			} else {
-				for (int i = 0; i < L; i++)
-					grid_[i] = ring.readSinc<16>(t0 + i * step);
-			}
+			for (int i = i0; i < i1; i++)
+				grid_[i] = ring.readSinc<16>(j.t0 + i * j.stepS);
 		}
-		if (curWinN_ != L) {
-			for (int i = 0; i < L; i++)
-				win_[i] = hannPeriodic(i, L);
-			curWinN_ = L;
-		}
-		double energy = 0.0;
-		for (int i = 0; i < L; i++) {
-			energy += (double) grid_[i] * grid_[i];
-			grid_[i] *= win_[i];
-		}
-		fft->forward(grid_.data(), spec_.data());
+		j.fillPos = i1;
+	}
 
-		const int J = std::min(Nc / 2 - 1, std::max(1, (int) std::floor(0.49 * P)));
-		const float periodicity = residualPeriodicity(J);
+	/** Hann window and FFT of the resampled window. */
+	void transformStage() {
+		Job& j = job_;
+		const int L = j.L;
+		const float* w = win_[(size_t) j.plan].data();
+		for (int i = 0; i < L; i++)
+			grid_[i] *= w[i];
+		fft_[(size_t) j.plan]->forward(grid_.data(), spec_.data());
+	}
+
+	/** Harmonic coefficients from the spectrum bins (raw frame) and the periodicity index. */
+	void extractStage() {
+		Job& j = job_;
+		const int Nc = j.Nc, L = j.L;
+		const int J = std::min(Nc / 2 - 1, std::max(1, (int) std::floor(0.49 * j.P)));
+		j.J = J;
+		j.periodicity = residualPeriodicity(J);
 		const float W0 = 0.5f * L;
 		// harmonic coefficients in the raw frame: the phase of c_j is 2*pi*j*tau with tau = (source phase at the window centre) - (reference
 		// phase there), the reference phase being the tracker phase theta at the window end minus aC cycles
-		double thetaFrac = frac(thetaRef);
-		for (int j = 1; j <= J; j++) {
-			int b = M_ * j;
+		const double thetaFrac = frac(j.thetaRef);
+		PhaseRamp extract(-kTwoPi * (thetaFrac + 1.0 / Nc));
+		for (int h = 1; h <= J; h++) {
+			int b = M_ * h;
 			float xr = spec_[2 * b], xi = spec_[2 * b + 1];
-			double ang = -kTwoPi * frac((double) j * (thetaFrac + 1.0 / Nc));
-			float cr = (float) std::cos(ang), ci = (float) std::sin(ang);
-			tmpRe_[j] = (xr * cr - xi * ci) / W0;
-			tmpIm_[j] = (xr * ci + xi * cr) / W0;
+			extract.next();
+			const float cr = (float) extract.c, ci = (float) extract.s;
+			tmpRe_[h] = (xr * cr - xi * ci) / W0;
+			tmpIm_[h] = (xr * ci + xi * cr) / W0;
 		}
-		double c0 = spec_[0] / (double) (W0 * 2.0);
+		j.c0 = spec_[0] / (double) (W0 * 2.0);
+	}
+
+	/** Alignment against the previous hop, frequency measurement, tracker update and publication of the harmonic set. */
+	bool finishStage() {
+		Job& j = job_;
+		j.running = false;
+		const int J = j.J, Nc = j.Nc;
+		const double tc = j.tc, aC = j.aC, nuC = j.nuC, chirp = j.chirp, thetaRef = j.thetaRef;
+		const float periodicity = j.periodicity;
 
 		// ---- alignment against the previous hop ---------------------------------------------------------------------
 		// Bring the raw set into the content-anchored frame using the offset accumulated so far, then measure only the
@@ -432,50 +540,47 @@ private:
 			// magnitude-weighted phase-slope estimate with incremental unwrapping (low harmonics first), limited to the harmonics that are
 			// still on their bins given the tracker's recent prediction error
 			const int jMax = clampT((int) (0.15 / (M_ * std::max(epsRel_, 1e-9))), 4, 96);
-			dbgJMax = jMax;
 			double sxy = 0.0, sxx = 0.0;
 			double est = 0.0;
-			int used = 0;
 			double maxMag = 0.0;
-			for (int j = 1; j <= Jc; j++)
-				maxMag = std::max(maxMag, (double) tmpRe_[j] * tmpRe_[j] + (double) tmpIm_[j] * tmpIm_[j]);
+			for (int h = 1; h <= Jc; h++)
+				maxMag = std::max(maxMag, (double) tmpRe_[h] * tmpRe_[h] + (double) tmpIm_[h] * tmpIm_[h]);
 			const double magFloor = maxMag * 1e-5;
-			for (int j = 1; j <= Jc && j <= jMax; j++) {
-				double ar = tmpRe_[j], ai = tmpIm_[j], br = prev_.re[j], bi = prev_.im[j];
+			for (int h = 1; h <= Jc && h <= jMax; h++) {
+				double ar = tmpRe_[h], ai = tmpIm_[h], br = prev_.re[h], bi = prev_.im[h];
 				double mag2a = ar * ar + ai * ai, mag2b = br * br + bi * bi;
 				if (mag2a < magFloor || mag2b < magFloor)
 					continue;
 				// c_now * conj(c_prev): phase = 2*pi*j*delta for a pure time shift
 				double pr = ar * br + ai * bi, pi = ai * br - ar * bi;
 				double meas = std::atan2(pi, pr);
-				double pred = kTwoPi * j * est;
+				double pred = kTwoPi * h * est;
 				double resid = meas - pred;
 				resid -= kTwoPi * std::floor(resid / kTwoPi + 0.5);
 				double unwrapped = pred + resid;
 				double w = std::sqrt(mag2a * mag2b);
-				double x = kTwoPi * j;
+				double x = kTwoPi * h;
 				sxy += w * x * unwrapped;
 				sxx += w * x * x;
 				est = sxy / sxx;
-				used++;
 			}
 			delta = est;
 			// noise of the slope estimate: weighted least squares residual (weights ~ 1/phase variance) and coherence after removing the shift
-			double swr = 0.0, sw = 0.0;
+			double swr = 0.0;
 			double nr = 0, ni = 0, ea = 0, eb = 0;
 			int n = 0;
-			for (int j = 1; j <= Jc; j++) {
-				double ar = tmpRe_[j], ai = tmpIm_[j], br = prev_.re[j], bi = prev_.im[j];
-				double a = -kTwoPi * j * delta;
-				double cr = std::cos(a), ci = std::sin(a);
+			PhaseRamp unshift(-kTwoPi * delta);
+			for (int h = 1; h <= Jc; h++) {
+				double ar = tmpRe_[h], ai = tmpIm_[h], br = prev_.re[h], bi = prev_.im[h];
+				unshift.next();
+				const double cr = unshift.c, ci = unshift.s;
 				double rr = ar * cr - ai * ci, ri = ar * ci + ai * cr;
 				double pr = rr * br + ri * bi, pi = ri * br - rr * bi; // c_now(shifted) * conj(c_prev): its phase is the residual
 				double mag2a = ar * ar + ai * ai, mag2b = br * br + bi * bi;
-				if (j <= jMax && mag2a >= magFloor && mag2b >= magFloor) { // same harmonics as the slope estimate above
+				if (h <= jMax && mag2a >= magFloor && mag2b >= magFloor) { // same harmonics as the slope estimate above
 					double w = std::sqrt(mag2a * mag2b);
 					double r = std::atan2(pi, pr);
 					swr += w * r * r;
-					sw += w;
 					n++;
 				}
 				nr += pr;
@@ -516,14 +621,13 @@ private:
 				lastNuBar_ = nuBar;
 				lastNuSigma_ = sig;
 				lastNuTime_ = 0.5 * (tc + prevTc_);
-				dbgDtc = dtc; dbgDTheta = dTheta; dbgTc = tc; dbgNuC = nuC; dbgAc = aC;
 				// sliding mean over one waveform period (the last Q hops)
 				histNu_[histPos_] = nuBar;
 				histT_[histPos_] = 0.5 * (tc + prevTc_);
 				histVar_[histPos_] = sig * sig;
 				histPos_ = (histPos_ + 1) % kHist;
 				if (histCount_ < kHist) histCount_++;
-				const int q = std::min(std::max(Q_, 1), histCount_);
+				const int q = std::min(std::max(j.Q, 1), histCount_);
 				double mz = 0.0, mt = 0.0, mv = 0.0;
 				for (int h = 1; h <= q; h++) {
 					const int idx = (histPos_ - h + kHist) % kHist;
@@ -532,7 +636,7 @@ private:
 					mv += histVar_[idx];
 				}
 				mz /= q; mt /= q; mv /= q;
-				if (!dbgFreeze && (histCount_ >= Q_ || Q_ <= 1))
+				if (histCount_ >= j.Q || j.Q <= 1)
 					kalmanUpdate(mz, mv, mt);
 			}
 			delta_cum_ += delta; // the content-anchored frame absorbs the measured shift
@@ -549,30 +653,29 @@ private:
 		// publish (tmp now holds the aligned set)
 		cur_.J = J;
 		cur_.Nc = Nc;
-		cur_.period = P;
-		for (int j = 1; j <= J; j++) {
-			cur_.re[j] = tmpRe_[j];
-			cur_.im[j] = tmpIm_[j];
+		cur_.period = j.P;
+		for (int h = 1; h <= J; h++) {
+			cur_.re[h] = tmpRe_[h];
+			cur_.im[h] = tmpIm_[h];
 		}
-		cur_.c0 = (float) c0;
+		cur_.c0 = (float) j.c0;
 		cur_.thetaEnd = thetaRef + delta_cum_;
-		cur_.refTime = T;
+		cur_.refTime = j.T;
 		double e2 = 0;
-		for (int j = 1; j <= J; j++)
-			e2 += 2.0 * ((double) cur_.re[j] * cur_.re[j] + (double) cur_.im[j] * cur_.im[j]);
+		for (int h = 1; h <= J; h++)
+			e2 += 2.0 * ((double) cur_.re[h] * cur_.re[h] + (double) cur_.im[h] * cur_.im[h]);
 		cur_.rms = (float) std::sqrt(e2);
 		cur_.coherence = coh;
 		cur_.periodicity = periodicity;
 		cur_.seq++;
 
 		// keep the aligned set as the reference for the next hop
-		prev_.re = cur_.re;
-		prev_.im = cur_.im;
+		std::copy(cur_.re.begin(), cur_.re.begin() + J + 1, prev_.re.begin());
+		std::copy(cur_.im.begin(), cur_.im.begin() + J + 1, prev_.im.begin());
 		prevJ_ = J;
 		prevThetaRef_ = thetaRef;
 		havePrev_ = true;
 		hopCount_++;
-		(void) energy;
 		return true;
 	}
 
@@ -582,8 +685,8 @@ private:
 	std::vector<std::unique_ptr<RealFFT> > fft_;
 	std::vector<int> fftSizes_;
 	AlignedBuffer<float> grid_, spec_;
-	std::vector<float> win_, tmpRe_, tmpIm_;
-	int curWinN_ = 0;
+	std::vector<std::vector<float> > win_; // Hann window per FFT size (parallel to fft_/fftSizes_)
+	std::vector<float> tmpRe_, tmpIm_;
 	int lag_ = 10;
 
 	bool active_ = false;
@@ -606,6 +709,20 @@ private:
 	int hopCount_ = 0, goodHops_ = 0;
 	float coh_ = 0.f;
 	HarmonicSet cur_, prev_;
+
+	// ---- the analysis hop in progress (see step()) ----
+	static const int kFillChunk = 512;     // grid points resampled per call of a sliced job (~7 us)
+	static const int kInlineWindow = 2048; // windows up to this many grid points run in a single call
+	enum { kStageFill = 0, kStageTransform, kStageExtract, kStageFinish };
+	struct Job {
+		bool running = false, warp = false, inlineRun = false;
+		int stage = kStageFill, fillPos = 0;
+		int Nc = 0, L = 0, J = 0, Q = 1;
+		double T = 0.0, tc = 0.0, nuC = 0.0, aC = 0.0, P = 0.0, chirp = 0.0, thetaRef = 0.0, t0 = 0.0, stepS = 0.0, c0 = 0.0;
+		float periodicity = 0.f;
+		int plan = 0;
+	};
+	Job job_;
 };
 
 } // namespace fc

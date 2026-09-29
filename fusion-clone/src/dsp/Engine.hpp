@@ -32,6 +32,10 @@ public:
 	/** (Re)initialise for a sample rate. Allocates everything for the largest configuration; call from a non-realtime context. */
 	void prepare(double sampleRate) {
 		fs_ = sampleRate;
+		// function-local statics (interpolation kernels, log2 table) are built on their first use: force that to happen here, not on the audio thread
+		(void) sharedSincKernel<16>();
+		(void) sharedSincKernel<32>();
+		(void) log2Lut();
 		tracker_.prepare(fs_);
 		CycleAnalyzer::Config maxCfg;
 		maxCfg.M = 4;
@@ -62,6 +66,11 @@ public:
 		sqMask_ = 65535;
 		dcCoef_ = 1.f - (float) std::exp(-1.0 / (0.1 * fs_));
 		refineBuf_.assign(4096, 0.f);
+		refFft_.reset(new RealFFT(kRefineFft));
+		refA_.alloc(kRefineFft);
+		refB_.alloc(kRefineFft);
+		refSpecA_.alloc(kRefineFft);
+		refSpecB_.alloc(kRefineFft);
 		outGain_.setTimeConstant(0.02f, (float) fs_);
 		norm_.setTimeConstant(0.02f, (float) fs_);
 		applyQuality(params_.quality);
@@ -131,7 +140,7 @@ public:
 		envGain_ = 0.f;
 		noveltyShort_ = noveltyLong_ = 0.f;
 		avgValid_ = false;
-		pubPending_ = 0;
+		cancelBuild();
 		samplesSincePub_ = 1 << 20;
 		omegaS_ = 0.0;
 		stepMismatch_ = 0;
@@ -186,7 +195,7 @@ public:
 			ctrlCounter_ = 0;
 			controlTick();
 		}
-		if (pubPending_)
+		if (pubPending_ || bldVoice_)
 			buildNextTable();
 
 		lockW_ += (lockTarget_ - lockW_) * (lockTarget_ > lockW_ ? lockRise_ : lockFall_);
@@ -298,7 +307,7 @@ private:
 		c.minNc = 64;
 		switch (q) {
 		case QUALITY_ECO:
-			c.M = 2; c.taps = 16; c.maxNc = 2048; c.maxHopSec = 0.006;
+			c.M = 2; c.taps = 16; c.maxNc = 4096; c.maxHopSec = 0.006;
 			pubMinSec_ = 0.012;
 			break;
 		case QUALITY_HIGH:
@@ -320,7 +329,7 @@ private:
 		state_ = ST_IDLE;
 		lockW_ = lockTarget_ = 0.f;
 		avgValid_ = false;
-		pubPending_ = 0;
+		cancelBuild();
 		for (int v = 1; v < kMaxVoices; v++)
 			vs_[v].haveTable = false;
 		tracker_.setActiveMask((1 << PitchTracker::kLanes) - 1);
@@ -481,35 +490,64 @@ private:
 		}
 	}
 
-	/** Full-rate refinement of the period around a coarse estimate (integer lag scan + parabolic peak). */
+	/** Full-rate refinement of the period around a coarse estimate: the squared difference between the newest W samples and the same span `lag`
+	    samples earlier, for every integer lag around the estimate, then a parabolic peak. Sum((a-b)^2) = Sum(a^2) + Sum(b^2) - 2 Sum(a b): the
+	    cross term for all lags at once is one FFT correlation (~0.1 ms) instead of a direct scan (2.5 ms for a 20 Hz note). */
 	double refinePeriod(double P0) {
 		const uint64_t n = ring_.count();
 		const int W = clampT((int) std::ceil(1.5 * P0), 128, 6144);
 		int span = std::max(3, (int) std::ceil(0.035 * P0));
 		span = std::min(span, 1000);
 		const int lag0 = (int) std::floor(P0) - span, lag1 = (int) std::ceil(P0) + span;
-		if (lag0 < 2 || (uint64_t) (lag1 + W + 8) >= n || lag1 + W + 8 > ring_.size() - 64 || (size_t) (lag1 - lag0 + 1) > refineBuf_.size())
+		const int len = W + lag1; // history used: the newest `len` samples
+		if (lag0 < 2 || (uint64_t) (len + 8) >= n || len + 8 > ring_.size() - 64 || len > kRefineFft || (size_t) (lag1 - lag0 + 1) > refineBuf_.size())
 			return P0;
+		float* a = refA_.data();
+		float* b = refB_.data();
+		double A = 0.0; // Sum a_j^2
+		for (int j = 0; j < W; j++) {
+			a[j] = ring_.at(n - 1 - (uint64_t) j);
+			A += (double) a[j] * (double) a[j];
+		}
+		std::fill(a + W, a + kRefineFft, 0.f);
+		for (int m = 0; m < len; m++)
+			b[m] = ring_.at(n - 1 - (uint64_t) m);
+		std::fill(b + len, b + kRefineFft, 0.f);
+		refFft_->forward(a, refSpecA_.data());
+		refFft_->forward(b, refSpecB_.data());
+		// conj(A) * B (packed layout: bins 0 and N/2 are real and share the first two slots)
+		float* sa = refSpecA_.data();
+		const float* sb = refSpecB_.data();
+		sa[0] *= sb[0];
+		sa[1] *= sb[1];
+		for (int k = 1; k < kRefineFft / 2; k++) {
+			const float ar = sa[2 * k], ai = sa[2 * k + 1], br = sb[2 * k], bi = sb[2 * k + 1];
+			sa[2 * k] = ar * br + ai * bi;
+			sa[2 * k + 1] = ar * bi - ai * br;
+		}
+		refFft_->inverse(sa, a); // a[lag] = N * Sum_j a_j b_{j+lag}
+		const double invN = 1.0 / (double) kRefineFft;
+		double eb = 0.0; // B(lag) = Sum_{j<W} b_{j+lag}^2, slid along the lags
+		for (int j = 0; j < W; j++)
+			eb += (double) b[lag0 + j] * (double) b[lag0 + j];
 		std::vector<float>& d = refineBuf_;
-		float best = 1e30f;
+		double best = 1e300;
 		int bestLag = lag0;
 		for (int lag = lag0; lag <= lag1; lag++) {
-			float acc = 0.f;
-			for (int j = 0; j < W; j++) {
-				const float df = ring_.at(n - 1 - (uint64_t) j) - ring_.at(n - 1 - (uint64_t) j - (uint64_t) lag);
-				acc += df * df;
-			}
-			d[lag - lag0] = acc;
-			if (acc < best) {
-				best = acc;
+			const double dd = A + eb - 2.0 * (double) a[lag] * invN;
+			d[lag - lag0] = (float) dd;
+			if (dd < best) {
+				best = dd;
 				bestLag = lag;
 			}
+			if (lag < lag1)
+				eb += (double) b[lag + W] * (double) b[lag + W] - (double) b[lag] * (double) b[lag];
 		}
 		if (bestLag <= lag0 || bestLag >= lag1)
 			return P0;
-		const double a = d[bestLag - 1 - lag0], b = d[bestLag - lag0], c = d[bestLag + 1 - lag0];
-		const double den = a - 2.0 * b + c;
-		double off = std::fabs(den) > 1e-20 ? 0.5 * (a - c) / den : 0.0;
+		const double pa = d[bestLag - 1 - lag0], pb = d[bestLag - lag0], pc = d[bestLag + 1 - lag0];
+		const double den = pa - 2.0 * pb + pc;
+		double off = std::fabs(den) > 1e-20 ? 0.5 * (pa - pc) / den : 0.0;
 		off = clampT(off, -1.0, 1.0);
 		return bestLag + off;
 	}
@@ -652,8 +690,9 @@ private:
 	void maybePublish(bool force) {
 		if (!avgValid_)
 			return;
-		if (!force && (samplesSincePub_ < pubMinSec_ * fs_ || pubPending_))
+		if (!force && (samplesSincePub_ < pubMinSec_ * fs_ || pubPending_ || bldVoice_))
 			return;
+		bldVoice_ = 0; // a forced publication (new lock) abandons a table build in flight
 		const int J = avgJ_;
 		for (int j = 1; j <= J; j++) {
 			pubRe_[j] = avgRe_[j];
@@ -684,32 +723,76 @@ private:
 		status_.specSeq++;
 	}
 
+	/** Table builds are time sliced twice over: one voice is worked on at a time, and each voice takes up to five short stages (spectrum,
+	    inverse FFT, character shaping, its FFT pair, copy), one stage per sample, so no sample pays for a whole 8192-point table. */
 	void buildNextTable() {
-		unsigned m = pubPending_;
-		int v = 1;
-		while (v < kMaxVoices && !((m >> v) & 1u))
-			v++;
-		if (v >= kMaxVoices) {
-			pubPending_ = 0;
-			return;
+		if (bldVoice_ == 0) {
+			unsigned m = pubPending_;
+			int v = 1;
+			while (v < kMaxVoices && !((m >> v) & 1u))
+				v++;
+			if (v >= kMaxVoices) {
+				pubPending_ = 0;
+				return;
+			}
+			pubPending_ &= ~(1u << v);
+			bldVoice_ = v;
+			bldStage_ = kBuildSpectrum;
 		}
-		pubPending_ &= ~(1u << v);
-		buildVoiceTable(v);
+		advanceBuild();
 	}
 
-	void buildVoiceTable(int v) {
-		VoiceState& s = vs_[v];
+	void cancelBuild() {
+		bldVoice_ = 0;
+		pubPending_ = 0;
+	}
+
+	void advanceBuild() {
+		VoiceState& s = vs_[bldVoice_];
+		switch (bldStage_) {
+		case kBuildSpectrum:
+			if (!buildSpectrum(s)) {
+				bldVoice_ = 0;
+				return;
+			}
+			bldStage_ = kBuildInverse;
+			break;
+		case kBuildInverse:
+			bldFft_->inverse(specBuf_.data(), tabBuf_.data());
+			bldStage_ = bldCharacter_ ? kBuildShape : kBuildCopy;
+			break;
+		case kBuildShape:
+			characterShape(s);
+			bldStage_ = kBuildReband;
+			break;
+		case kBuildReband:
+			characterReband();
+			bldStage_ = kBuildCopy;
+			break;
+		default:
+			installTable(s);
+			bldVoice_ = 0;
+			break;
+		}
+	}
+
+	/** Stage 1: the voice's divergence curve applied to the published harmonic set, written into the spectrum buffer. */
+	bool buildSpectrum(VoiceState& s) {
 		const int Nc = pubNc_;
-		RealFFT* fft = ifftFor(Nc);
-		if (!fft || pubJ_ < 1)
-			return;
+		bldNc_ = Nc;
+		bldFft_ = ifftFor(Nc);
+		if (!bldFft_ || pubJ_ < 1)
+			return false;
 		const double P = pubPeriod_;
 		const float h = params_.harmonic, ph = params_.phase;
 		s.curve.build(s.vp, h, ph, s.tiltDrift.x, fs_ / P);
-		// anti-aliasing limit for this voice: harmonic j sits at j*ratio/P cycles/sample and must stay below 0.49
-		const double rmax = s.ratioTarget * 1.004;
+		// anti-aliasing limit for this voice: harmonic j sits at j*ratio/P cycles/sample and must stay below 0.49. In the FUSION layer's RATIO mode
+		// two more copies of the table run up to (1 + shiftFrac) faster than the main oscillator.
+		const double rmax = s.ratioTarget * 1.004 * (fusionOn_ && params_.shiftMode == SHIFT_RATIO ? 1.0 + (double) s.shiftFrac : 1.0);
 		const int Jaa = (int) std::floor(0.49 * P / rmax);
 		const int J = std::min(std::min(pubJ_, Jaa), Nc / 2 - 1);
+		bldJ_ = J;
+		bldCharacter_ = params_.character > 1e-3f && params_.quality >= QUALITY_HIGH;
 		std::fill(specBuf_.data(), specBuf_.data() + Nc, 0.f);
 		// noise gate: drop harmonics 90 dB below the strongest
 		float mx2 = 1e-20f;
@@ -739,26 +822,12 @@ private:
 			specBuf_[2 * j] = (re * cr - im * ci) * g;
 			specBuf_[2 * j + 1] = (re * ci + im * cr) * g;
 		}
-		fft->inverse(specBuf_.data(), tabBuf_.data());
-		if (params_.character > 1e-3f && params_.quality >= QUALITY_HIGH)
-			applyCharacter(s, Nc, J, fft);
-		PeriodTable& dst = s.haveTable ? s.tab[s.cur ^ 1] : s.tab[s.cur];
-		float* d = dst.d.data() + PeriodTable::G;
-		for (int i = 0; i < Nc; i++)
-			d[i] = tabBuf_[i];
-		dst.finalize(Nc);
-		if (!s.haveTable) {
-			s.haveTable = true;
-			s.alpha = 1.f;
-		} else {
-			s.alpha = 0.f;
-			s.alphaInc = 1.f / std::max(32.f, (float) (pubMinSec_ * fs_ * 0.85));
-		}
+		return true;
 	}
 
-	/** CHARACTER: static, tiny, asymmetric waveshaping of the period table. The shaped table is re-band-limited in the
-	    frequency domain (harmonics above J removed), so it cannot alias — no oversampling is needed at run time. */
-	void applyCharacter(VoiceState& s, int Nc, int J, RealFFT* fft) {
+	/** CHARACTER, stage 1: static, tiny, asymmetric waveshaping of the period table, then its spectrum. */
+	void characterShape(VoiceState& s) {
+		const int Nc = bldNc_;
 		float peak = 1e-9f;
 		for (int i = 0; i < Nc; i++)
 			peak = std::max(peak, std::fabs(tabBuf_[i]));
@@ -771,15 +840,38 @@ private:
 			const float u = tabBuf_[i] * inv;
 			tabBuf_[i] = (fastTanh(a * (u + b)) - t0) / a * peak;
 		}
-		fft->forward(tabBuf_.data(), specBuf_.data());
+		bldFft_->forward(tabBuf_.data(), specBuf_.data());
+	}
+
+	/** CHARACTER, stage 2: the shaped table is re-band-limited in the frequency domain (harmonics above J removed), so it cannot alias — no
+	    oversampling is needed at run time. */
+	void characterReband() {
+		const int Nc = bldNc_, J = bldJ_;
 		specBuf_[0] = 0.f; // no DC
 		specBuf_[1] = 0.f;
 		for (int k = J + 1; k < Nc / 2; k++)
 			specBuf_[2 * k] = specBuf_[2 * k + 1] = 0.f;
-		fft->inverse(specBuf_.data(), tabBuf_.data());
+		bldFft_->inverse(specBuf_.data(), tabBuf_.data());
 		const float sc = 1.f / (float) Nc;
 		for (int i = 0; i < Nc; i++)
 			tabBuf_[i] *= sc;
+	}
+
+	/** Last stage: copy into the voice's spare table and start the cross-fade to it. */
+	void installTable(VoiceState& s) {
+		const int Nc = bldNc_;
+		PeriodTable& dst = s.haveTable ? s.tab[s.cur ^ 1] : s.tab[s.cur];
+		float* d = dst.d.data() + PeriodTable::G;
+		for (int i = 0; i < Nc; i++)
+			d[i] = tabBuf_[i];
+		dst.finalize(Nc);
+		if (!s.haveTable) {
+			s.haveTable = true;
+			s.alpha = 1.f;
+		} else {
+			s.alpha = 0.f;
+			s.alphaInc = 1.f / std::max(32.f, (float) (pubMinSec_ * fs_ * 0.85));
+		}
 	}
 
 	template <int TAPS>
@@ -928,6 +1020,10 @@ private:
 	float tabRms_ = 0.f;
 	unsigned pubPending_ = 0;
 	double samplesSincePub_ = 0;
+	enum { kBuildSpectrum = 0, kBuildInverse, kBuildShape, kBuildReband, kBuildCopy };
+	int bldVoice_ = 0, bldStage_ = 0, bldJ_ = 0, bldNc_ = 0; // table build in progress (voice 0 = none)
+	bool bldCharacter_ = false;
+	RealFFT* bldFft_ = nullptr;
 
 	VoiceState vs_[kMaxVoices];
 	OuProcess common_;
@@ -955,6 +1051,9 @@ private:
 	float width_ = 0.f, cloneWeightSm_ = 0.f;
 	int ctrlCounter_ = 0;
 	std::vector<float> refineBuf_;
+	static const int kRefineFft = 16384; // FFT length of the period refinement (>= window + longest lag)
+	std::unique_ptr<RealFFT> refFft_;
+	AlignedBuffer<float> refA_, refB_, refSpecA_, refSpecB_;
 
 	uint64_t acqStartSample_ = 0;
 	int lastDropReason_ = 0;

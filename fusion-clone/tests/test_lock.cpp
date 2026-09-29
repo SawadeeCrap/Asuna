@@ -4,12 +4,14 @@
 // oscillator, so the composite has no single exact period and the loop follows its power-weighted mean). This is the regression net for tracker / analyser / novelty-detector interactions
 // (it would have caught: a chirp-feedback instability at M=4 and low pitch, and a tracker fooled by ripple in the flat part of a narrow pulse).
 //
-//   test_lock            BALANCED, every case
-//   test_lock full       all four quality modes (slow)
+//   test_lock                 BALANCED, every case
+//   test_lock full            all four quality modes (slow)
+//   test_lock eco high ...    the named quality modes (eco, balanced, high, ultra)
 #include "../research/common/fusion_source.hpp"
 #include "../src/dsp/Engine.hpp"
 #include <cstdio>
 #include <cstring>
+#include <strings.h>
 
 using namespace research;
 
@@ -73,7 +75,6 @@ struct Case {
 };
 
 int main(int argc, char** argv) {
-	const bool full = argc > 1 && !strcmp(argv[1], "full");
 	const double fs = 48000.0;
 	const Case cases[] = {
 	    {"saw", 1, 0, 0, 0, 0.5, 0.0, DETUNE_NONE, 0, 0},
@@ -91,13 +92,20 @@ int main(int argc, char** argv) {
 	    {"saw doppler .3", 1, 0, 0, 0, 0.5, 0.0, DETUNE_DOPPLER, 0.3, 0},
 	    {"saw ssb .3", 1, 0, 0, 0, 0.5, 0.0, DETUNE_SSB, 0.3, 0},
 	};
-	const double freqs[] = {20, 30, 41.2, 55, 82.4, 110, 220, 440, 880, 1760, 3520};
-	std::vector<int> qualities;
-	if (full)
-		qualities = {0, 1, 2, 3};
-	else
-		qualities = {1};
+	const double freqs[] = {20, 30, 41.2, 55, 82.4, 110, 220, 440, 880, 1760, 3520, 4186};
 	static const char* qn[] = {"ECO", "BALANCED", "HIGH", "ULTRA"};
+	std::vector<int> qualities;
+	for (int a = 1; a < argc; a++) {
+		if (!strcmp(argv[a], "full")) {
+			qualities = {0, 1, 2, 3};
+			break;
+		}
+		for (int q = 0; q < 4; q++)
+			if (!strcasecmp(argv[a], qn[q]))
+				qualities.push_back(q);
+	}
+	if (qualities.empty())
+		qualities = {1};
 
 	int failures = 0, total = 0;
 	for (int q : qualities) {

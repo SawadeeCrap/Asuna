@@ -1,6 +1,7 @@
 // Minimal stand-ins for the parts of Rack's application layer that Module::toJson()/fromJson() and friends touch, so the *real* Rack
 // engine::Module / ParamQuantity / jansson code can run in a headless unit test. Only used by tests/test_module.cpp.
 #include <rack.hpp>
+#undef PRIVATE // rack.hpp marks internal symbols as errors; the internal headers below are needed by the stubs
 #define PRIVATE
 #include <midiloopback.hpp>
 #include <patch.hpp>

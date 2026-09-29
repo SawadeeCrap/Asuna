@@ -1,4 +1,8 @@
 // Pitch tracker accuracy sweep on the synthetic Fusion-like source.
+// The tracker only has to be good enough to seed the cycle analyser (its result is refined to ~0.01 cent afterwards, and octave errors that come
+// from the fractional-lag artefact at very high pitch are corrected by the engine's odd-harmonic test): up to 1760 Hz it must report the repeating
+// unit within 60 cents on average, with no octave error and no dropout; above that the sweep is informational only (tests/test_lock.cpp covers the
+// full engine there, up to C8 = 4186 Hz).
 #include "../research/common/fusion_source.hpp"
 #include "../src/dsp/PitchTracker.hpp"
 #include <cstdio>
@@ -53,11 +57,15 @@ int main() {
 			char buf[32];
 			if (total == 0 || invalid > total / 2) snprintf(buf, sizeof buf, "  ---  ");
 			else snprintf(buf, sizeof buf, "%5.1f%c", mean, multWrong > cnt / 4 ? '*' : ' ');
-			if (total == 0 || invalid > total / 2 || mean > 30) bad++;
+			if (f0 <= 1800.0 && (total == 0 || invalid > total / 2 || mean > 60 || multWrong > cnt / 4)) {
+				bad++;
+				fprintf(stderr, "FAIL: %s at %.1f Hz (mean error %.1f cents, %d octave errors, %d/%d invalid)\n", c.name, f0, mean, multWrong, invalid, total);
+			}
 			printf("%8s", buf);
 		}
 		printf("\n");
 	}
 	printf("(values = mean |pitch error| in cents over the last 0.7 s; '*' = repeating unit off by >300 cents; '---' = no estimate)\n");
-	return 0;
+	printf("%s (%d failure%s)\n", bad ? "FAILED" : "ALL PASSED", bad, bad == 1 ? "" : "s");
+	return bad ? 1 : 0;
 }

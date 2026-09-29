@@ -9,6 +9,7 @@
 #   RACK_SRC   a checkout of https://github.com/VCVRack/Rack (v2) with its third-party headers installed in RACK_SRC/dep/include
 #              (run `make dep` in the Rack checkout once; that also fetches the submodules).
 #   DEP_SRC    where the third-party *sources* live (default RACK_SRC/dep): needs jansson/src, tinyexpr/tinyexpr.c, nanovg/src/nanovg.c.
+#   DEPINC     (environment) where the third-party *headers* live (default RACK_SRC/dep/include, i.e. after `make dep`; an SDK download has them too).
 #   BUILD_DIR  scratch directory for objects (default ./build-module-test).
 #
 # Uses the portable built-in FFT (no pffft needed). Exit status = test result.
@@ -17,7 +18,7 @@ RACK=${1:?path to a Rack v2 source checkout (with dep/include populated)}
 DEPSRC=${2:-$RACK/dep}
 BUILD=${3:-./build-module-test}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-DEPINC=$RACK/dep/include
+DEPINC=${DEPINC:-$RACK/dep/include}
 mkdir -p "$BUILD/obj"
 CXX=${CXX:-g++}
 CC=${CC:-gcc}
