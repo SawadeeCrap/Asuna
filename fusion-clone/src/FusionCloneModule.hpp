@@ -112,6 +112,24 @@ struct FusionClone : Module {
 		updateParams();
 	}
 
+	// One line each when the module enters / leaves the engine (never from process()). They make it visible in Rack's log.txt that the plugin was
+	// instantiated and what the engine was doing when the module went away (used by tests/rack_smoke.sh and handy for bug reports).
+	void onAdd(const AddEvent& e) override {
+		Module::onAdd(e);
+		INFO("Fusion Clone: module added");
+	}
+
+	void onRemove(const RemoveEvent& e) override {
+		Module::onRemove(e);
+		fc::EngineStatus st;
+		int voices = 0, quality = 0, algorithm = 0;
+		float detune = 0.f;
+		bool connected = false, poly = false;
+		if (readSnapshot(st, voices, quality, algorithm, detune, connected, poly))
+			INFO("Fusion Clone: module removed; last state %s, repeating unit %.2f Hz, %d voice(s), input %.1f dB, safety-net hits %d",
+			     st.locked ? "LOCKED" : (st.acquiring ? "ACQUIRING" : "PASS-THRU"), st.unitFreqHz, voices, (double) st.inputLevelDb, engine.guardHits());
+	}
+
 	void onReset(const ResetEvent& e) override {
 		Module::onReset(e);
 		seed = kDefaultSeed;
