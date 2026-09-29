@@ -165,20 +165,23 @@ struct PeriodTable {
 	}
 };
 
-/** Ornstein-Uhlenbeck process (exact discretisation), bounded to +-3 sigma. */
+/** Ornstein-Uhlenbeck process (exact discretisation), bounded to +-3 sigma. The state is kept in units of sigma, so changing sigma (the DRIFT
+    control) rescales the output smoothly instead of clamping the old value. */
 struct OuProcess {
-	float x = 0.f;
+	float u = 0.f; // unit-variance state
+	float x = 0.f; // last output (= u * sigma), read by the table builder
 	Rng rng;
 	void seed(uint32_t s) {
 		rng.reseed(s);
-		x = 0.f;
+		u = x = 0.f;
 	}
 	/** advance by dt seconds with time constant tau and stationary std sigma */
 	float step(float dt, float tau, float sigma) {
 		float a = std::exp(-dt / std::max(tau, 1e-3f));
 		float b = std::sqrt(std::max(0.f, 1.f - a * a));
-		x = a * x + b * sigma * rng.gauss();
-		x = clampT(x, -3.f * sigma, 3.f * sigma);
+		u = a * u + b * rng.gauss();
+		u = clampT(u, -3.f, 3.f);
+		x = u * sigma;
 		return x;
 	}
 };
@@ -220,9 +223,12 @@ struct VoiceState {
 	double ratio = 1.0;      // current frequency ratio (static detune * drift)
 	double ratioTarget = 1.0;
 	double ratioInc = 0.0;
-	float gain = 0.f;        // smoothed per-voice on/off gain (voice count changes)
-	float levelLin = 1.f;    // static level tolerance x drift
-	float panL = 1.f, panR = 1.f;
+	float gain = 0.f;        // smoothed per-voice on/off gain (voice count changes); second stage of a two-stage smoother
+	float gainMid = 0.f;     // first stage
+	float levelLin = 1.f;    // static level tolerance x drift, smoothed per sample towards levelT (set by the control tick)
+	float levelT = 1.f;
+	float panL = 1.f, panR = 1.f; // smoothed per sample towards panLT / panRT
+	float panLT = 1.f, panRT = 1.f;
 	OuProcess drift, levelDrift, tiltDrift;
 	float driftCents = 0.f;
 	float jitterCents = 0.f;
@@ -234,7 +240,6 @@ struct VoiceState {
 	double xPhase[2];         // table phases of the two extra oscillators (RATIO mode)
 	Rotor carrier[2];         // carriers of the two SSB lines (HZ mode)
 	float shiftFrac = 0.f;    // ratio deviation of the extra oscillators
-	float shiftGain = 0.f;    // gain of each extra line
 	HilbertPair hil;
 	VoiceState() {
 		xPhase[0] = xPhase[1] = 0.0;

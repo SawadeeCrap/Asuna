@@ -143,6 +143,95 @@ int main() {
 		}
 		CHECK(g_allocs == 0, "%ld heap allocations/frees inside setParams()/process() over %.1f s of busy input", g_allocs, (double) n / FS);
 		CHECK(finite, "every output sample finite and bounded");
+		CHECK(e.guardHits() == 0, "the engine's NaN/Inf safety nets never had to intervene (%d hits)", e.guardHits());
+	}
+
+	// ---- R4: randomised stress -------------------------------------------------------------------------------------------------------
+	// Every control is mutated at random moments (on average every 5 ms, several at once), quality and voice count change at random, the input is
+	// a sequence of random notes (random waveform mix, sub, tube, pitch 20 Hz - 4 kHz, gates, glides, silence, DC, noise bursts). Whatever happens,
+	// no heap operation, no NaN/Inf, bounded output, and the safety nets must not fire. (A race between the staged table build and a control that
+	// changed mid-build produced a NaN here once.)
+	printf("R4  randomised stress: random controls at random times, random notes, 6 seeds x 12 s\n");
+	{
+		bool finite = true;
+		long allocs = 0;
+		int hits = 0;
+		for (uint32_t seed = 1; seed <= 6; seed++) {
+			fc::Rng rng(seed * 7919u);
+			fc::Engine e;
+			e.prepare(FS);
+			fc::EngineParams p;
+			e.setParams(p);
+			const size_t n = (size_t) (12.0 * FS);
+			// source: random notes of 0.2 - 1.2 s
+			std::vector<float> x;
+			while (x.size() < n) {
+				SourceSpec sp;
+				sp.fs = FS;
+				sp.f0 = 20.0 * std::pow(2.0, 7.7 * (double) rng.uniform());
+				sp.seconds = 0.2 + (double) rng.uniform();
+				sp.seed = rng.nextU32();
+				sp.noiseDb = -90.0 + 40.0 * (double) rng.uniform();
+				sp.wSaw = (double) rng.uniform(); sp.wTri = (double) rng.uniform(); sp.wPulse = (double) rng.uniform(); sp.wSine = (double) rng.uniform();
+				sp.pulseWidth = 0.05 + 0.9 * (double) rng.uniform();
+				sp.sub = rng.uniform() < 0.4f ? (double) rng.uniform() : 0.0;
+				sp.tube = rng.uniform() < 0.3f ? (double) rng.uniform() : 0.0;
+				if (rng.uniform() < 0.25f) { sp.detuneModel = DETUNE_DOPPLER; sp.detune = (double) rng.uniform(); }
+				std::vector<float> seg = renderSource(sp);
+				const float gain = 0.5f + 4.f * rng.uniform();
+				for (float& v : seg)
+					v *= gain;
+				if (rng.uniform() < 0.1f)
+					std::fill(seg.begin(), seg.end(), 0.f);
+				else if (rng.uniform() < 0.1f)
+					for (float& v : seg)
+						v = 3.f * rng.bipolar();
+				else if (rng.uniform() < 0.05f)
+					std::fill(seg.begin(), seg.end(), 2.f);
+				x.insert(x.end(), seg.begin(), seg.end());
+			}
+			x.resize(n);
+			g_allocs = 0;
+			for (size_t i = 0; i < n; i++) {
+				g_armed = true;
+				if (rng.uniform() < 1.f / 240.f) { // a burst of control changes
+					const int k = 1 + (int) (rng.uniform() * 4.f);
+					for (int j = 0; j < k; j++) {
+						switch ((int) (rng.uniform() * 18.f)) {
+						case 0: p.voices = 1 + (int) (rng.uniform() * 16.f); break;
+						case 1: p.spread = rng.uniform(); break;
+						case 2: p.drift = rng.uniform(); break;
+						case 3: p.character = rng.uniform() < 0.3f ? 0.f : rng.uniform(); break;
+						case 4: p.phase = rng.uniform(); break;
+						case 5: p.harmonic = rng.uniform(); break;
+						case 6: p.width = rng.uniform(); break;
+						case 7: p.mix = rng.uniform() < 0.3f ? 0.f : rng.uniform(); break;
+						case 8: p.outputDb = -24.f + 36.f * rng.uniform(); break;
+						case 9: if (rng.uniform() < 0.05f) p.quality = (int) (rng.uniform() * 4.f); break;
+						case 10: p.algorithm = rng.uniform() < 0.5f ? fc::ALGO_CLASSIC : fc::ALGO_FUSION; break;
+						case 11: p.fusionShift = rng.uniform(); break;
+						case 12: p.shiftMode = rng.uniform() < 0.5f ? fc::SHIFT_RATIO : fc::SHIFT_HZ; break;
+						case 13: p.summing = rng.uniform(); break;
+						case 14: p.originalOnly = rng.uniform() < 0.2f; break;
+						case 15: p.detuneRangeCents = 5.f + 55.f * rng.uniform(); break;
+						case 16: p.driftRate = rng.uniform(); p.driftCorrelation = rng.uniform(); break;
+						default: p.levelLaw = 0.5f * rng.uniform(); break;
+						}
+					}
+					e.setParams(p);
+				}
+				float l = 0, r = 0;
+				e.process(x[i], l, r);
+				g_armed = false;
+				if (!(l == l) || !(r == r) || std::fabs(l) > 1e3f || std::fabs(r) > 1e3f)
+					finite = false;
+			}
+			allocs += g_allocs;
+			hits += e.guardHits();
+		}
+		CHECK(finite, "output finite and below 1000 (= 5 kV) in every run");
+		CHECK(allocs == 0, "%ld heap operations in the audio path", allocs);
+		CHECK(hits == 0, "safety nets never fired (%d hits)", hits);
 	}
 
 	// ---- R2: per-call cost ---------------------------------------------------------------------------------------------------------

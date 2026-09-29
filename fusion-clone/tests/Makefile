@@ -19,15 +19,16 @@ ifdef PFFFT
 endif
 
 QUICK := test_fft test_sinc test_hilbert test_pitch test_analyzer
-ALL := $(QUICK) test_lock test_dynamics test_engine test_realtime
+ALL := $(QUICK) test_lock test_dynamics test_artifacts test_engine test_realtime
 
-.PHONY: all quick engine lock dynamics realtime clean
+.PHONY: all quick engine lock dynamics artifacts realtime clean
 .SECONDARY:
 all: $(ALL:%=run-%)
 quick: $(QUICK:%=run-%)
 engine: run-test_engine
 lock: run-test_lock
 dynamics: run-test_dynamics
+artifacts: run-test_artifacts
 realtime: run-test_realtime
 
 run-%: %

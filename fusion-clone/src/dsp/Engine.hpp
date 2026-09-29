@@ -73,6 +73,8 @@ public:
 		refSpecB_.alloc(kRefineFft);
 		outGain_.setTimeConstant(0.02f, (float) fs_);
 		norm_.setTimeConstant(0.02f, (float) fs_);
+		mixSlew_ = 1.f - std::exp(-1.f / (float) (0.01 * fs_));
+		ctrlSlew_ = 1.f - std::exp(-1.f / (float) (0.006 * fs_));
 		applyQuality(params_.quality);
 		reseed(params_.seed);
 		paramsSeen_ = false;
@@ -92,6 +94,10 @@ public:
 			normTarget_ = computeNorm();
 			norm_.reset(normTarget_);
 			outGain_.reset(dbToLin(params_.outputDb));
+			mixSm_ = params_.mix;
+			shGain_ = shGainMid_ = params_.algorithm == ALGO_FUSION ? 0.55f * std::sqrt(clampT(params_.fusionShift, 0.f, 1.f)) : 0.f;
+			fusionAmt_ = (shGain_ / 0.55f) * (shGain_ / 0.55f);
+			hzBlend_ = hzMid_ = shGain_ > 1e-4f ? 1.f : 0.f;
 		}
 		if (qChanged)
 			applyQuality(params_.quality);
@@ -134,7 +140,7 @@ public:
 		dcSlow_ = 0.f;
 		sqW_ = 64;
 		state_ = ST_IDLE;
-		lockW_ = 0.f;
+		lockW_ = lockW1_ = 0.f;
 		lockTarget_ = 0.f;
 		envSm_ = envInst_ = 0.f;
 		envGain_ = 0.f;
@@ -161,12 +167,19 @@ public:
 			s.ratio = s.ratioTarget = 1.0;
 			s.ratioInc = 0.0;
 			s.phase = 0.0;
+			s.drift.u = s.levelDrift.u = s.tiltDrift.u = 0.f;
 			s.drift.x = s.levelDrift.x = s.tiltDrift.x = 0.f;
+			s.levelLin = s.levelT = 1.f;
+			s.panL = s.panR = s.panLT = s.panRT = 1.f;
+			s.gainMid = 0.f;
 		}
 		outGain_.reset(dbToLin(params_.outputDb));
 		normTarget_ = computeNorm();
 		norm_.reset(normTarget_);
 		cloneWeightSm_ = 0.f;
+		mixSm_ = params_.mix;
+		sumSm_ = 0.f;
+		fusionAmt_ = shGain_ = shGainMid_ = hzBlend_ = hzMid_ = 0.f;
 	}
 
 	/** Process one sample. `in` is normalised so that 1.0 = the nominal 5 V audio level. */
@@ -198,23 +211,49 @@ public:
 		if (pubPending_ || bldVoice_)
 			buildNextTable();
 
-		lockW_ += (lockTarget_ - lockW_) * (lockTarget_ > lockW_ ? lockRise_ : lockFall_);
+		// two cascaded one-pole stages (each at half the time constant): the clones fade in and out without a kink in their amplitude envelope
+		lockW1_ += (lockTarget_ - lockW1_) * (lockTarget_ > lockW1_ ? lockRise_ : lockFall_);
+		lockW_ += (lockW1_ - lockW_) * (lockW1_ > lockW_ ? lockRise_ : lockFall_);
 		const int N = params_.voices;
 
 		// ---- voices -------------------------------------------------------------------------------------------------------
+		// The FUSION layer is smoothed per sample (two cascaded stages on the gain itself) so that switching it on/off, or turning its knob,
+		// cannot click
+		{
+			const float target = params_.algorithm == ALGO_FUSION ? clampT(params_.fusionShift, 0.f, 1.f) : 0.f;
+			const float gTarget = 0.55f * std::sqrt(target);
+			shGainMid_ += (gTarget - shGainMid_) * gainSlew_;
+			shGain_ += (shGainMid_ - shGain_) * gainSlew_;
+			if (std::fabs(gTarget - shGain_) < 1e-6f && std::fabs(gTarget - shGainMid_) < 1e-6f)
+				shGain_ = shGainMid_ = gTarget;
+			fusionAmt_ = (shGain_ / 0.55f) * (shGain_ / 0.55f); // the smoothed amount that drives LFO rate and depth
+			fusionOn_ = shGain_ > 1e-4f || gTarget > 1e-4f;
+			if (fusionOn_) {
+				fusionNorm_ = 1.f / std::sqrt(1.f + 2.f * shGain_ * shGain_);
+				// HZ mode: the main path is the Hilbert pair's in-phase branch, which is a delayed copy of the input; cross-fade to it
+				hzMid_ += ((gTarget > 1e-4f ? 1.f : 0.f) - hzMid_) * gainSlew_;
+				hzBlend_ += (hzMid_ - hzBlend_) * gainSlew_;
+			}
+		}
 		float wetMid = 0.f, wetL = 0.f, wetR = 0.f;
-		const bool clonesRunning = !params_.originalOnly && N > 1 && lockW_ > 1e-4f && omegaS_ > 0.0;
-		if (clonesRunning) {
-			// the tracker's prediction for "now" (plus the slew's own lag) drives the clone oscillators; it already contains the frequency
-			// slope, so glides and vibrato are followed without the (M/2 + 1)-period lag of the analysis window
-			omegaLead_ = analyzer_.omegaAt((double) ring_.count() - 1.0 + omegaLeadSamples_);
-			omegaS_ += (omegaLead_ - omegaS_) * omegaSlew_;
+		// clones keep running while their gains fade out (VOICES lowered, ORIGINAL ONLY, quality switch), so that nothing is cut off abruptly
+		if (lockW_ > 1e-4f && omegaS_ > 0.0) {
+			if (analyzer_.active()) {
+				// the tracker's prediction for "now" (plus the slew's own lag) drives the clone oscillators; it already contains the frequency
+				// slope, so glides and vibrato are followed without the (M/2 + 1)-period lag of the analysis window
+				omegaLead_ = analyzer_.omegaAt((double) ring_.count() - 1.0 + omegaLeadSamples_);
+				omegaS_ += (omegaLead_ - omegaS_) * omegaSlew_;
+			} // else: hold the last frequency while the clones fade out
 			const float eg = envGain();
+			const bool onlyOrig = params_.originalOnly;
 			for (int v = 1; v < kMaxVoices; v++) {
 				VoiceState& s = vs_[v];
-				if (s.gain < 1e-5f && v >= N)
+				if (s.gain < 1e-5f && (v >= N || onlyOrig))
 					continue;
 				s.ratio += s.ratioInc;
+				s.levelLin += (s.levelT - s.levelLin) * ctrlSlew_;
+				s.panL += (s.panLT - s.panL) * ctrlSlew_;
+				s.panR += (s.panRT - s.panR) * ctrlSlew_;
 				s.phase += omegaS_ * s.ratio;
 				s.phase -= std::floor(s.phase);
 				if (!s.haveTable)
@@ -228,7 +267,15 @@ public:
 		}
 		for (int v = 1; v < kMaxVoices; v++) {
 			VoiceState& s = vs_[v];
-			s.gain += ((v < N && !params_.originalOnly ? 1.f : 0.f) - s.gain) * gainSlew_;
+			const bool want = v < N && !params_.originalOnly;
+			// a voice that has no table yet stays silent, so that its fade-in starts when its table arrives (no click when VOICES is raised)
+			if (want && !s.haveTable) {
+				s.gain = s.gainMid = 0.f;
+			} else {
+				// two cascaded one-pole stages: the fade starts with zero slope (no kink in the amplitude envelope)
+				s.gainMid += ((want ? 1.f : 0.f) - s.gainMid) * gainSlew_;
+				s.gain += (s.gainMid - s.gain) * gainSlew_;
+			}
 		}
 
 		// ---- mix ------------------------------------------------------------------------------------------------------------
@@ -244,16 +291,34 @@ public:
 		const float wm = orig + normG * lw * wetMid;
 		float l = width_ > 1e-4f ? wl : wm;
 		float r = width_ > 1e-4f ? wr : wm;
-		const float sumAmt = params_.summing * std::min(1.f, cloneWeightSm_);
-		if (sumAmt > 1e-4f) {
-			l = summingSat(l, sumAmt);
-			r = summingSat(r, sumAmt);
+		{
+			const float target = params_.summing * std::min(1.f, cloneWeightSm_);
+			sumSm_ += (target - sumSm_) * gainSlew_;
+			if (std::fabs(target - sumSm_) < 1e-5f)
+				sumSm_ = target;
 		}
-		const float mx = params_.mix;
+		if (sumSm_ > 1e-4f) {
+			l = summingSat(l, sumSm_);
+			r = summingSat(r, sumSm_);
+		}
+		mixSm_ += (params_.mix - mixSm_) * mixSlew_;
+		if (std::fabs(params_.mix - mixSm_) < 1e-5f)
+			mixSm_ = params_.mix; // snap: MIX = 0 must be exactly the original again
+		const float mx = mixSm_;
 		const float g = outGain_.process(dbToLin(params_.outputDb));
 		outL = (in * (1.f - mx) + l * mx) * g;
 		outR = (in * (1.f - mx) + r * mx) * g;
+		// last-resort guard: a non-finite or absurd output sample (never observed: every test asserts guardHits() == 0) resets the engine state
+		// and passes the input through, instead of feeding NaN to the rest of a patch
+		if (!(outL == outL) || !(outR == outR) || std::fabs(outL) > 1e6f || std::fabs(outR) > 1e6f) {
+			guardHits_++;
+			resetState();
+			outL = outR = in * g;
+		}
 	}
+
+	/** Number of times a safety net had to intervene (non-finite table or output sample). Must stay 0; the tests assert it. */
+	int guardHits() const { return guardHits_; }
 
 	const EngineStatus& status() {
 		status_.locked = state_ == ST_LOCKED;
@@ -327,11 +392,10 @@ private:
 		taps_ = c.taps;
 		analyzer_.configure(cfg_);
 		state_ = ST_IDLE;
-		lockW_ = lockTarget_ = 0.f;
+		lockTarget_ = 0.f; // the clones fade out on their old tables (frequency held); a new lock replaces them
+		slowFadeUntil_ = ring_.count() + (uint64_t) (0.05 * fs_);
 		avgValid_ = false;
 		cancelBuild();
-		for (int v = 1; v < kMaxVoices; v++)
-			vs_[v].haveTable = false;
 		tracker_.setActiveMask((1 << PitchTracker::kLanes) - 1);
 	}
 
@@ -577,6 +641,9 @@ private:
 		const HarmonicSet& s = analyzer_.set();
 		lockAge_++;
 		if (state_ == ST_ACQ) {
+			// a new lock replaces the old tables and phases: wait until the clones of the previous lock have faded out (no cut-off)
+			if (lockW_ > 2e-3f)
+				return;
 			acqCount_++;
 			// coherence is the noise discriminator (noise/chaos ~ 0); the periodicity index only rejects signals that are mostly inharmonic
 			const bool good = s.coherence > 0.92f && analyzer_.goodHops() >= 2 && s.periodicity > 0.30f;
@@ -793,6 +860,7 @@ private:
 		const int J = std::min(std::min(pubJ_, Jaa), Nc / 2 - 1);
 		bldJ_ = J;
 		bldCharacter_ = params_.character > 1e-3f && params_.quality >= QUALITY_HIGH;
+		bldCharAmt_ = params_.character; // captured here: the later stages must not see a control that changed while the build was in flight
 		std::fill(specBuf_.data(), specBuf_.data() + Nc, 0.f);
 		// noise gate: drop harmonics 90 dB below the strongest
 		float mx2 = 1e-20f;
@@ -831,8 +899,8 @@ private:
 		float peak = 1e-9f;
 		for (int i = 0; i < Nc; i++)
 			peak = std::max(peak, std::fabs(tabBuf_[i]));
-		const float c = params_.character;
-		const float a = 0.08f * c * (0.4f + 0.6f * s.vp.drive) * 4.f; // <= 0.32: ~1% THD at full scale
+		const float c = bldCharAmt_;
+		const float a = std::max(1e-4f, 0.08f * c * (0.4f + 0.6f * s.vp.drive) * 4.f); // <= 0.32: ~1% THD at full scale
 		const float b = 0.06f * c * s.vp.bias;
 		const float inv = 1.f / peak;
 		const float t0 = fastTanh(a * b);
@@ -860,6 +928,13 @@ private:
 	/** Last stage: copy into the voice's spare table and start the cross-fade to it. */
 	void installTable(VoiceState& s) {
 		const int Nc = bldNc_;
+		float chk = 0.f; // safety net: a table with a NaN / Inf / absurd value is never installed (the voice keeps its previous table)
+		for (int i = 0; i < Nc; i++)
+			chk += tabBuf_[i];
+		if (!(chk == chk) || std::fabs(chk) > 1e9f) {
+			guardHits_++;
+			return;
+		}
 		PeriodTable& dst = s.haveTable ? s.tab[s.cur ^ 1] : s.tab[s.cur];
 		float* d = dst.d.data() + PeriodTable::G;
 		for (int i = 0; i < Nc; i++)
@@ -900,7 +975,7 @@ private:
 				s.xPhase[0] -= std::floor(s.xPhase[0]);
 				s.xPhase[1] -= std::floor(s.xPhase[1]);
 				const float y0 = readMix<TAPS>(s, s.xPhase[0]), y1 = readMix<TAPS>(s, s.xPhase[1]);
-				y = (y + s.shiftGain * (y0 + y1)) * fusionNorm_;
+				y = (y + shGain_ * (y0 + y1)) * fusionNorm_;
 			} else {
 				// literal single-sideband reading: constant additive offsets (+D, -D') in Hz on all partials
 				float i, q;
@@ -909,7 +984,7 @@ private:
 				s.carrier[1].step();
 				const float up = i * s.carrier[0].c + q * s.carrier[0].s; // sign convention verified in tests/test_hilbert.cpp
 				const float dn = i * s.carrier[1].c - q * s.carrier[1].s;
-				y = (i + s.shiftGain * (up + dn)) * fusionNorm_;
+				y = (y + hzBlend_ * (i - y) + shGain_ * (up + dn)) * fusionNorm_;
 			}
 		}
 		if (s.alpha < 1.f) {
@@ -934,20 +1009,18 @@ private:
 		const float common = common_.step(dt, tau, 1.f);
 		const float rho = clampT(p.driftCorrelation, 0.f, 1.f);
 		width_ = p.width;
-		fusionOn_ = p.algorithm == ALGO_FUSION && p.fusionShift > 0.002f;
-		const float fs_amt = clampT(p.fusionShift, 0.f, 1.f);
-		const float shGain = 0.55f * std::sqrt(fs_amt);
-		fusionNorm_ = 1.f / std::sqrt(1.f + 2.f * shGain * shGain);
+		const float fs_amt = fusionAmt_; // the smoothed amount (per-sample state): LFO rate and depth follow the knob without steps
 		cloneWeightSm_ += ((N > 1 ? 1.f : 0.f) - cloneWeightSm_) * 0.02f;
 		normTarget_ = computeNorm();
-		gainSlew_ = 1.f - std::exp(-1.f / (float) (0.02 * fs_));
+		gainSlew_ = 1.f - std::exp(-1.f / (float) (0.01 * fs_)); // per stage of the two-stage voice-gain and FUSION smoothers
 		omegaSlew_ = 1.f - std::exp(-1.f / (float) (kOmegaSlewSec * fs_));
 		omegaLeadSamples_ = kOmegaSlewSec * fs_;
 		envSlew_ = 1.f - std::exp(-1.f / (float) (0.001 * fs_));
 		const double P = analyzer_.active() ? analyzer_.period() : 0.0;
 		const double riseSec = clampT(1.5 * P / fs_, 0.003, 0.03);
-		lockRise_ = 1.f - std::exp(-1.f / (float) (riseSec * fs_));
-		lockFall_ = 1.f - std::exp(-1.f / (float) (0.0012 * fs_));
+		lockRise_ = 1.f - std::exp(-1.f / (float) (0.5 * riseSec * fs_));
+		// transient drops must be fast (the clones would be wrong after an onset / pitch step); a drop caused by the user (QUALITY switch) may be slower
+		lockFall_ = 1.f - std::exp(-1.f / (float) ((ring_.count() < slowFadeUntil_ ? 0.003 : 0.0006) * fs_));
 		for (int v = 1; v < kMaxVoices; v++) {
 			VoiceState& s = vs_[v];
 			// pitch: static tolerance + shared/independent drift + tiny jitter
@@ -960,12 +1033,12 @@ private:
 			if (!(s.ratio > 0.5 && s.ratio < 2.0))
 				s.ratio = r1;
 			s.ratioInc = (r1 - s.ratio) / (double) kCtrl;
+			// level, pan and pitch ratio move linearly to their new targets over one control period (no steps when a control jumps)
 			const float lvlDb = s.vp.levelDb * 0.3f * p.character + s.levelDrift.step(dt, tau * 0.5f, 0.12f * p.drift);
-			s.levelLin = dbToLin(lvlDb);
+			s.levelT = dbToLin(lvlDb);
 			s.tiltDrift.step(dt, tau * 0.7f, 0.25f * p.drift);
 			// Fusion detune-cluster layer parameters (hypothesis model, see docs/RESEARCH.md): LFO rate and depth grow together with the knob,
 			// exactly as the product description says for the hardware DETUNE control; each voice has its own LFO phase and rate tolerance.
-			s.shiftGain = shGain;
 			s.lfoInc = (0.12 + 2.0 * fs_amt) * s.vp.lfoRate / fs_;
 			s.shiftFrac = (float) (centsToRatio(3.0 + 22.0 * fs_amt) - 1.0);
 			{
@@ -975,8 +1048,12 @@ private:
 			}
 			// stereo: linear pan so that L+R equals the mono sum for any WIDTH
 			const float a = 0.25f * p.width * s.vp.pan;
-			s.panL = 1.f - a;
-			s.panR = 1.f + a;
+			s.panLT = 1.f - a;
+			s.panRT = 1.f + a;
+			// VOICES was raised while locked: build the tables of the new voices now from the published harmonic set instead of at the next
+			// publication (they stay silent until their table exists, then fade in)
+			if (state_ == ST_LOCKED && pubJ_ > 0 && v < N && !params_.originalOnly && !s.haveTable && v != bldVoice_)
+				pubPending_ |= (1u << v);
 		}
 	}
 
@@ -1023,6 +1100,7 @@ private:
 	enum { kBuildSpectrum = 0, kBuildInverse, kBuildShape, kBuildReband, kBuildCopy };
 	int bldVoice_ = 0, bldStage_ = 0, bldJ_ = 0, bldNc_ = 0; // table build in progress (voice 0 = none)
 	bool bldCharacter_ = false;
+	float bldCharAmt_ = 0.f;
 	RealFFT* bldFft_ = nullptr;
 
 	VoiceState vs_[kMaxVoices];
@@ -1044,7 +1122,7 @@ private:
 	double lastEstPeriod_ = 0;
 	int acqCount_ = 0, badHops_ = 0, stepMismatch_ = 0, doublingCount_ = 0, lockAge_ = 0, cooldown_ = 0;
 	bool triedDouble_ = false;
-	float lockW_ = 0.f, lockTarget_ = 0.f, lockRise_ = 0.01f, lockFall_ = 0.02f;
+	float lockW_ = 0.f, lockW1_ = 0.f, lockTarget_ = 0.f, lockRise_ = 0.01f, lockFall_ = 0.02f;
 	double omegaS_ = 0.0;
 	double omegaLead_ = 0.0, omegaLeadSamples_ = 0.0;
 	float omegaSlew_ = 0.005f, gainSlew_ = 0.001f, normTarget_ = 1.f;
@@ -1055,12 +1133,14 @@ private:
 	std::unique_ptr<RealFFT> refFft_;
 	AlignedBuffer<float> refA_, refB_, refSpecA_, refSpecB_;
 
-	uint64_t acqStartSample_ = 0;
+	uint64_t acqStartSample_ = 0, slowFadeUntil_ = 0;
+	int guardHits_ = 0;
 	int lastDropReason_ = 0;
 	int dropCount_[5] = {0, 0, 0, 0, 0};
 	bool paramsSeen_ = false;
 	bool fusionOn_ = false;
-	float fusionNorm_ = 1.f;
+	float fusionNorm_ = 1.f, fusionAmt_ = 0.f, shGain_ = 0.f, shGainMid_ = 0.f, hzBlend_ = 0.f, hzMid_ = 0.f;
+	float mixSm_ = 1.f, mixSlew_ = 0.002f, ctrlSlew_ = 0.003f, sumSm_ = 0.f;
 	float overrideCents_[kMaxVoices] = {0};
 	bool overrideActive_ = false;
 	OnePole outGain_, norm_;

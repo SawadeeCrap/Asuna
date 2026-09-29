@@ -165,7 +165,7 @@ int main() {
 		fc::Engine e; e.prepare(FS); fc::EngineParams p = base(16); e.setParams(p);
 		fc::Rng rr(3); bool fin = true; float pk = 0;
 		for (size_t i = 0; i < (size_t) (4 * FS); i++) { float in = (i < 48000) ? 0.f : (i < 96000 ? 50.f : (i < 144000 ? 0.5f * rr.bipolar() : 1e9f * ((i & 1) ? 1 : -1))); float l, r; e.process(in, l, r); if (!(l == l)) fin = false; pk = std::max(pk, std::fabs(l)); }
-		CHECK(fin, "silence, DC, noise and +-1e9 garbage never produce NaN/Inf");
+		CHECK(fin && e.guardHits() == 0, "silence, DC, noise and +-1e9 garbage never produce NaN/Inf (safety-net hits: %d)", e.guardHits());
 		auto sx = source(f0, 6, 0.0);
 		fc::EngineParams pp = base(8); Out o = runWith(pp, sx);
 		fc::Engine eng2; eng2.prepare(FS); eng2.setParams(pp); bool ok = true;
