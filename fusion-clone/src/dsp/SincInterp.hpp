@@ -1,0 +1,135 @@
+// FusionClone DSP core — windowed-sinc fractional-position reader and a mirrored ring buffer.
+//
+// Used for (1) angular resampling of the input when extracting cycles, (2) reading clone
+// waveforms from period tables, and (3) the time-domain fall-back read heads.
+#pragma once
+#include "Common.hpp"
+
+namespace fc {
+
+/** Largest float below 1 as an upper bound for interpolation fractions: a double fraction within 3e-8 of the next integer rounds to exactly 1.0f
+    when converted to float, which would address the phase row one past the end of the kernel table. */
+inline float clampFrac(float fr) { return fr < 0.99999994f ? fr : 0.99999994f; }
+
+/** Kaiser-windowed sinc kernel bank: kPhases+1 rows (the extra row lets us interpolate linearly
+    between neighbouring phases without a wrap test), TAPS coefficients per row, each row normalised
+    to unit DC gain. The cut-off is 0.92 * Nyquist: a 16-tap kernel is a compromise between passband
+    flatness (<0.1 dB up to ~0.35 fs) and image rejection (>60 dB for content below ~0.3 fs, >45 dB at 0.4 fs). */
+template <int TAPS>
+struct SincKernel {
+	static const int kPhases = 512;
+	std::vector<float> tab;
+
+	explicit SincKernel(double cutoff = 0.92, double beta = 8.6) {
+		tab.assign((kPhases + 1) * TAPS, 0.f);
+		const int half = TAPS / 2;
+		for (int p = 0; p <= kPhases; p++) {
+			double fr = (double) p / kPhases;
+			double sum = 0;
+			for (int t = 0; t < TAPS; t++) {
+				double u = (t - (half - 1)) - fr; // distance from the read position to tap t
+				double s = (std::fabs(u) < 1e-12) ? cutoff : std::sin(kPi * cutoff * u) / (kPi * u);
+				double w = kaiser(u + half, (double) TAPS, beta);
+				double v = s * w;
+				tab[p * TAPS + t] = (float) v;
+				sum += v;
+			}
+			for (int t = 0; t < TAPS; t++)
+				tab[p * TAPS + t] = (float) (tab[p * TAPS + t] / sum);
+		}
+	}
+
+	/** Interpolate at position (i0 + fr), reading x[-(half-1)] .. x[half] relative to i0. */
+	inline float read(const float* xi0, float fr) const {
+		// fr can round up to exactly 1.0f (a double fraction within 3e-8 of the next integer); the phase row p+1 would then lie one row past the table
+		fr = clampFrac(fr);
+		float fp = fr * (float) kPhases;
+		int p = (int) fp;
+		float w = fp - (float) p;
+		const float* c0 = &tab[p * TAPS];
+		const float* c1 = c0 + TAPS;
+		const float* s = xi0 - (TAPS / 2 - 1);
+		float acc = 0.f;
+		for (int t = 0; t < TAPS; t++)
+			acc += s[t] * (c0[t] + w * (c1[t] - c0[t]));
+		return acc;
+	}
+};
+
+template <int TAPS>
+inline const SincKernel<TAPS>& sharedSincKernel() {
+	static const SincKernel<TAPS> k;
+	return k;
+}
+
+/** Power-of-two ring buffer with a mirrored guard so sinc reads never need per-tap wrapping.
+    Sample k (absolute index) lives at buf[k & mask]; the first `guard` slots are mirrored after
+    the end of the buffer. */
+class MirrorRing {
+public:
+	static const int kGuard = 40; // >= widest kernel (32 taps) + margin
+
+	void alloc(int sizePow2) {
+		size_ = sizePow2;
+		mask_ = sizePow2 - 1;
+		buf_.alloc((size_t) size_ + kGuard);
+		w_ = 0;
+	}
+	void reset() {
+		buf_.clear();
+		w_ = 0;
+	}
+	inline void push(float x) {
+		int i = (int) (w_ & (uint64_t) mask_);
+		buf_[i] = x;
+		if (i < kGuard)
+			buf_[size_ + i] = x;
+		w_++;
+	}
+	/** Number of samples pushed so far. */
+	uint64_t count() const { return w_; }
+	int size() const { return size_; }
+
+	/** Sample with absolute index k (must be within the last `size` samples). */
+	inline float at(uint64_t k) const { return buf_[(int) (k & (uint64_t) mask_)]; }
+
+	/** Windowed-sinc read at absolute fractional position pos. Requires pos + TAPS/2 <= count()-1
+	    and pos - TAPS/2 >= count() - size. */
+	template <int TAPS>
+	inline float readSinc(double pos) const {
+		double fl = std::floor(pos);
+		uint64_t i0 = (uint64_t) (int64_t) fl;
+		float fr = (float) (pos - fl);
+		fr = clampFrac(fr); // see SincKernel::read
+		// pointer to sample i0; the kernel reads i0-(TAPS/2-1) .. i0+TAPS/2 which is contiguous thanks to
+		// the mirror as long as we index from the (i0-(TAPS/2-1)) slot.
+		int base = (int) ((i0 - (uint64_t) (TAPS / 2 - 1)) & (uint64_t) mask_);
+		const float* s = buf_.data() + base; // points to first tap
+		const SincKernel<TAPS>& K = sharedSincKernel<TAPS>();
+		float fp = fr * (float) SincKernel<TAPS>::kPhases;
+		int p = (int) fp;
+		float w = fp - (float) p;
+		const float* c0 = &K.tab[p * TAPS];
+		const float* c1 = c0 + TAPS;
+		float acc = 0.f;
+		for (int t = 0; t < TAPS; t++)
+			acc += s[t] * (c0[t] + w * (c1[t] - c0[t]));
+		return acc;
+	}
+
+	/** Linear read (cheap, used by non-critical paths). */
+	inline float readLinear(double pos) const {
+		double fl = std::floor(pos);
+		uint64_t i0 = (uint64_t) (int64_t) fl;
+		float fr = (float) (pos - fl);
+		float a = at(i0), b = at(i0 + 1);
+		return a + (b - a) * fr;
+	}
+
+private:
+	int size_ = 0, mask_ = 0;
+	uint64_t w_ = 0;
+	AlignedBuffer<float> buf_;
+};
+
+} // namespace fc

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Fusion Clone panel background, 16 HP (240 x 380 px). Labels/components are drawn by code (Rack's SVG loader ignores <text>). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="380" viewBox="0 0 240 380">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#252a31"/>
+      <stop offset="1" stop-color="#1a1e23"/>
+    </linearGradient>
+  </defs>
+  <rect id="background" x="0" y="0" width="240" height="380" fill="url(#bg)"/>
+  <!-- title band -->
+  <rect x="0" y="0" width="240" height="28" fill="#15181c"/>
+  <rect x="0" y="27" width="240" height="1.5" fill="#ffb030" opacity="0.85"/>
+  <!-- section frames: primary / secondary / mode -->
+  <rect x="8" y="126" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="186" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="246" width="224" height="60" rx="4" fill="none" stroke="#39414b" stroke-width="1"/>
+  <!-- CV / audio sections -->
+  <rect x="8" y="294" width="224" height="52" rx="4" fill="#20252b" stroke="#39414b" stroke-width="1"/>
+  <rect x="8" y="330" width="224" height="46" rx="4" fill="#15181c" stroke="#39414b" stroke-width="1"/>
+  <rect id="components" x="0" y="0" width="0" height="0" fill="none"/>
+</svg>

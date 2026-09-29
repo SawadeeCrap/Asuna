@@ -1,0 +1,25 @@
+{
+  "slug": "FusionClone",
+  "name": "Fusion Clone",
+  "version": "2.0.0",
+  "license": "GPL-3.0-or-later",
+  "brand": "Asuna",
+  "author": "Asuna",
+  "authorEmail": "",
+  "authorUrl": "https://github.com/sawadeecrap/asuna",
+  "pluginUrl": "https://github.com/sawadeecrap/asuna/tree/main/fusion-clone",
+  "manualUrl": "https://github.com/sawadeecrap/asuna/blob/main/fusion-clone/README.md",
+  "sourceUrl": "https://github.com/sawadeecrap/asuna",
+  "changelogUrl": "",
+  "modules": [
+    {
+      "slug": "FusionClone",
+      "name": "Fusion Clone",
+      "description": "Turns the audio of ONE hardware Erica Synths Fusion VCO2 into a population of 1-16 independent virtual VCO2-like oscillators using period-synchronous harmonic analysis and a free-running wavetable oscillator bank.",
+      "tags": [
+        "Effect",
+        "Oscillator"
+      ]
+    }
+  ]
+}

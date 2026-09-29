@@ -1,0 +1,32 @@
+# Rack plugin build outputs
+/build/
+/dist/
+/plugin.so
+/plugin.dylib
+/plugin.dll
+*.vcvplugin
+
+# object files and libraries
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# test / tool binaries (sources are kept)
+/tests/test_*
+!/tests/test_*.cpp
+/tests/*_pf
+/tests/build-module-test/
+/tools/bench
+/tools/fusionclone_cli
+/research/exp_*
+!/research/exp_*.cpp
+
+# python
+__pycache__/
+*.pyc
+
+# scratch
+*.tmp
+*.wav
