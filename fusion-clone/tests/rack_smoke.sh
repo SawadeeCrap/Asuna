@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end smoke test inside a REAL Rack: installs a built Fusion Clone package into a scratch user folder, starts Rack without a window
 # (headless, -h) on a patch that feeds Fusion Clone from a Fundamental VCO (when Rack ships Fundamental), lets it run for a few seconds, stops
-# it with SIGINT and reads Rack's log.
+# it ("press enter to exit") and reads Rack's log.
 #
 #   tests/rack_smoke.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS]      (default 20 s)
 #
@@ -55,8 +55,11 @@ fi
 echo "== Rack: $RACK"
 echo "== running headless for $SECS s (user folder $USER_DIR)"
 cd "$(dirname "$RACK")" || exit 2   # on Linux Rack finds its res/ folder relative to the working directory
-"$RACK" -h -u "$USER_DIR" "$WORK/smoke.vcv" > "$WORK/rack.out" 2>&1 &
+# Headless Rack prints "Press enter to exit." and quits as soon as it reads a line (or hits end-of-file) on stdin, so stdin is a FIFO that stays open.
+mkfifo "$WORK/stdin"
+"$RACK" -h -u "$USER_DIR" "$WORK/smoke.vcv" < "$WORK/stdin" > "$WORK/rack.out" 2>&1 &
 PID=$!
+exec 3> "$WORK/stdin"
 CRASHED=0
 for ((i = 0; i < SECS; i++)); do
 	sleep 1
@@ -66,12 +69,15 @@ if [ "$CRASHED" = 1 ]; then
 	wait "$PID"; STATUS=$?
 	echo "Rack exited by itself after $i s with status $STATUS"
 else
-	kill -INT "$PID" 2>/dev/null
+	echo "Rack process after $SECS s (cputime = CPU seconds it used, etime = wall time):"
+	ps -o pid=,cputime=,etime=,rss= -p "$PID" || true
+	echo >&3   # "enter": a clean shutdown during which the module reports its final state
 	for ((i = 0; i < 15; i++)); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
-	if kill -0 "$PID" 2>/dev/null; then echo "Rack did not stop on SIGINT, killing it"; kill -KILL "$PID"; fi
+	if kill -0 "$PID" 2>/dev/null; then echo "Rack did not stop after Enter, killing it"; kill -KILL "$PID"; fi
 	wait "$PID" 2>/dev/null; STATUS=$?
-	echo "Rack still running after $SECS s; stopped with SIGINT (status $STATUS)"
+	echo "Rack ran for $SECS s and was stopped with Enter (status $STATUS)"
 fi
+exec 3>&-
 [ -n "$XVFB" ] && kill "$XVFB" 2>/dev/null
 
 LOG=$USER_DIR/log.txt
