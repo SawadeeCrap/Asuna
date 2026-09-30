@@ -4,7 +4,7 @@
 #   make quick        only the fast component tests (FFT, sinc, Hilbert, pitch tracker, cycle analyser)
 #   make engine       only the engine test suite (a few minutes)
 #   make lock         lock-robustness matrix (waveform x pitch); `./test_lock full` covers all four quality modes
-#   make tracker      pitch tracker: no confident wrong estimates at any pitch or lane edge (half a minute)
+#   make tracker      pitch tracker: no confident wrong estimates at any pitch or lane edge, at 48 / 44.1 / 96 kHz (a minute and a half)
 #   make dynamics     vibrato, SUB sweep, WAVE switch, note gap
 #   make realtime     allocation-free / finite / per-sample cost check of the audio path
 #   make PFFFT=/path/to/pffft   use pffft instead of the built-in FFT (what the plugin uses)

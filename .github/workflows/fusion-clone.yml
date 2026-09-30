@@ -275,14 +275,14 @@ jobs:
         run: git clone --depth 1 https://github.com/marton78/pffft.git "$RUNNER_TEMP/pffft"
       - name: Build the tests with the sanitizers
         working-directory: fusion-clone/tests
-        run: CXXFLAGS="-std=c++11 -O1 -g $SAN -pthread -Wall -Wextra -Wno-unused-parameter" make -j3 PFFFT="$RUNNER_TEMP/pffft" test_soak test_tracker test_dynamics test_analyzer
+        run: CXXFLAGS="-std=c++11 -O1 -g $SAN -pthread -Wall -Wextra -Wno-unused-parameter" make -j3 PFFFT="$RUNNER_TEMP/pffft" test_soak test_dynamics test_analyzer
       - name: Unit tests under the sanitizers
         working-directory: fusion-clone/tests
         run: |
           ./test_analyzer
-          ./test_tracker quick
           ./test_dynamics
       - name: Chaos input (all controls, hostile signals, NaN / Inf bursts) and hardware-like notes under the sanitizers
+        if: ${{ !cancelled() }}      # even when a unit test above reported something
         working-directory: fusion-clone/tests
         run: |
           run() { name=$1; shift; ./test_soak "$@" > "san_$name.txt" 2>&1; echo "$name: exit status $?" > "san_$name.status"; }

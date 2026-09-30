@@ -472,7 +472,7 @@ invariants checked all along, an inter-harmonic-energy metric for "metallic", an
   run that re-reports it); a mismatch must persist for 40 ms; acquisition is gated on the smoothed input level (the instantaneous one is measured over 64
   samples before the first lock and flickers for low notes — the old double counting had hidden that); the novelty detector's slow estimate starts from
   the fast one (a marginal 55 Hz vibrato case that the old engine escaped by luck after six drops now never drops). Regression tests: `test_tracker`
-  (85 pitches × 5 waveforms = 425 cells; the old tracker fails 24 of them, 7 without a single right answer), the three pitches added to `test_lock`,
+  (85 pitches × 5 waveforms = 425 cells at each of 48, 44.1 and 96 kHz; at 48 kHz the old tracker fails 24 of them, 7 without a single right answer; exact ×3 / ×4 multiples of the period, which a lane that cannot see the shorter dips reports in a fraction of a percent of its runs, are counted separately and limited to 5 %), the three pitches added to `test_lock`,
   vibrato in all four quality modes in `test_dynamics`, triangle and sine notes in the `hw` scenario.
 * **Undefined behaviour that is harmless on the machines tested but should not be there**: a 0/0 in the phase-slope estimate when the harmonic set has no
   energy at all (digital silence while locked; the NaN it produced never reached the audio path), and a `kaiser(n, 0, β)` in the design of a one-tap

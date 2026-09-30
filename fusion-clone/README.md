@@ -115,7 +115,7 @@ wrapper) or drop the define to fall back to the built-in radix-2 FFT (slower but
 ```sh
 make -C tests                 # every DSP test with the portable FFT (about ten minutes: components, lock matrix, dynamics, engine, real-time)
 make -C tests quick           # component tests only (FFT, sinc, Hilbert, tracker, analyser), seconds
-make -C tests tracker         # pitch tracker: no confident wrong estimate at any pitch or lane edge (half a minute)
+make -C tests tracker         # pitch tracker: no confident wrong estimate at any pitch or lane edge, three sample rates (a minute and a half)
 make -C tests soak            # minutes of audio through the engine: steady / sequenced / knobs / random notes / hardware-like / chaos (36 min)
 tests/test_soak 12 48000 chaos 3 16    # one scenario: minutes, sample rate, scenario, quality, voices (SOAK_SEED=n draws another random run)
 make -C tests artifacts       # click / zipper / fade / aliasing probes on a pure tone

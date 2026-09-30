@@ -90,13 +90,13 @@ int main() {
 			if (i >= (size_t) (4.0 * FS) && e.lockedNow()) lockedLate += 1.0 / FS;
 		}
 		double best = 0.0;
-		const size_t i0 = (size_t) (4.0 * FS), i1 = (size_t) (5.0 * FS);
+		const size_t i0 = (size_t) (4.0 * FS), i1 = (size_t) (4.9 * FS); // (n = 5 s: the lags of +-40 samples below must stay inside the buffers)
 		for (int lag = -40; lag <= 40; lag++) {
 			double sxy = 0, sxx = 0, syy = 0;
 			for (size_t i = i0; i < i1; i++) { sxy += (double) x[i] * outL[i + lag]; sxx += (double) x[i] * x[i]; syy += (double) outL[i + lag] * outL[i + lag]; }
 			best = std::max(best, sxy / std::sqrt(sxx * syy + 1e-30));
 		}
-		printf("       correlation of output and input over the last second: %.4f, locked %.2f, clone unit frequency %.2f Hz\n", best, lockedLate, e.cloneUnitFreq());
+		printf("       correlation of output and input over 0.9 s near the end: %.4f, locked %.2f, clone unit frequency %.2f Hz\n", best, lockedLate, e.cloneUnitFreq());
 		CHECK(lockedLate > 0.95, "still locked at the end of the sweep");
 		CHECK(std::fabs(e.cloneUnitFreq() - 55.0) < 0.1, "the clones run at the doubled period (55 Hz unit), i.e. they carry the sub");
 		CHECK(best > 0.99, "output = exact scaled copy of the input (correlation %.4f > 0.99)", best);
