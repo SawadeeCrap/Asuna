@@ -2,9 +2,17 @@
 
 *(Русская версия: `docs/INSTALL.ru.md`.)*
 
-There is **no pre-built binary in the repository**: a Rack plugin is compiled machine code for one platform, and the sandbox this project was
-written in is a Linux container that has neither your Mac nor Rack. You therefore either **build it once from source (about 5 minutes)** or
-**download the package that the GitHub workflow builds** (`.github/workflows/fusion-clone.yml`, artifact `FusionClone-mac-arm64`; see B below).
+A Rack plugin is compiled machine code for one platform, and the sandbox this project was written in is a Linux container that has neither your
+Mac nor Rack, so the binary is built by a GitHub workflow (`.github/workflows/fusion-clone.yml`) on an Apple-silicon runner. Three ways to get it:
+
+* **The quickest: a plain file in the repository.** The workflow commits the packages it builds into `fusion-clone/downloads/` when a commit message
+  contains `[package]`. Open this link in a browser and the file downloads (no GitHub account needed):
+  <https://github.com/SawadeeCrap/Asuna/raw/claude/jolly-einstein-e9h02j/fusion-clone/downloads/FusionClone-2.0.1-mac-arm64.vcvplugin>
+  (the page of the file: <https://github.com/SawadeeCrap/Asuna/blob/claude/jolly-einstein-e9h02j/fusion-clone/downloads/FusionClone-2.0.1-mac-arm64.vcvplugin>;
+  the Linux package is next to it). Then step 3 of B below.
+* **Download the workflow's artifact** `FusionClone-mac-arm64` (B below; it sits at the very bottom of a run's page, needs a GitHub login, and is
+  easy to miss).
+* **Build it once from source** (A below, about 5 minutes).
 
 ## A. Build from source on the Mac
 

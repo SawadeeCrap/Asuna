@@ -4,6 +4,8 @@
 #       Actions -> the run -> Artifacts -> FusionClone-mac-arm64 -> unzip -> double-click the .vcvplugin (or drop it into
 #       ~/Library/Application Support/Rack2/plugins-mac-arm64/ after unzipping the archive there).
 #     The package is then unpacked again and inspected (architecture, linked libraries, exported symbols); a failed inspection fails the job.
+#     The same files can also be committed into the branch (fusion-clone/downloads/, one click to download on github.com): push a commit whose
+#     message contains [package].
 #   * "Load in Rack" jobs (experimental, do not fail the run) install Rack Free, put the package into a scratch user folder and run a patch
 #     headless for a while (tests/rack_smoke.sh): proves that a real Rack loads the plugin, creates the module and survives the engine
 #     (the module reports on shutdown that it locked onto the VCO). "Rack with its window" (Linux only) starts Rack with a window on a virtual
@@ -153,6 +155,34 @@ jobs:
           cp shots/*.png fusion-clone/docs/figures/rack/
           git add fusion-clone/docs/figures/rack
           git commit -m "CI: screenshot of Fusion Clone in Rack 2.6.6 (${{ matrix.platform }}) [skip ci]" || exit 0
+          for i in 1 2 3 4; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && break
+            sleep $((i * 3))
+          done
+
+  publish-package:
+    name: Commit the built packages into the branch (only for pushes whose commit message contains [package])
+    needs: plugin
+    if: ${{ !cancelled() && needs.plugin.result == 'success' && github.event_name == 'push' && contains(github.event.head_commit.message, '[package]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # to push the packages; the only job of this workflow besides the screenshot step that can write to the repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0             # the commit step rebases onto the branch tip before it pushes
+      - uses: actions/download-artifact@v4
+        with:
+          path: pkgs                 # every artifact of this run, each in a folder of its own name
+      - name: Commit fusion-clone/downloads/*.vcvplugin
+        run: |
+          find pkgs -type f | sort
+          mkdir -p fusion-clone/downloads
+          cp pkgs/FusionClone-*/*.vcvplugin fusion-clone/downloads/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f fusion-clone/downloads          # *.vcvplugin is in .gitignore; these are the files meant to be downloaded
+          git commit -m "CI: built packages of ${GITHUB_SHA::7} [skip ci]" || exit 0
           for i in 1 2 3 4; do
             git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && break
             sleep $((i * 3))

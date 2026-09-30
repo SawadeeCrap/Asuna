@@ -2,9 +2,16 @@
 
 *(English version: `docs/INSTALL.md`.)*
 
-**Готового бинарного файла в репозитории нет.** Плагин для Rack — это скомпилированный код под конкретную платформу, а среда, в которой я
-писал код, — облачный Linux-контейнер без вашего Mac и без Rack. Поэтому есть два пути: **один раз собрать плагин из исходников (около
-5 минут)** или **скачать готовый пакет, который собирает GitHub** (`.github/workflows/fusion-clone.yml`, артефакт `FusionClone-mac-arm64`, см. раздел Б).
+Плагин для Rack — это скомпилированный код под конкретную платформу, а среда, в которой я писал код, — облачный Linux-контейнер без вашего Mac и
+без Rack, поэтому бинарный файл собирает GitHub (`.github/workflows/fusion-clone.yml`) на раннере с Apple silicon. Три способа его получить:
+
+* **Самый простой — обычный файл в репозитории.** Workflow кладёт собранные пакеты в `fusion-clone/downloads/`, если в сообщении коммита есть
+  `[package]`. Откройте ссылку в браузере — файл скачается (аккаунт GitHub не нужен):
+  <https://github.com/SawadeeCrap/Asuna/raw/claude/jolly-einstein-e9h02j/fusion-clone/downloads/FusionClone-2.0.1-mac-arm64.vcvplugin>
+  (страница файла: <https://github.com/SawadeeCrap/Asuna/blob/claude/jolly-einstein-e9h02j/fusion-clone/downloads/FusionClone-2.0.1-mac-arm64.vcvplugin>;
+  рядом лежит пакет для Linux). Дальше — пункт 3 раздела Б.
+* **Скачать артефакт workflow** `FusionClone-mac-arm64` (раздел Б; он в самом низу страницы запуска, нужен вход в GitHub, и его легко не заметить).
+* **Один раз собрать из исходников** (раздел А, около 5 минут).
 
 ## А. Сборка из исходников на Mac
 

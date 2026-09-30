@@ -5,6 +5,7 @@
 /plugin.dylib
 /plugin.dll
 *.vcvplugin
+!/downloads/*.vcvplugin
 
 # object files and libraries
 *.o
