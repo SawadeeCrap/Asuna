@@ -41,6 +41,8 @@ written in is a Linux container that has neither your Mac nor Rack. You therefor
    xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-mac-arm64/FusionClone"
    ```
 
+(The same run also has `FusionClone-lin-x64`, the equivalent package for Linux x86-64; Rack loads it the same way from `~/.local/share/Rack2/plugins-lin-x64/`.)
+
 What the package is: an arm64 build against the official **Rack SDK 2.6.x** (it is ad-hoc code-signed, not notarised — like every plugin that is not
 downloaded through the VCV Library), for **Rack 2** (tested only with Rack 2.6.6; other 2.x versions should work because the plugin ABI is stable within a major version, but that is untested). The same workflow run also
 loads exactly this package into a real **VCV Rack Free 2.6.6 on an Apple-silicon runner**, patches a Fundamental VCO into it and lets it run for 20 s;

@@ -440,9 +440,13 @@ original passes unchanged. Polyphonic input uses channel 1 only.
 **9.5 Band edge.** The analysis kernel droops above 0.30·fs (16 taps: 1.4 dB at 19 kHz; 32 taps: 0.13 dB) and reaches −6 dB at 0.46·fs; the
 clones' top octave is slightly darker than the original's. Inaudible for a sawtooth (1/j) but stated.
 
-**9.6 Not verified.** Linking against the real Rack SDK, the Rack GUI, the macOS/Apple-silicon build, real-time CPU on the target machine, and
-*listening*. Real-Fusion behaviour (sub sync, detune, tube colour, waveform switching transients) is a hypothesis model; the reference protocol
-describes the measurements that would settle it.
+**9.6 Verification status.** Verified: the DSP suites on x86 Linux and on an Apple M1 machine (GitHub Actions; §7 and `docs/BENCHMARKS.md` §6), the
+plugin build against the official Rack SDK 2.6.x for macOS arm64 and Linux x64, the inspection of the resulting package (architecture, exported
+`init`, pffft resolved from Rack), and a real **VCV Rack Free 2.6.6** (macOS arm64 and Linux x64) that loads the package, creates the module and its
+panel widget and runs it for 20 s with a Fundamental VCO patched in: the module locks onto the oscillator and the safety net never fires
+(`tests/rack_smoke.sh`). *Not* verified: the appearance and behaviour of the GUI on a real screen (`tests/rack_gui_shot.sh` renders it in CI; see
+`docs/figures/rack/` if screenshots are present), real-time CPU on a real Mac inside a busy patch, and *listening*. Real-Fusion behaviour (sub sync,
+detune, tube colour, waveform switching transients) is a hypothesis model; the reference protocol describes the measurements that would settle it.
 
 ## 10. Acceptance tests (specification tests 1 – 15) and where they run
 

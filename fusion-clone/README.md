@@ -15,13 +15,22 @@ chorus, a generic pitch shifter, a supersaw or a phase-vocoder effect — see `d
 > oscillators: they contain no VCO2 circuit model, and whatever the source signal does not reveal (for example a detune sideband that only
 > exists in the original) is inherited coherently by the clones. Details in `docs/ARCHITECTURE.md` §9.
 
-> **Status of this code base (read before relying on it).** It was written and tested in a Linux sandbox without audio hardware, without a
-> real Fusion VCO2 and without the Rack GUI. What was actually verified: the DSP core (unit and integration tests, lock-robustness matrix,
-> dynamics tests, benchmarks), a headless instantiation of the real `Module` class against Rack's engine classes (parameter/CV mapping,
-> patch save/load), and a compile-check of all plugin sources against the Rack 2 headers. What was **not** verified: linking against the real
-> Rack SDK, running in the Rack GUI, the macOS/Apple-silicon build, real-time CPU on the target machine, and — most importantly — listening.
-> The perceptual claims rest on objective proxy metrics measured on a *synthetic hypothesis model* of the source (`docs/RESEARCH.md`),
-> not on recordings of the real module. `docs/REFERENCE_PROTOCOL.md` explains how to close that gap with a real Fusion VCO2.
+> **Status of this code base (read before relying on it).** It was written in a Linux sandbox without audio hardware, without a real Fusion VCO2,
+> without a display and without a Mac. What was actually verified:
+>
+> * the DSP core — unit and integration tests, lock-robustness matrix, dynamics, click/zipper and real-time tests, benchmarks — on x86 Linux **and on
+>   an Apple M1 machine** (GitHub Actions, `docs/BENCHMARKS.md` §6; the NEON code path ran there);
+> * a headless instantiation of the real `Module` class against Rack's engine classes (parameter/CV mapping, patch save/load bit-exactness);
+> * **the plugin builds against the official Rack SDK 2.6.x for macOS arm64 and Linux x64**, and the package is inspected (arm64 Mach-O, ad-hoc signed,
+>   exports `init`, every pffft function it calls is exported by Rack);
+> * **a real VCV Rack Free 2.6.6 (macOS arm64 and Linux x64, in CI) loads that package, creates the module and its panel, and runs it for 20 s with a
+>   Fundamental VCO patched in: the module locks onto the oscillator (261.63 Hz) with 16 voices and the NaN/Inf safety net never fires**
+>   (`tests/rack_smoke.sh`, `docs/INSTALL.md`).
+>
+> What was **not** verified: how the panel looks and feels on a real screen (unless a screenshot is listed under `docs/figures/rack/`), real-time CPU
+> on a real Mac inside a busy patch, and — most importantly — **listening**: nobody has heard this module. The perceptual claims rest on objective proxy
+> metrics measured on a *synthetic hypothesis model* of the source (`docs/RESEARCH.md`), not on recordings of the real module.
+> `docs/REFERENCE_PROTOCOL.md` explains how to close that gap with a real Fusion VCO2.
 
 ## Panel
 
@@ -96,11 +105,18 @@ make -C tests                 # every DSP test with the portable FFT (about ten 
 make -C tests quick           # component tests only (FFT, sinc, Hilbert, tracker, analyser), seconds
 make -C tests artifacts       # click / zipper / fade / aliasing probes on a pure tone
 make -C tests realtime        # allocation counter, randomised stress, per-sample cost of the audio path
-tests/build_module_test.sh    # headless test of the real Module class (needs a Rack source checkout, see the script)
 make -C tools                 # fusionclone_cli (offline renderer / A-B ladder) and bench (CPU per quality x voices x pitch, bloom table)
 python3 tools/preview_panel.py                  # panel layout preview + overlap / frame / screw checks
 python3 tools/analyze_reference.py rec.wav --f0 65.406     # spectrum/sideband report of a recording
 python3 tools/fusion_detune_probe.py rec.wav --f0 65.406   # RATIO (Doppler) or HZ (SSB) detune? see docs/REFERENCE_PROTOCOL.md
+```
+
+Tests that need Rack (they run in CI, see `.github/workflows/fusion-clone.yml`):
+
+```sh
+tests/build_module_test.sh RACK_SRC     # headless test of the real Module class against Rack's engine classes (needs a Rack source checkout)
+tests/rack_smoke.sh pkg.vcvplugin /path/to/Rack 20    # loads the built package into a REAL Rack (headless), runs a VCO -> Fusion Clone patch, checks its log
+tests/rack_gui_shot.sh pkg.vcvplugin /path/to/Rack    # the same with Rack's window (Linux: virtual display) and a screenshot
 ```
 
 `fusionclone_cli in.wav out.wav [options]` runs the same engine offline; `--ab dir` writes an A/B ladder (original, +1 … +15 clones) to
