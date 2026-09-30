@@ -56,12 +56,14 @@ def blend_of(z: np.ndarray, forms: tuple, floor: float = 0.06) -> dict:
 
 class Adapter:
     family = ""
+    supports_deform = False                           # the engine can stretch / twist / bend a form (colony family)
 
     def __init__(self, engine, organism: str = ""):
         self.engine = engine
         self.vocab: Vocabulary = vocabulary(engine, organism)
         self.target: np.ndarray | None = None         # the brain's current z_goal
         self.material: np.ndarray | None = None
+        self.dfm: np.ndarray | None = None            # ... its deformation goal (engines that deform)
         self.until = -1e9
         self.reacted_at: float | None = None          # the last time the engine set a goal of its own
         self.lunge = False                            # ... and whether that was a lunge on the kick
@@ -80,13 +82,23 @@ class Adapter:
         pos = getattr(state, "pos", None)
         return np.asarray(pos, float) if pos is not None else np.zeros((0, 3))
 
-    def _set_timers(self, hold: float) -> None:
-        b = self._body()
-        b.intent_t = 0.0
-        if hasattr(b, "dwell"):
-            b.dwell = hold
-        if hasattr(b, "intent_dwell"):
-            b.intent_dwell = hold
+    def _all(self) -> list:
+        """Every body a change is given to when ``everyone`` (training): the lead only, unless the family has more."""
+        return [self._body()]
+
+    def _set_timers(self, hold: float, everyone: bool = False) -> None:
+        for b in (self._all() if everyone else [self._body()]):
+            b.intent_t = 0.0
+            if hasattr(b, "dwell"):
+                b.dwell = hold
+            if hasattr(b, "intent_dwell"):
+                b.intent_dwell = hold
+
+    def _deform(self, d: dict | None) -> np.ndarray | None:
+        if not self.supports_deform:
+            return None
+        from ..creature.colony import deform_vector
+        return deform_vector(d)                       # (no deformation asked: the form as it is)
 
     def _sculpted(self) -> bool:
         gc = self.engine.glove.ctrl
@@ -118,18 +130,23 @@ class Adapter:
         return 1
 
     # --- acting
-    def apply(self, d: Decision, t: float) -> None:
-        b = self._body()
+    def apply(self, d: Decision, t: float, everyone: bool = False) -> None:
+        """Give the engine the decision's goals (``everyone``: every body, not just the lead - training)."""
         w = self.vocab.weights(d.blend)
         if w.sum() <= 0:
             return
         self.target = inverse_blend(w, d.strength)
-        b.z_goal = self.target.copy()
         mv = material_vector(d.material) if self.vocab.materials else None
         self.material = mv
-        if mv is not None and hasattr(b, "mat_goal"):
-            b.mat_goal = mv.copy()
-        self._set_timers(d.hold)
+        dv = self._deform(getattr(d, "deform", None))
+        self.dfm = dv
+        for b in (self._all() if everyone else [self._body()]):
+            b.z_goal = self.target.copy()
+            if mv is not None and hasattr(b, "mat_goal"):
+                b.mat_goal = mv.copy()
+            if dv is not None and hasattr(b, "dfm_goal"):
+                b.dfm_goal = dv.copy()
+        self._set_timers(d.hold, everyone)
         if d.event:
             self.engine.trigger_event(d.event)
         self.until = t + d.hold
@@ -156,6 +173,8 @@ class Adapter:
             self._seen = self.target.copy()
             if self.material is not None and hasattr(b, "mat_goal"):
                 b.mat_goal = self.material.copy()
+            if self.dfm is not None and hasattr(b, "dfm_goal"):
+                b.dfm_goal = self.dfm.copy()
             self.reacted_at = None
             self.restored += 1
 
@@ -166,9 +185,14 @@ class Adapter:
 class ColonyAdapter(Adapter):
     """v3-v13: the lead body."""
     family = "colony"
+    supports_deform = True
 
     def _body(self):
         return self.engine.bodies[0]
+
+    def _all(self) -> list:
+        e = self.engine
+        return [e.bodies[k] for k in e._alive() if not e._is_static(k)] or [e.bodies[0]]
 
     def _points(self, state) -> np.ndarray:
         X = np.asarray(self.engine.x, float)
@@ -220,7 +244,7 @@ class CreatureAdapter(Adapter):
         return Snapshot(t, fp, {self.vocab.forms[int(np.argmin(dst))]: 1.0}, self.free(), due, float(inp.energy),
                         bool(inp.playing), music, user, dict(controls or {}))
 
-    def apply(self, d: Decision, t: float) -> None:
+    def apply(self, d: Decision, t: float, everyone: bool = False) -> None:
         w = self.vocab.weights(d.blend)
         if w.sum() <= 0:
             return

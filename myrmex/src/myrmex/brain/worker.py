@@ -87,9 +87,15 @@ def _worker_main(conn, ref: tuple[str, str], organism: str, cfg: dict) -> None:
         vocab = vocabulary(_load_class(ref), organism)
         core = BrainCore(vocab, BrainConfig.from_dict(cfg))
         log = DecisionLog(core.cfg.log_dir, organism)
-        conn.send(("ready", {"forms": len(vocab.forms), "free": list(vocab.free), "family": vocab.family}))
     except Exception as e:                                          # pragma: no cover - reported to the app
-        conn.send(("error", f"{type(e).__name__}: {e}"))
+        try:
+            conn.send(("error", f"{type(e).__name__}: {e}"))
+        except OSError:
+            pass
+        return
+    try:
+        conn.send(("ready", {"forms": len(vocab.forms), "free": list(vocab.free), "family": vocab.family}))
+    except OSError:                                                 # the app already let it go
         return
     while True:
         try:
@@ -120,6 +126,7 @@ def _worker_main(conn, ref: tuple[str, str], organism: str, cfg: dict) -> None:
                 from .core import _client
                 core.cfg = BrainConfig.from_dict(payload)
                 core.kev = _client(core.cfg)
+                core.load_taste()                                   # (verdicts from the Train page since)
                 if core.cfg.log_dir != os.path.dirname(log.path or ""):
                     log = DecisionLog(core.cfg.log_dir, organism)
                     log.seen = core.logged
@@ -233,6 +240,7 @@ class BrainLink:
         elif self.core is not None:
             from .core import _client
             self.core.cfg, self.core.kev = cfg, _client(cfg)
+            self.core.load_taste()
         elif not was or (self.process and self.conn is None):
             self._start()
 

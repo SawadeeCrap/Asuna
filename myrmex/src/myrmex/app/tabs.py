@@ -29,6 +29,7 @@ CAMERA_SHOTS = C.SHOTS[1:]
 TARGETS = (list(PARAMS) + ["energy", "stride", "sway", "style", "hold", "cam_mode", "cam_distance", "cam_height",
                            "cam_orbit", "cam_lens", "cam_smooth", "camera", "pose", "flourish", "creature_debug",
                            "take", "take:start", "take:stop", "brain", "brain:good", "brain:bad",
+                           "train:good", "train:bad", "train:skip",
                            "brain_autonomy", "brain_novelty", "brain_persistence", "brain_mutation", "brain_return",
                            "brain_memory", "brain_rate"] +
            [f"camera:{k}" for k in CAMERA_SHOTS] + [f"creature:{e.lower()}" for e in EVENTS + POLY_EVENTS + COLONY_EVENTS + HIVE_EVENTS + OSSEOUS_EVENTS +

@@ -79,6 +79,46 @@ EVENTS = ("MORPHOLOGY_SHIFT", "MASS_REBALANCE", "APPENDAGE_BURST", "COLLAPSE", "
           "OBSTACLE", "PRESSURE", "TURBULENCE", "SPLIT", "MERGE", "WAVE", "HUNT", "PERCH")
 KICK_MODES = ("IMPULSE", "OBSTACLE", "PRESSURE", "TURBULENCE", "MIX")
 G = 9.81
+# How a form can be changed beyond its blend (``deform``): stretched / squashed along its own axes (log factors:
+# x forward, y across, z up), twisted round its long axis (half-turns tip to tail), bent (the long axis curves up or
+# down), rippled (spiral ridges) and scaled (log).  All zero: the form as the shape functions make it.
+DEFORM = ("stretch", "width", "height", "twist", "bend", "ripple", "size")
+DEFORM_RANGE = {"stretch": (-0.7, 0.9), "width": (-0.7, 0.7), "height": (-0.7, 0.7), "twist": (-1.5, 1.5),
+                "bend": (-1.0, 1.0), "ripple": (0.0, 0.35), "size": (-0.35, 0.35)}
+
+
+def deform_vector(d: dict | None) -> np.ndarray:
+    """{name: value} -> the ``DEFORM`` vector (clipped to ``DEFORM_RANGE``; missing = 0)."""
+    out = np.zeros(len(DEFORM))
+    for i, k in enumerate(DEFORM):
+        v = (d or {}).get(k)
+        if v is not None and math.isfinite(float(v)):
+            lo, hi = DEFORM_RANGE[k]
+            out[i] = min(hi, max(lo, float(v)))
+    return out
+
+
+def deform(P: np.ndarray, d) -> np.ndarray:
+    """A form's local cloud (x forward, z up, centred), changed by the ``DEFORM`` vector ``d`` (a new array)."""
+    d = np.asarray(d, float)
+    if not np.abs(d).max() > 1e-6:
+        return P
+    stretch, width, height, twist, bend, ripple, size = d
+    P = P * (np.exp(np.array([stretch, width, height])) * math.exp(size))[None, :]
+    L = max(float(np.abs(P[:, 0]).max()), 1e-6)
+    u = P[:, 0] / L                                         # -1 .. 1 along the length
+    if abs(twist) > 1e-6:
+        a = 0.5 * math.pi * twist * u
+        c, s = np.cos(a), np.sin(a)
+        y, z = P[:, 1].copy(), P[:, 2].copy()
+        P[:, 1], P[:, 2] = c * y - s * z, s * y + c * z
+    if abs(bend) > 1e-6:
+        P[:, 2] += bend * 0.6 * L * (u * u - 1.0 / 3.0)
+    if ripple > 1e-6:
+        f = 1.0 + ripple * np.sin(3.0 * np.arctan2(P[:, 2], P[:, 1]) + 2.5 * math.pi * u)
+        P[:, 1] *= f
+        P[:, 2] *= f
+    return P
 
 
 @dataclass
@@ -246,6 +286,8 @@ class Body:
         self.intent, self.intent_t, self.dwell = "CRUISE", 0.0, 6.0
         self.z = np.zeros(len(shapes))
         self.z_goal = np.zeros(len(shapes))
+        self.dfm = np.zeros(len(DEFORM))       # the form changed beyond its blend (``deform``); eased like ``z``
+        self.dfm_goal = np.zeros(len(DEFORM))
         self.mat = np.array(MATERIAL["COHESIVE"], float)
         self.mat_goal = self.mat.copy()
         self.wander = 0.0
@@ -321,6 +363,8 @@ class ColonyEngine:
         self.skel = Skeleton(cfg.max_links)
         self._state_t = 0.0
         self.hn = np.array([(k * 0.7548776662) % 1.0 for k in range(n)])
+        self.morph_tau: float | None = None             # (training mode) how fast a new form is reached, s
+        self.plastic_scale = 1.0                        # (training mode) < 1: the network accepts a new shape sooner
 
     # ------------------------------------------------------------------ API
     def set_input(self, inp: CreatureControlInput) -> None:
@@ -392,6 +436,7 @@ class ColonyEngine:
         b.intent, b.intent_t = intent, 0.0
         b.dwell = self.rng.uniform(4.0, 10.0) * (0.6 + 0.8 * self.params["coherence"])
         b.goal_shape(shape or self._pick(prefs))
+        b.dfm_goal = np.zeros(len(DEFORM))              # its own choices are the forms as they are
         b.mat_goal = np.array(MATERIAL[mstate])
 
     def _renormalize(self, k: int) -> None:
@@ -894,6 +939,8 @@ class ColonyEngine:
                 shp -= shp.mean(0)
             loc += wa * shp
         loc[:, 1] *= 1.0 + 0.35 * pr["asymmetry"] * np.sign(loc[:, 1]) * math.sin(0.11 * self.t + k)
+        if np.abs(b.dfm).max() > 1e-4:                  # stretched, twisted, bent, rippled, scaled
+            loc = deform(loc, b.dfm)
         beat = self.inp.beat if self.inp.playing else 2.0 * self.t
         loc = self.glove.local(loc, self.t, beat)
         pressure = 0.25 * self.inp.bass * (0.5 + pr["expansion"]) + 0.03 * math.sin(2 * math.pi * self.inp.beat / 4.0)
@@ -955,7 +1002,7 @@ class ColonyEngine:
         a_des = np.empty_like(x)
         vcom = np.empty_like(x)
         goal = np.empty((n, 6))
-        tau_m = 0.8 + 3.0 * pr["rigidity"] * (1.2 - pr["fluidity"])
+        tau_m = self.morph_tau or 0.8 + 3.0 * pr["rigidity"] * (1.2 - pr["fluidity"])
         # The hand: turn every flying body with it (rigidly, no lag), sculpt / material / energy.
         gc = self.glove.ctrl
         dR = self.glove.begin(dt)
@@ -1004,6 +1051,7 @@ class ColonyEngine:
             noise = self.nrng.standard_normal(len(self.SHAPE_SET)) * pr["mutation"] * 0.6 * math.sqrt(dt)
             noise[_SITUATIONAL] = 0.0
             b.z += ((b.z_goal - b.z) * min(1.0, dt / tau_m) + noise) * held
+            b.dfm += (b.dfm_goal - b.dfm) * min(1.0, dt / tau_m) * held
             b.mat += (b.mat_goal - b.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"])) * held
             ad, sb = self._fly(k, idx, dt, pr)
             a_des[idx] = ad
@@ -1063,7 +1111,7 @@ class ColonyEngine:
             np.add.at(acc, i, f)
             np.add.at(acc, j, -f)
             # Plasticity: the network slowly accepts the shape it is held in (morphological inertia).
-            tau_p = 0.6 + 2.5 * np.clip(np.minimum(stiff[i], stiff[j]), 0, 1.5)
+            tau_p = (0.6 + 2.5 * np.clip(np.minimum(stiff[i], stiff[j]), 0, 1.5)) * self.plastic_scale
             self.rest[al] = rest + (L - rest) * np.minimum(1.0, dt / tau_p)
             brk = np.minimum(m[i, 4], m[j, 4]) * (1.0 - 0.4 * lk)
             broken = L > rest * brk
@@ -1207,4 +1255,4 @@ class ColonyEngine:
 
 
 __all__ = ["ColonyEngine", "ColonyConfig", "ColonyState", "SHAPES", "CYBER_SHAPES", "ALL_SHAPES", "INTENTS", "EVENTS",
-           "PLAN", "PLAN_BONE", "cyber_shape"]
+           "PLAN", "PLAN_BONE", "cyber_shape", "DEFORM", "DEFORM_RANGE", "deform", "deform_vector"]

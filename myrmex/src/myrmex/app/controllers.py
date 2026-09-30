@@ -134,6 +134,18 @@ def brain_settings(s: AppSettings) -> dict:
     return d
 
 
+def train_settings(s: AppSettings) -> dict:
+    """The Train page's settings (s.train) with defaults, the brain's log folder and its Kev address."""
+    t = dict(s.train or {})
+    b = brain_settings(s)
+    try:
+        spread = min(1.0, max(0.0, float(t.get("spread", 0.8))))
+    except (TypeError, ValueError):
+        spread = 0.8
+    return {"range": "own" if t.get("range") == "own" else "all", "spread": spread, "kev": bool(t.get("kev", False)),
+            "fx_off": bool(t.get("fx_off", True)), "log_dir": b["log_dir"], "kev_url": b["kev_url"] or "http://127.0.0.1:8009"}
+
+
 def fx_engine(s: AppSettings) -> dict:
     """What the engine's FX rack takes (LiveConfig.fx)."""
     d = fx_settings(s)
@@ -349,6 +361,16 @@ class EngineController:
         if self.session is None:
             return {}
         return self.session.set_brain(d)
+
+    def training(self, on: bool) -> dict:
+        """The Train page on / off (or its settings changed while on)."""
+        if self.session is None:
+            return {"on": False, "error": "start the engine first"}
+        return self.session.set_training({**train_settings(self.s), "on": bool(on)})
+
+    def train_rate(self, good: bool | None) -> dict:
+        """Good (True) / Bad (False) / Skip (None) on the change shown."""
+        return self.session.train_rate(good) if self.session is not None else {"on": False}
 
     def glove_calibrate(self) -> dict:
         return self.session.glove.state.calibrate() if self.session is not None else {}

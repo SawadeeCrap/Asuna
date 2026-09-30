@@ -155,7 +155,7 @@ def demo(args) -> None:
     print(f"Morphology brain - {args.organism}, mode {LETTER[mode]} ({mode}), {args.minutes:g} min, seed {args.seed}, "
           f"{args.engine} engine" + (f", Kev {args.kev}" if mode in KEV_MODES else "") + "\n")
     r = run(args.organism, mode, args.minutes, args.seed, ctl, kev_url=args.kev or "", hand=not args.no_hand,
-            engine=args.engine, on_decision=on, kev_timeout=args.kev_timeout)
+            engine=args.engine, on_decision=on, kev_timeout=args.kev_timeout, reshape=not args.no_reshape)
     rows = [(f"{LETTER[mode]} {mode}", r["metrics"])]
     if mode != "current" and not args.no_compare:
         base = run(args.organism, "current", args.minutes, args.seed, ctl, hand=not args.no_hand, engine=args.engine)
@@ -300,7 +300,7 @@ def benchmark(args) -> None:
     T = max(durations)
     tasks = [dict(organism=o, mode=m, minutes=T, seed=s, controls=ctl, kev_url=args.kev if m in KEV_MODES else "",
                   checkpoints=durations, kev_timeout=max(args.kev_timeout, 5.0), hand=not args.no_hand,
-                  engine=args.engine) for o in organisms for m in modes for s in range(seeds)]
+                  engine=args.engine, reshape=not args.no_reshape) for o in organisms for m in modes for s in range(seeds)]
     print(f"{len(tasks)} runs of {T:g} simulated minutes ({args.engine} engine), {args.jobs} at a time ...")
     wall = time.perf_counter()
     results = _run_tasks(tasks, args.jobs)
@@ -327,7 +327,8 @@ def sweep(args) -> None:
             for s in range(seeds):
                 tasks.append(dict(organism=o, mode=mode, minutes=minutes, seed=s, controls={**base, key: v},
                                   kev_url=args.kev if mode in KEV_MODES else "", hand=not args.no_hand,
-                                  engine=args.engine, kev_timeout=max(args.kev_timeout, 5.0)))
+                                  engine=args.engine, kev_timeout=max(args.kev_timeout, 5.0),
+                                  reshape=not args.no_reshape))
     print(f"sweep {args.sweep}: {values}, mode {LETTER[mode]}, {len(tasks)} runs of {minutes:g} min ...")
     results = _run_tasks(tasks, args.jobs)
     rows = []
@@ -705,6 +706,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--wide", action="store_true", help="more candidates per decision on screen")
     ap.add_argument("--no-hand", action="store_true", help="no scripted hand")
     ap.add_argument("--no-compare", action="store_true", help="skip the engine-alone comparison run")
+    ap.add_argument("--no-reshape", action="store_true", help="no RESHAPE candidates (the form stretched, twisted, bent)")
     for k in ("autonomy", "novelty", "persistence", "mutation", "returns", "memory", "min_confidence"):
         ap.add_argument(f"--{k.replace('_', '-')}", type=float, default=None)
     ap.add_argument("--rate", type=float, default=None, help="decision ticks per second (default 1)")

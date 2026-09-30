@@ -10,10 +10,12 @@ Operations (the action vocabulary, mapped to real capabilities):
     EVENT       a structural event it knows: split, merge, burst, collapse  (engine: trigger_event)
     RETURN      come back to a remembered form                              (memory -> z_goal, mat_goal)
     MUTATE      come back to a remembered form, changed                     (memory -> z_goal with a new share)
+    RESHAPE     a form stretched, squashed, twisted, bent, rippled or scaled (engine: its deformation goal;
+                the colony family - creature.colony.deform)
 
 Every candidate carries its predicted fingerprint (the blend's geometry from the organism's own shape
-functions) and its features: novelty, continuity, identity, fit with the hand, repetition, oscillation,
-the pull of memory, and whether it is a radical change.
+functions, deformed as asked) and its features: novelty, continuity, identity, fit with the hand,
+repetition, oscillation, the pull of memory, and whether it is a radical change.
 """
 from __future__ import annotations
 
@@ -59,6 +61,7 @@ class Candidate:
     strength: float = 2.6
     proto: int | None = None
     label: str = ""
+    deform: dict | None = None         # {stretch, width, height, twist, bend, ripple, size} (creature.colony.DEFORM)
     fp: Fingerprint | None = None
     emb: np.ndarray | None = None
     feats: dict = field(default_factory=dict)
@@ -121,11 +124,64 @@ def _blend_name(blend: dict) -> str:
     return " + ".join(f"{k} {v:.0%}" for k, v in items[:2])
 
 
-def predict(vocab: Vocabulary, blend: dict, material: str | None, event: str | None, cur: Fingerprint) -> Fingerprint:
+def deform_words(d: dict | None) -> str:
+    """A deformation in words ("stretched x2.1, twisted 1.2 half-turns, bent up") - '' for none."""
+    d = d or {}
+    out = []
+    s = float(d.get("stretch", 0.0))
+    if abs(s) >= 0.2:
+        out.append(f"{'stretched' if s > 0 else 'shortened'} x{math.exp(s):.1f}")
+    for k, (pos, neg) in (("width", ("widened", "narrowed")), ("height", ("taller", "flattened"))):
+        v = float(d.get(k, 0.0))
+        if abs(v) >= 0.2:
+            out.append(f"{pos if v > 0 else neg} x{math.exp(v):.1f}")
+    v = float(d.get("twist", 0.0))
+    if abs(v) >= 0.2:
+        out.append(f"twisted {abs(v):.1f} half-turns")
+    v = float(d.get("bend", 0.0))
+    if abs(v) >= 0.2:
+        out.append("bent up" if v > 0 else "bent down")
+    if float(d.get("ripple", 0.0)) >= 0.06:
+        out.append("rippled")
+    v = float(d.get("size", 0.0))
+    if abs(v) >= 0.1:
+        out.append(f"{'bigger' if v > 0 else 'smaller'} x{math.exp(v):.1f}")
+    return ", ".join(out)
+
+
+def random_deform(rng: np.random.Generator, spread: float, keys=None) -> dict:
+    """A random deformation: each change on with probability 0.35 + 0.4 x spread, its amount up to ``spread`` x
+    the engine's range (creature.colony.DEFORM_RANGE); at least one change when ``spread`` > 0."""
+    from ..creature.colony import DEFORM, DEFORM_RANGE
+    keys = tuple(keys or DEFORM)
+    spread = min(1.0, max(0.0, float(spread)))
+    if spread <= 0.0:
+        return {}
+    d = {}
+    for k in keys:
+        if rng.random() < 0.35 + 0.4 * spread:
+            lo, hi = DEFORM_RANGE[k]
+            d[k] = float(rng.uniform(lo, hi) * spread) if lo < 0 else float(rng.uniform(0.3 * hi, hi) * spread)
+    if not d:
+        k = keys[int(rng.integers(len(keys)))]
+        lo, hi = DEFORM_RANGE[k]
+        d[k] = float((hi if rng.random() < 0.5 or lo >= 0 else lo) * spread * rng.uniform(0.6, 1.0))
+    return d
+
+
+def predict(vocab: Vocabulary, blend: dict, material: str | None, event: str | None, cur: Fingerprint,
+            deform: dict | None = None) -> Fingerprint:
     w = vocab.weights(blend)
     w = 0.95 * w + 0.05 * cur.w                              # the body never arrives exactly
     w = w / w.sum()
-    geo = geometry(blend_cloud(w, vocab.geometry)) if vocab.geometry is not None else cur.geo.copy()
+    if vocab.geometry is not None:
+        cloud = blend_cloud(w, vocab.geometry)
+        if deform:
+            from ..creature.colony import deform as _deform, deform_vector
+            cloud = _deform(cloud, deform_vector(deform))
+        geo = geometry(cloud)
+    else:
+        geo = cur.geo.copy()
     mat = material_vector(material)
     mat = cur.mat.copy() if mat is None or not len(cur.mat) else mat
     bodies = 2 if event == "SPLIT" else (1 if event == "MERGE" else cur.bodies)
@@ -133,8 +189,8 @@ def predict(vocab: Vocabulary, blend: dict, material: str | None, event: str | N
 
 
 def generate(vocab: Vocabulary, cur_blend: dict, cur: Fingerprint, memory: MorphMemory, t: float, energy: float,
-             ctl, rng: np.random.Generator) -> list[Candidate]:
-    """10-24 candidates round the current form (``ctl``: BrainControls)."""
+             ctl, rng: np.random.Generator, reshape: bool = False) -> list[Candidate]:
+    """10-26 candidates round the current form (``ctl``: BrainControls; ``reshape``: the engine can deform)."""
     free = [f for f in vocab.free if f in vocab.forms]
     dom = max(cur_blend, key=cur_blend.get) if cur_blend else vocab.forms[int(np.argmax(cur.w))]
     out = [Candidate("HOLD", dict(cur_blend) or {dom: 1.0}, label=f"stay {_blend_name(cur_blend or {dom: 1.0})}")]
@@ -178,6 +234,11 @@ def generate(vocab: Vocabulary, cur_blend: dict, cur: Fingerprint, memory: Morph
         blend[f] = blend.get(f, 0.0) + m
         out.append(Candidate("MUTATE", blend, material=p.goal.get("material"), proto=p.id,
                              label=f"mutate {p.summary(vocab.forms)} with {f} {m:.0%}"))
+    if reshape:                                              # the form itself changed: stretched, twisted, bent ...
+        amount = 0.45 + 0.55 * ctl.mutation
+        for base in [dom] + ([str(rng.choice(others))] if others else []):
+            d = random_deform(rng, amount)
+            out.append(Candidate("RESHAPE", {base: 1.0}, deform=d, label=f"reshape {base}: {deform_words(d) or 'as it is'}"))
     return out
 
 
@@ -189,7 +250,7 @@ def evaluate(cands: list[Candidate], vocab: Vocabulary, scale: Scale, cur: Finge
     pulls = {p.id: pull for p, pull in memory.return_scores(t, energy, 45.0 * k, 60.0 * k)}
     bias = user.bias()
     for c in cands:
-        c.fp = predict(vocab, c.blend, c.material, c.event, cur)
+        c.fp = predict(vocab, c.blend, c.material, c.event, cur, c.deform)
         c.emb = embed(c.fp, scale)
         d = float(np.linalg.norm(c.emb - e_cur))
         pid, dp = memory.nearest(c.emb)
@@ -210,4 +271,4 @@ def evaluate(cands: list[Candidate], vocab: Vocabulary, scale: Scale, cur: Finge
 
 
 __all__ = ["Candidate", "UserCue", "generate", "evaluate", "predict", "material_vector", "direction", "DIRECTIONS",
-           "RADICAL"]
+           "RADICAL", "deform_words", "random_deform"]

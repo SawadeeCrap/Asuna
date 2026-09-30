@@ -91,6 +91,18 @@ def _takes(p: QPainter) -> None:
     p.restore()
 
 
+def _train(p: QPainter) -> None:
+    """A form turning into another (two outlines) and a tick: the Train page."""
+    p.drawEllipse(QPointF(8.5, 9.5), 5.2, 5.2)
+    blob = QPainterPath(QPointF(13.5, 6.5))
+    blob.cubicTo(20.5, 5.0, 22.0, 12.0, 17.5, 14.5)
+    p.drawPath(blob)
+    tick = QPainterPath(QPointF(8.0, 17.5))
+    tick.lineTo(11.0, 20.5)
+    tick.lineTo(17.5, 14.5)
+    p.drawPath(tick)
+
+
 def _log(p: QPainter) -> None:
     for y in (6, 10, 14, 18):
         p.drawLine(QPointF(8.5, y), QPointF(20.5, y))
@@ -119,7 +131,8 @@ def _fx(p: QPainter) -> None:
 
 
 DRAW = {"Live": _live, "Character": _character, "Creature": _creature, "Camera": _camera, "Glove": _glove,
-        "FX": _fx, "TouchDesigner": _touch, "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Log": _log}
+        "FX": _fx, "TouchDesigner": _touch, "Inputs": _inputs, "MIDI": _midi, "Takes": _takes, "Train": _train,
+        "Log": _log}
 
 
 def _pixmap(draw, color: str, size: int = 22, ratio: float = 2.0) -> QPixmap:

@@ -216,6 +216,8 @@ class LiveSession:
         self._running = False
         self.lock = threading.RLock()                     # (REC / STOP can come from inside a step: a MIDI pad)
         self.brain = None                                 # the morphology brain (an isolated worker), when on
+        self.training = None                              # the Train page (brain/trainer.py TrainingRun), when on
+        self._train_saved: dict = {}
         if self.creature is not None:
             from ..brain.core import with_env
             cfg.brain = with_env(cfg.brain)               # (MYRMEX_BRAIN_* flags, once)
@@ -321,8 +323,13 @@ class LiveSession:
         if cs is not None:
             dv = np.asarray(cs.target, float) - np.asarray(cs.position, float)
             view = math.atan2(dv[1], dv[0]) if abs(dv[0]) + abs(dv[1]) > 1e-6 else None
-        ctrl, gestures, cam_mod = self.glove.tick(self.inputs.glove, now, dt, self.creature.variant,
-                                                  clock=(st.beat, st.bpm, st.playing), view_yaw=view)
+        training = self.training is not None
+        if not training:
+            ctrl, gestures, cam_mod = self.glove.tick(self.inputs.glove, now, dt, self.creature.variant,
+                                                      clock=(st.beat, st.bpm, st.playing), view_yaw=view)
+        else:                                             # training: the organism alone (no hand)
+            from ..creature.puppet import GloveControl
+            ctrl, gestures, cam_mod = GloveControl(), [], {"distance": 1.0, "height": 0.0, "orbit": 0.0}
         self.inputs.glove_owns = ctrl.active or self.glove.cfg["preset"] == "camera"
         self.creature.engine.set_glove(ctrl, self.glove.sculpt_shapes(self.creature.variant))
         for g, names in gestures:
@@ -337,8 +344,8 @@ class LiveSession:
                     break
         if self.camera is not None:
             self.camera.extra = cam_mod
-        s = self.creature.tick(t, dt, notes, st)
-        if self.brain is not None:                        # microseconds, unless a snapshot is due (~1 Hz)
+        s = self.creature.tick(t, dt, notes, st, neutral=training)
+        if self.brain is not None and not training:       # microseconds, unless a snapshot is due (~1 Hz)
             self.brain.tick(now, t, s, self.glove.state, ctrl, self.inputs.controls,
                             f"{'playing' if st.playing else 'silent'}, {st.bpm:.0f} BPM")
         aerial = self.creature.variant in FLYING
@@ -390,6 +397,16 @@ class LiveSession:
     def _apply_controls(self, now: float, t: float) -> None:
         c = self.inputs.controls
         self._camera_controls(c)
+        if self.creature is not None and self.training is not None:
+            if self.camera is not None:                   # training: a steady orbit round the organism
+                self.camera.mode = "manual"
+            for name, _ in self.inputs.take_triggers():   # the knobs and events stay out; Good / Bad pads count
+                if name in ("brain:good", "brain:bad", "train:good", "train:bad", "train:skip"):
+                    verdict = {"good": True, "bad": False}.get(name.split(":", 1)[1])
+                    self.training.rate(verdict, self.lock)
+                elif name == "take" or name.startswith("take:"):
+                    self._take_trigger(name)
+            return
         if self.creature is not None:
             self.creature.controls(c)
             for name, _ in self.inputs.take_triggers():
@@ -538,6 +555,55 @@ class LiveSession:
                 self.brain.configure(cfg)
         return self.brain.status()
 
+    # ------------------------------------------------------------------ training (the Train page)
+    def set_training(self, d: dict | None) -> dict:
+        """The organism alone - no music, hand, knobs, effects or live brain; the camera circling it - and one
+        change of its body at a time, held until a verdict (brain/trainer.py).  ``{"on": True, "range": "all" |
+        "own", "spread": 0..1, "kev": bool, "fx_off": True, "log_dir": ..., "kev_url": ...}`` -> its status."""
+        d = dict(d or {})
+        if self.creature is None:
+            return {"on": False, "error": "organisms only"}
+        run = self.training
+        if not d.get("on", True):
+            if run is not None:
+                with self.lock:
+                    run.end()
+                    self.training = None
+                    if "fx" in self._train_saved:
+                        self.fx.configure(enabled=self._train_saved["fx"])
+                    if self.camera is not None:
+                        self._camera_controls(self.inputs.controls)
+                    if self.brain is not None and self.brain.cfg.enabled:
+                        self.brain.configure(self.brain.cfg)     # the live brain reads the new verdicts
+            return {"on": False}
+        bc = self.cfg.brain or {}
+        kev_url = d.get("kev_url") or bc.get("kev_url", "")
+        if run is not None:
+            if bool(d.get("kev")) == (run.trainer.kev is not None):
+                run.trainer.configure(d.get("range"), d.get("spread"))
+                return run.status()
+            self.set_training({"on": False})                  # Kev on / off: a fresh run (the verdicts are kept)
+        from ..brain.trainer import TrainingRun
+        run = TrainingRun(self.creature, self.creature.variant, d, d.get("log_dir") or bc.get("log_dir", ""), kev_url)
+        with self.lock:
+            self._train_saved = {"fx": bool(self.fx.cfg.get("enabled", True))}
+            if d.get("fx_off", True):
+                self.fx.configure(enabled=False)
+            run.begin()
+            self.training = run
+            if self.camera is not None:
+                self.camera.mode = "manual"
+                self.camera.request_cut("orbit")
+        run.next(self.lock)
+        return run.status()
+
+    def train_rate(self, good: bool | None) -> dict:
+        """Good (True) / Bad (False) / Skip (None) on the change shown; the next one comes at once."""
+        if self.training is None:
+            return {"on": False}
+        self.training.rate(good, self.lock)
+        return self.training.status()
+
     def _brain_trigger(self, name: str) -> None:
         """A pad: brain (on / off), brain:good / brain:bad (the performer's verdict on the current form)."""
         if name == "brain":
@@ -674,6 +740,7 @@ class LiveSession:
                    "fps": round(float(self.inputs.td["fps"]), 1), "error": self.touch.last_error},
             "rec": self.rec_status(),
             "brain": self.brain.status() if self.brain is not None else {"enabled": False},
+            "training": self.training.status() if self.training is not None else {"on": False},
             "fx": {"enabled": bool(self.fx.cfg.get("enabled")), "preset": self.fx.cfg.get("preset", ""),
                    "vertical": bool(self.fx.cfg.get("vertical")), "rack": dict(self.fx.cfg["rack"])},
             "camera": self.camera.kind if self.camera else None, "tick_ms": round(self.stats["mean_tick_ms"], 2),

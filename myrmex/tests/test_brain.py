@@ -464,6 +464,9 @@ class MockKev(BaseHTTPRequestHandler):
                 p[1] = 1.0
                 answers[qid] = {"type": "score", "score": 1.0, "legend": q["criteria"],
                                 "probabilities": {str(i): float(x) for i, x in enumerate(p)}, "confidence": 1.0}
+            else:                                   # noul: this mock "likes" stretched forms (canned, no model)
+                change = q["instructions"].split("become:")[-1]
+                answers[qid] = {"type": "noul", "noul": 0.85 if "stretched" in change else 0.2}
         if srv.behaviour == "malformed":
             answers.pop(next(iter(answers)))
         elif srv.behaviour == "wrongtype":

@@ -146,6 +146,21 @@ def operations_questions(ops: list[str], ctx: dict) -> dict:
                           "instructions": "How strong should that transformation be?"}}
 
 
+LIKED = ("An artificial organism of black liquid metal changes its body, one transformation at a time, in front of "
+         "the performer who plays it. It is now {current}. Would the performer like it to become: {change}?")
+
+
+def liked_question(change: str, current: str) -> dict:
+    """One yes/no (Kev's ``noul``) question: would the performer like this change?  The Train page labels
+    exactly this question with your Good / Bad (brain/trainer.py), so a Kev fine-tuned on it answers it."""
+    return {"type": "noul", "instructions": LIKED.format(current=current or "a shape of its own", change=change)}
+
+
+def liked_questions(changes: list[str], current: str) -> dict:
+    """``liked_question`` for each change (``c0``, ``c1`` ...) - one prefill pass for all."""
+    return {f"c{i}": liked_question(ch, current) for i, ch in enumerate(changes)}
+
+
 def choice_confidence(p: list[float]) -> float:
     """Kev / TypeSafe: (p_max - 1/K) / (1 - 1/K)."""
     K = len(p)
@@ -167,4 +182,4 @@ def describe(info) -> str:
 
 
 __all__ = ["KevClient", "KevError", "is_local", "LETTERS", "INTENSITY", "state_text", "candidates_questions",
-           "operations_questions", "choice_confidence", "describe"]
+           "operations_questions", "choice_confidence", "describe", "liked_question", "liked_questions", "LIKED"]

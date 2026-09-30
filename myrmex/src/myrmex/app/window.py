@@ -41,6 +41,7 @@ from . import fx_tab as FT
 from . import responsive as R
 from . import takes_tab as TK
 from . import touch_tab as TT
+from . import train_tab as TR
 from .settings import AppSettings, characters_dir
 
 CLOCKS = [("auto", "Auto (best available)"), ("link", "Ableton Link"), ("osc", "Remote Script (Ableton)"),
@@ -133,6 +134,7 @@ class MainWindow(QMainWindow):
     PAGES = (("Live", "What the character hears and does, right now"),
              ("Character", "Who performs: a rigged character or one of the organisms"),
              ("Creature", "The organisms' parameters and events"),
+             ("Train", "Teach the brain your taste: one change of the body at a time, Good or Bad"),
              ("Camera", "Automatic director or your own shots"),
              ("Glove", "Hand Glove: the organism moves with your hand"),
              ("FX", "Afterimages, light trails and picture effects - drawn by Blender, horizontal or vertical"),
@@ -206,6 +208,7 @@ class MainWindow(QMainWindow):
         self.btn_blender = QPushButton("Open in Blender")
         self.btn_blender.clicked.connect(self.open_blender)
         builders = {"Live": self._live_tab, "Character": self._character_tab, "Creature": lambda: T.creature_tab(self),
+                    "Train": lambda: TR.train_tab(self),
                     "Camera": self._camera_tab, "Glove": lambda: T.glove_tab(self), "Inputs": self._inputs_tab,
                     "FX": lambda: FT.fx_tab(self), "TouchDesigner": lambda: TT.td_tab(self),
                     "MIDI": lambda: T.midi_tab(self),
@@ -222,6 +225,7 @@ class MainWindow(QMainWindow):
         self._nav_icons()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.currentRowChanged.connect(lambda i: R.wrap_labels(self.stack.widget(i)))   # (status lines)
+        self.nav.currentRowChanged.connect(lambda i: TR.focus(self) if i == self.page_index.get("Train") else None)
         self.nav.setCurrentRow(0)
         self._polish()
 
@@ -1051,6 +1055,8 @@ class MainWindow(QMainWindow):
             FT.refresh_fx(self)
         if self.stack.currentIndex() == self.page_index.get("Creature"):
             T.refresh_brain(self)
+        if self.stack.currentIndex() == self.page_index.get("Train"):
+            TR.refresh_train(self)
         st = self.engine.status()
         tok = theme.T
         if not st:

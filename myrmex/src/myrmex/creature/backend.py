@@ -85,9 +85,13 @@ class CreatureBackend:
         if ev and ev in self.events:
             self.engine.trigger_event(ev)
 
-    def tick(self, t: float, dt: float, notes, st):
-        fr = self.fx.update(t, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar)
-        self.engine.set_input(CreatureControlInput.from_frame(fr, notes, st.playing))
+    def tick(self, t: float, dt: float, notes, st, neutral: bool = False):
+        """One engine step.  ``neutral`` (training): no music reaches the organism."""
+        if neutral:
+            self.engine.set_input(CreatureControlInput())
+        else:
+            fr = self.fx.update(t, notes, beat=st.beat, tempo=st.bpm, beats_per_bar=st.beats_per_bar)
+            self.engine.set_input(CreatureControlInput.from_frame(fr, notes, st.playing))
         self.state = self.engine.update(dt)
         self.fresh = self.new_events()
         if self.frames is not None:

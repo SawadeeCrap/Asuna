@@ -120,6 +120,9 @@ class _Body:
         self.mat_goal = self.mat.copy()
         self.intent, self.intent_t, self.dwell = "CRUISE", 0.0, 6.0
         self.shapes = ()
+        from ..creature.colony import DEFORM
+        self.dfm = np.zeros(len(DEFORM))                       # as the engines: the form stretched, twisted ...
+        self.dfm_goal = np.zeros(len(DEFORM))
 
     def weights(self) -> np.ndarray:
         return softmax3(self.z)
@@ -169,9 +172,13 @@ class AbstractColony:
     def _alive(self) -> list:
         return list(range(self.nbodies))
 
+    def _is_static(self, k: int) -> bool:
+        return False
+
     @property
     def x(self) -> np.ndarray:
-        X = blend_cloud(self.bodies[0].weights(), self.geo)
+        from ..creature.colony import deform
+        X = deform(blend_cloud(self.bodies[0].weights(), self.geo), self.bodies[0].dfm)
         if self.nbodies > 1:                                   # parts fly apart
             k = np.arange(len(X)) % self.nbodies
             X = X + np.stack([np.cos(2.1 * k), np.sin(2.1 * k), 0.2 * k], 1) * 1.4 * (k > 0)[:, None]
@@ -208,6 +215,7 @@ class AbstractColony:
         b.dwell = float(self.rng.uniform(4.0, 10.0)) * (0.6 + 0.8 * self.params["coherence"])
         pick = shape or self._pick(prefs)
         b.goal_shape(pick)
+        b.dfm_goal = np.zeros(len(b.dfm_goal))
         b.mat_goal = np.array(MATERIAL[mstate])
         self.log.append((self.t, "engine", f"{intent}:{pick}"))
 
@@ -274,6 +282,7 @@ class AbstractColony:
         noise = self.rng.standard_normal(len(b.z)) * pr["mutation"] * 0.6 * math.sqrt(dt)
         noise[self.sit] = 0.0
         b.z += (b.z_goal - b.z) * min(1.0, dt / tau_m) + noise
+        b.dfm += (b.dfm_goal - b.dfm) * min(1.0, dt / tau_m)
         b.mat += (b.mat_goal - b.mat) * min(1.0, dt / (0.4 + 0.8 * pr["coherence"]))
 
 
@@ -311,7 +320,7 @@ def run(organism: str = "spear", mode: str = "deterministic", minutes: float = 5
         controls: dict | None = None, kev_url: str = "", hand: bool = True, engine: str = "abstract",
         dt: float | None = None, sample_dt: float = 0.5, trace: list | None = None,
         checkpoints: list | None = None, on_decision=None, kev_timeout: float = 0.8, kev=None,
-        kev_candidates: int = 6) -> dict:
+        kev_candidates: int = 6, reshape: bool = True) -> dict:
     """Run ``minutes`` of a performance; -> {"metrics", "stats", "decisions", "by_minutes"}.
 
     ``checkpoints`` (minutes): the metrics of the run's first 1, 5, 30 ... minutes too - the simulation is
@@ -319,7 +328,7 @@ def run(organism: str = "spear", mode: str = "deterministic", minutes: float = 5
     sees every decision-log line as it happens (the demo prints them)."""
     ctl = BrainControls(**(controls or {}))
     cfg = BrainConfig(enabled=True, mode=mode, controls=ctl, kev_url=kev_url, kev_timeout=kev_timeout, seed=seed,
-                      kev_candidates=kev_candidates)
+                      kev_candidates=kev_candidates, reshape=reshape, taste=False)
     if engine == "abstract":
         org = AbstractColony.of(organism, seed)
         eng = org

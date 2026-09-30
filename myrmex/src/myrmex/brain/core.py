@@ -29,8 +29,8 @@ import numpy as np
 
 from .candidates import Candidate, UserCue, evaluate, generate
 from .fingerprint import Fingerprint, Scale, embed
-from .kev_client import (INTENSITY, KevClient, KevError, candidates_questions, choice_confidence, operations_questions,
-                         state_text)
+from .kev_client import (INTENSITY, KevClient, KevError, candidates_questions, choice_confidence, liked_questions,
+                         operations_questions, state_text)
 from .memory import MorphMemory
 from .vocab import Vocabulary
 
@@ -82,9 +82,13 @@ class BrainConfig:
     kev_url: str = ""
     kev_timeout: float = 0.8
     kev_candidates: int = 6
+    kev_ask: str = "choice"          # Kev's question: "choice" (which of these?) | "liked" (would the performer like
+    #                                  each? - the question the Train page teaches it, brain/trainer.py)
     memory_size: int = 96
     seed: int = 0
     log_dir: str = ""                # a JSONL decision log per organism and day there ("" = none)
+    reshape: bool = True             # candidates that stretch / twist / bend the form (engines that can: colony family)
+    taste: bool = True               # your Good / Bad from the Train page weigh in (taste-<organism>.json in log_dir)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "BrainConfig":
@@ -95,13 +99,17 @@ class BrainConfig:
         mode = MODES.get(m.upper(), m) if len(m) == 1 else m
         return cls(enabled=bool(d.get("enabled", False)), mode=mode if mode in MODES.values() else "deterministic",
                    controls=ctl, kev_url=str(d.get("kev_url", "") or ""), kev_timeout=float(d.get("kev_timeout", 0.8)),
-                   kev_candidates=int(d.get("kev_candidates", 6)), memory_size=int(d.get("memory_size", 96)),
-                   seed=int(d.get("seed", 0)), log_dir=str(d.get("log_dir", "") or ""))
+                   kev_candidates=int(d.get("kev_candidates", 6)),
+                   kev_ask="liked" if str(d.get("kev_ask", "")) == "liked" else "choice",
+                   memory_size=int(d.get("memory_size", 96)), seed=int(d.get("seed", 0)),
+                   log_dir=str(d.get("log_dir", "") or ""), reshape=bool(d.get("reshape", True)),
+                   taste=bool(d.get("taste", True)))
 
     def to_dict(self) -> dict:
         return {"enabled": self.enabled, "mode": self.mode, "controls": asdict(self.controls), "kev_url": self.kev_url,
-                "kev_timeout": self.kev_timeout, "kev_candidates": self.kev_candidates,
-                "memory_size": self.memory_size, "seed": self.seed, "log_dir": self.log_dir}
+                "kev_timeout": self.kev_timeout, "kev_candidates": self.kev_candidates, "kev_ask": self.kev_ask,
+                "memory_size": self.memory_size, "seed": self.seed, "log_dir": self.log_dir, "reshape": self.reshape,
+                "taste": self.taste}
 
 
 # Feature flags (read once, when a live session starts; the app's own settings are the everyday way).
@@ -180,6 +188,7 @@ class Decision:
     label: str = ""
     latency_ms: float = 0.0
     probs: dict | None = None
+    deform: dict | None = None       # the form stretched / twisted / bent ... (creature.colony.DEFORM names)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -201,6 +210,17 @@ class BrainCore:
                       "kev_lowconf": 0, "kev_ms": [], "step_ms": [], "steps": 0, "step_ms_total": 0.0}
         self.log: list[dict] = []
         self.logged = 0                                     # decision-log lines so far (the log keeps the last 2000)
+        self.taste = None
+        self.load_taste()
+
+    def load_taste(self) -> None:
+        """Your Good / Bad from the Train page (``taste-<organism>.json`` in the log folder), when there is some."""
+        from .taste import Taste, taste_path
+        self.taste = None
+        path = taste_path(self.cfg.log_dir, self.vocab.organism)
+        if self.cfg.taste and path and os.path.isfile(path):
+            t = Taste.load(path)
+            self.taste = t if t.n >= 5 else None
 
     # ------------------------------------------------------------------ the tick
     def step(self, snap: Snapshot) -> Decision | None:
@@ -241,7 +261,8 @@ class BrainCore:
             self.stats["yields"] += 1                         # the hand is busy: let it lead
             return None
         self.stats["decisions"] += 1
-        cands = generate(self.vocab, snap.blend, snap.fp, self.memory, t, snap.energy, ctl, self.rng)
+        cands = generate(self.vocab, snap.blend, snap.fp, self.memory, t, snap.energy, ctl, self.rng,
+                         reshape=self.cfg.reshape and self.vocab.family == "colony")
         self._cands = cands
         if mode == "random":
             pool = [c for c in cands if c.op in ("SHIFT", "HYBRID")]
@@ -279,6 +300,7 @@ class BrainCore:
         appetite = 1.0 - math.exp(-(t - self.last_event) / lerp(150.0, 40.0, ctl.autonomy * ctl.novelty))
         ops = self.recent_ops[-6:]
         U = np.zeros(len(cands))
+        cur_emb = embed(snap.fp, self.scale) if self.taste is not None else None
         for i, c in enumerate(cands):
             f = c.feats
             v = (w_nov * f["novelty"] + w_con * f["continuity"] + w_idn * f["identity"] + w_usr * f["user"]
@@ -295,6 +317,9 @@ class BrainCore:
                     v -= 0.8 * (1.0 - ctl.autonomy)
             elif c.op in ("INTENSIFY", "DISSOLVE"):
                 v += 0.5 * held * (0.5 + ctl.mutation)
+            if cur_emb is not None and c.op != "HOLD" and c.fp is not None:   # your Good / Bad (Train page)
+                from .taste import candidate_features
+                v += 0.35 * float(np.clip(self.taste.logit(candidate_features(c, cur_emb, self.scale)), -3.0, 3.0))
             c.utility = float(v)
             U[i] = v
         return U
@@ -311,11 +336,16 @@ class BrainCore:
         state = state_text(self.vocab.organism, self.vocab.free, self.vocab.signature(), summary)
         ctx = {"music": snap.music or ("playing" if snap.playing else "silent") + f", energy {snap.energy:.1f}",
                "hand": _hand_words(snap.user)}
+        liked = mode == "kev_candidates" and self.cfg.kev_ask == "liked"
         if mode == "kev_candidates":
             order = np.argsort(-U)[:max(2, self.cfg.kev_candidates)]
             pool = [cands[i] for i in order]
-            questions = candidates_questions(pool, ctx)
-            keys = [chr(ord("A") + i) for i in range(len(pool))]
+            if liked:                                         # "would the performer like it?" for each (Train page)
+                questions = liked_questions([c.describe() for c in pool], _blend_words(snap.fp.w, self.vocab.forms))
+                keys = list(questions)
+            else:
+                questions = candidates_questions(pool, ctx)
+                keys = [chr(ord("A") + i) for i in range(len(pool))]
         else:
             pool, keys = [], []
             by_form = {}
@@ -339,14 +369,17 @@ class BrainCore:
         ms = (time.perf_counter() - t0) * 1000.0
         self.stats["kev_ms"].append(ms)
         del self.stats["kev_ms"][:-500]
-        probs = [float(ans["next"]["probabilities"].get(k, 0.0)) for k in keys]
+        if liked:
+            probs = [float(ans[k].get("noul", 0.0)) for k in keys]
+        else:
+            probs = [float(ans["next"]["probabilities"].get(k, 0.0)) for k in keys]
         s = sum(probs)
         if s <= 0:
             self.stats["kev_fail"] += 1
             return None
         pk = np.array(probs) / s
         conf = choice_confidence(list(pk))
-        level = float(ans["intensity"].get("score", 1.0))
+        level = None if liked else float(ans["intensity"].get("score", 1.0))
         if mode != "kev_candidates":                         # D / E: Kev's own pick
             j = int(np.argmax(pk))
             return pool[j], "kev", conf, dict(zip(keys, map(float, pk))), level, ms
@@ -386,7 +419,7 @@ class BrainCore:
         self.stats["commits"] += 1
         self.pending_goal = (snap.t, {"blend": dict(c.blend), "material": c.material})
         d = Decision(snap.t, c.op, dict(c.blend), c.material, c.event, strength, hold, source, None, nov,
-                     utility or c.utility, c.describe())
+                     utility or c.utility, c.describe(), deform=dict(c.deform) if c.deform else None)
         if kev is not None:
             d.confidence, d.probs, d.latency_ms = kev
         self._log(snap, c, source, kev, d)
