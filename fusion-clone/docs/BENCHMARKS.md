@@ -167,6 +167,11 @@ FUSION algorithm layer (16 voices, BALANCED, 110 Hz): RATIO mode 5.15 %, HZ mode
 of the algorithm, not of the machine). Cost of a single call of `process()` (R2, first run of the workflow, `-O2`): **141 – 171 µs at most in every
 cell; 201 samples above 100 µs at 20 Hz HIGH/ULTRA (all others: one), none above 250 µs**, against 20.8 µs of budget per sample and 5.3 ms per block.
 
+Inside a real Rack (`tests/rack_smoke.sh`, job *Load in Rack (mac-arm64)*, run 36640510342): VCV Rack Free 2.6.6 running headless on the same kind of M1 VM
+with a Fundamental VCO patched into Fusion Clone (16 voices, ULTRA, FUSION) for 20 s used **0.80 CPU seconds in 21 s of wall time (3.8 % of one core,
+including Rack's own start-up) and 27 MB of memory**; the module reported `LOCKED, 261.63 Hz, safety-net hits 0` at the end. Note that no audio device
+was involved (the CI VM has none), so this is the load of Rack's engine plus the module, not of a real audio callback.
+
 What this does and does not say:
 
 * At 16 voices the steady load is **2 – 5 % of one core in ECO/BALANCED and up to 19 % at 20 Hz in HIGH/ULTRA**, and the worst 256-sample block never

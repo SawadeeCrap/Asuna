@@ -18,7 +18,8 @@ name: fusion-clone
 on:
   push:
     branches: [claude/jolly-einstein-e9h02j, main]
-    paths: ['fusion-clone/**', '.github/workflows/fusion-clone.yml', '.github/actions/**']
+    # documentation and screenshots do not need a rebuild (README.md is packaged, but only as a text file)
+    paths: ['fusion-clone/**', '!fusion-clone/docs/**', '!fusion-clone/README.md', '.github/workflows/fusion-clone.yml', '.github/actions/**']
   workflow_dispatch:
     inputs:
       rack_sdk_version:
