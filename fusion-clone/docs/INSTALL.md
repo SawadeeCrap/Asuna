@@ -49,7 +49,7 @@ loads exactly this package into a real **VCV Rack Free 2.6.6 on an Apple-silicon
 its log shows the plugin loaded, the module created, and the module locked onto the VCO's pitch (details: `tests/rack_smoke.sh`, the job *Load in Rack
 (mac-arm64)*). The DSP test suite and the CPU benchmark run on an Apple M1 runner in the same workflow.
 
-You can repeat the load test against **your own Rack** (it uses a scratch user folder and does not touch your Rack settings; needs `brew install zstd`):
+You can repeat the load test against **your own Rack** (quit Rack first: the test starts its own windowless instance; it uses a scratch user folder and does not touch your Rack settings; needs `brew install zstd`):
 ```sh
 bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```

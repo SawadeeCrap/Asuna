@@ -49,7 +49,7 @@
 модуль захватил высоту осциллятора (подробности: `tests/rack_smoke.sh`, задача *Load in Rack (mac-arm64)*). DSP-тесты и бенчмарк CPU выполняются на
 раннере Apple M1 в том же workflow.
 
-Ту же проверку можно повторить **на вашем Rack** (она использует временную пользовательскую папку и не трогает ваши настройки Rack; нужен `brew install zstd`):
+Ту же проверку можно повторить **на вашем Rack** (сначала закройте Rack: тест запускает собственный экземпляр без окна; он использует временную пользовательскую папку и не трогает ваши настройки; нужен `brew install zstd`):
 ```sh
 bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```
