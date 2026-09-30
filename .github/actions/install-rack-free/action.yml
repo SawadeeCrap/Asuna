@@ -1,0 +1,44 @@
+name: Install Rack Free
+description: Installs the free edition of VCV Rack (plus the tools the Fusion Clone smoke tests need) on a GitHub-hosted runner and exports the Rack executable as RACK_BIN.
+runs:
+  using: composite
+  steps:
+    - name: Tools
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = macOS ]; then
+          brew list zstd >/dev/null 2>&1 || brew install zstd
+        else
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd xvfb imagemagick libgl1-mesa-dri libasound2t64 libgl1 libglu1-mesa libgtk-3-0t64 libjack-jackd2-0 libpulse0 \
+            || sudo apt-get install -y -qq zstd xvfb imagemagick libgl1-mesa-dri libasound2 libgl1 libglu1-mesa libgtk-3-0 libjack-jackd2-0 libpulse0 \
+            || true
+        fi
+    - name: Rack Free
+      shell: bash
+      run: |
+        base=https://vcvrack.com/downloads
+        if [ "$RUNNER_OS" = macOS ]; then
+          names="RackFree-latest-mac-x64+arm64.pkg RackFree-2.6.6-mac-x64+arm64.pkg"
+        else
+          names="RackFree-latest-lin-x64.zip RackFree-2.6.6-lin-x64.zip"
+        fi
+        got=
+        for n in $names; do
+          dl="$RUNNER_TEMP/rackfree.${n##*.}"
+          code=$(curl -sSL -o "$dl" -w '%{http_code}' "$base/$n") || code=curl-failed
+          echo "$code  $base/$n"
+          if [ "$code" = 200 ]; then got=$dl; break; fi
+        done
+        test -n "$got" || { echo "could not download Rack Free"; exit 1; }
+        ls -l "$got"; file "$got"
+        if [ "$RUNNER_OS" = macOS ]; then
+          sudo installer -pkg "$got" -target /
+          rack=$(find /Applications -maxdepth 5 -type f -name Rack -path '*MacOS*' | head -n1)
+        else
+          unzip -q -o "$got" -d "$HOME"
+          rack=$(find "$HOME" -maxdepth 2 -type f -name Rack | head -n1)
+        fi
+        echo "Rack executable: $rack"
+        test -x "$rack"
+        echo "RACK_BIN=$rack" >> "$GITHUB_ENV"

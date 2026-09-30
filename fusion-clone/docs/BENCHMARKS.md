@@ -1,10 +1,11 @@
 # Benchmarks
 
-All numbers below were measured **on the build machine, not on the target**: an Intel Xeon @ 2.8 GHz (4 cores, 33 MB L3) in a Linux container,
-`g++ 13 -O3 -march=native` (tools) / `-O2 -march=native` (tests), 48 kHz, pffft as FFT backend. Nothing was measured on Apple silicon (the
-NEON code path is compiled and inspected but never executed here), and nothing was measured inside Rack. Treat the figures as *relative*
-(quality mode against quality mode, voices against voices, pitch against pitch) and as evidence that the worst case is bounded; expect an M4 Pro
-core to be at least as fast per sample, but that is an expectation, not a measurement.
+The numbers in §1 – §4 were measured **on the build machine, not on the target**: an Intel Xeon @ 2.8 GHz (4 cores, 33 MB L3) in a Linux
+container, `g++ 13 -O3 -march=native` (tools) / `-O2 -march=native` (tests), 48 kHz, pffft as FFT backend. §6 repeats the benchmark on an
+**Apple M1 virtual machine** (GitHub Actions `macos-14`, 3 cores, shared): there the NEON code path ran and every DSP test passed. Nothing was
+measured on a real Mac or inside a Rack session with other modules (§5). Treat the figures as *relative* (quality mode against quality mode,
+voices against voices, pitch against pitch) and as evidence that the worst case is bounded; a current Apple-silicon desktop/laptop core is
+expected to be at least as fast as the M1 VM core, but that is an expectation, not a measurement.
 
 Method: the engine is **deterministic**, so every cell is measured as the *fastest of three identical runs* (or, for per-sample and per-block
 figures, the per-sample/per-block minimum over three runs), which removes scheduler noise and interrupts and leaves the compute cost. Input: a
@@ -120,6 +121,58 @@ every output sample finite and bounded (R3).
 
 ## 5. Not measured
 
-CPU inside Rack with other modules running, on macOS/Apple silicon (NEON path, Apple's `libm`, Rack's own pffft build), with Rack's default
-`-march` flags (Rack builds plugins for `nehalem` on x86-64 and generic ARMv8 on arm64), at 44.1/96/192 kHz (the engine is tested for correctness
-there, `tests/test_engine.cpp` robustness section, not benchmarked), or under memory pressure. `tools/bench` is the tool to run on the target.
+CPU inside Rack with other modules running, on real Mac hardware (§6 is a shared virtual machine), with Rack's default `-march` flags on the
+build machine (Rack builds plugins for `nehalem` on x86-64 and generic ARMv8 on arm64; §6 uses the arm64 flags, §1 – §4 use `-march=native`), at
+44.1/96/192 kHz (the engine is tested for correctness there, `tests/test_engine.cpp` robustness section, not benchmarked), or under memory
+pressure. `tools/bench` is the tool to run on the target.
+
+## 6. Apple silicon — GitHub Actions `macos-14` (Apple M1, virtual, 3 cores, shared)
+
+Produced by the `DSP tests (macos-14)` job of `.github/workflows/fusion-clone.yml` (run 36640266691, commit `8806b4b`; run 36639407374 gave the same
+picture within the noise below). The benchmark is built with **the flags Rack uses for the plugin**: `-std=c++11 -O3 -funsafe-math-optimizations
+-fno-omit-frame-pointer -march=armv8-a+fp+simd`, pffft (NEON) as FFT backend; same method and input as §1. The DSP tests (`make -C tests all`,
+including the lock matrix, dynamics, artifact, real-time and stress tests) passed on this machine both with plain `-O2` and with those flags.
+
+CPU load, % of one core of this VM (100 % = real-time limit of one core), fastest of three identical runs per cell:
+
+| quality | pitch | 1 voice | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|---|
+| ECO | 20 Hz | 1.68 | 2.05 | 2.28 | 3.33 | 4.94 |
+| ECO | 110 Hz | 0.80 | 0.95 | 1.16 | 1.63 | 2.24 |
+| ECO | 440 Hz | 1.37 | 1.29 | 1.45 | 1.94 | 2.76 |
+| ECO | 3520 Hz | 1.63 | 1.43 | 1.65 | 2.13 | 2.90 |
+| BALANCED | 20 Hz | 1.85 | 1.96 | 2.46 | 3.28 | 4.98 |
+| BALANCED | 110 Hz | 0.99 | 1.09 | 1.36 | 1.81 | 3.60 |
+| BALANCED | 440 Hz | 1.33 | 1.55 | 1.41 | 1.98 | 2.89 |
+| BALANCED | 3520 Hz | 1.47 | 1.57 | 1.65 | 2.11 | 3.86 |
+| HIGH | 20 Hz | 3.72 | 4.44 | 6.31 | 9.88 | 18.75 |
+| HIGH | 110 Hz | 1.24 | 1.47 | 1.91 | 2.56 | 4.22 |
+| HIGH | 440 Hz | 1.39 | 1.53 | 1.88 | 2.52 | 4.50 |
+| HIGH | 3520 Hz | 1.83 | 2.10 | 2.49 | 3.35 | 4.97 |
+| ULTRA | 20 Hz | 3.63 | 4.54 | 6.14 | 9.60 | 16.02 |
+| ULTRA | 110 Hz | 1.65 | 1.83 | 2.25 | 3.23 | 5.05 |
+| ULTRA | 440 Hz | 1.33 | 1.65 | 2.39 | 3.36 | 4.49 |
+| ULTRA | 3520 Hz | 1.84 | 1.90 | 2.41 | 3.32 | 5.03 |
+
+Most expensive 256-sample block at 16 voices, % of the block's budget (5.33 ms):
+
+| quality | 20 Hz | 110 Hz | 440 Hz | 3520 Hz |
+|---|---|---|---|---|
+| ECO | 8.6 | 3.8 | 3.5 | 4.8 |
+| BALANCED | 21.9 | 4.3 | 4.1 | 4.0 |
+| HIGH | 21.2 | 6.2 | 4.8 | 5.7 |
+| ULTRA | 22.5 | 6.6 | 5.5 | 6.3 |
+
+FUSION algorithm layer (16 voices, BALANCED, 110 Hz): RATIO mode 5.15 %, HZ mode 3.89 %. Clone bloom-in times are the same as in §4 (they are a property
+of the algorithm, not of the machine). Cost of a single call of `process()` (R2, first run of the workflow, `-O2`): **141 – 171 µs at most in every
+cell; 201 samples above 100 µs at 20 Hz HIGH/ULTRA (all others: one), none above 250 µs**, against 20.8 µs of budget per sample and 5.3 ms per block.
+
+What this does and does not say:
+
+* At 16 voices the steady load is **2 – 5 % of one core in ECO/BALANCED and up to 19 % at 20 Hz in HIGH/ULTRA**, and the worst 256-sample block never
+  needs more than 23 % of its budget — on a shared virtual M1 core. Against the Xeon of §1 the same cell costs between about **40 % and 100 %**
+  of the Xeon's load (ECO 110 Hz / 16 voices 2.24 % against 5.30 %; the 20 Hz HIGH cell is the same on both, 18.8 % against 18.8 %).
+* The virtual machine is shared and noisy: cells differ by up to ±30 % between two runs of the same commit (for example the BALANCED 110 Hz / 16-voice
+  cell and the BALANCED 20 Hz worst block moved between runs). Read the table as an order of magnitude, not as a specification.
+* It is **not** a measurement of a real Mac, and not of a Rack session: Rack's own engine, the GUI thread, other modules and the audio driver are
+  absent (§5).
