@@ -73,11 +73,12 @@ bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vc
 | Suspected SIMD problem on a platform | Rebuild with the portable dot product: `FLAGS=-DFC_NO_SIMD make -j … && make install`. |
 | macOS blocks the downloaded plugin | `xattr -dr com.apple.quarantine …` as above. |
 | The display stays at *ACQUIRING* / *PASS-THRU* | The input must be a stable, monophonic, periodic oscillator (saw/tri/pulse/sine, optional sub); noise, chords and DC never lock by design. Check the input level (input meter in the display). |
-| CPU too high | Lower QUALITY (ECO/BALANCED) or VOICES; see `docs/BENCHMARKS.md` (the figures there are from an x86 Linux machine; the benchmark job in the GitHub run gives an Apple-silicon data point). |
+| CPU too high | Lower QUALITY (ECO/BALANCED) or VOICES; see `docs/BENCHMARKS.md` (§1–§4 are from an x86 Linux machine, §6 from an Apple M1 virtual machine). |
 
 ## Tell me what happens
 
-This code was never run inside Rack (no Rack, no display and no audio hardware where it was written). The most useful feedback after your first
-run: the Rack log (`log.txt`) if the plugin does not appear, a screenshot of the panel, the CPU meter at VOICES = 16 for each QUALITY, and how
-it *sounds* against your real oscillator(s) — `docs/REFERENCE_PROTOCOL.md` describes measurements that settle the open questions about the
-real Fusion VCO2.
+Nobody has *heard* this module and it has not run on your Mac yet: it was written without audio hardware, and what has been exercised is the DSP tests
+(x86 and Apple M1), the build against the Rack SDK, and a real Rack Free 2.6.6 loading the package and running it for 20 s in CI (plus a Linux
+screenshot of the panel in `docs/figures/rack/`). The most useful feedback after your first run: the Rack log (`log.txt`) if the plugin does not appear,
+a screenshot of the panel, the CPU meter at VOICES = 16 for each QUALITY, and how it *sounds* against your real oscillator(s) —
+`docs/REFERENCE_PROTOCOL.md` describes measurements that settle the open questions about the real Fusion VCO2.
