@@ -20,6 +20,8 @@ chorus, a generic pitch shifter, a supersaw or a phase-vocoder effect — see `d
 >
 > * the DSP core — unit and integration tests, lock-robustness matrix, dynamics, click/zipper and real-time tests, benchmarks — on x86 Linux **and on
 >   an Apple M1 machine** (GitHub Actions, `docs/BENCHMARKS.md` §6; the NEON code path ran there);
+> * minutes-long runs of the engine on realistic and hostile inputs (`tests/test_soak.cpp`: 12 – 13 minutes per scenario, every control randomised, NaN/Inf
+>   bursts) on Apple silicon and Linux, and shorter ones under AddressSanitizer / UBSan (`docs/ARCHITECTURE.md` §9.7);
 > * a headless instantiation of the real `Module` class against Rack's engine classes (parameter/CV mapping, patch save/load bit-exactness);
 > * **the plugin builds against the official Rack SDK 2.6.x for macOS arm64 and Linux x64**, and the package is inspected (arm64 Mach-O, ad-hoc signed,
 >   exports `init`, every pffft function it calls is exported by Rack);

@@ -446,7 +446,7 @@ clones' top octave is slightly darker than the original's. Inaudible for a sawto
 
 **9.6 Verification status.** Verified: the DSP suites on x86 Linux and on an Apple M1 machine (GitHub Actions; §7 and `docs/BENCHMARKS.md` §6), the
 plugin build against the official Rack SDK 2.6.x for macOS arm64 and Linux x64, the inspection of the resulting package (architecture, exported
-`init`, pffft resolved from Rack), and a real **VCV Rack Free 2.6.6** (macOS arm64 and Linux x64) that loads the package, creates the module and its
+`init`, pffft resolved from Rack), the soak and sanitizer runs of §9.7 on the same two platforms, and a real **VCV Rack Free 2.6.6** (macOS arm64 and Linux x64) that loads the package, creates the module and its
 panel widget and runs it for 20 s with a Fundamental VCO patched in: the module locks onto the oscillator and the safety net never fires
 (`tests/rack_smoke.sh`). *Not* verified: the appearance and behaviour of the GUI on a real screen (`tests/rack_gui_shot.sh` renders it in CI; see
 `docs/figures/rack/` if screenshots are present), real-time CPU on a real Mac inside a busy patch, and *listening*. Real-Fusion behaviour (sub sync,
@@ -483,7 +483,10 @@ invariants checked all along, an inter-harmonic-energy metric for "metallic", an
   millisecond. Under AddressSanitizer + UBSan + `float-cast-overflow` + `float-divide-by-zero` (GCC, x86-64): 3 runs of 12 minutes (48 / 96 kHz, three
   quality modes), and 13 more randomised 12-minute runs without the sanitizers at 44.1 – 96 kHz in all four quality modes: no memory error, no
   non-finite output, the safety net never fired (one run was stopped by the test's own output bound, which was too tight for a 50× input at +12 dB
-  output trim; corrected). These are x86-64 results; the CI workflow has jobs that repeat the sanitizer run on Apple silicon (clang) and Linux.
+  output trim; corrected). These are x86-64 results; the CI workflow repeats a shorter version under the same sanitizers on Apple silicon (macos-14, Apple clang, the NEON code
+  path) and on Linux: three chaos runs of 5 / 5 / 4 minutes (44.1 / 48 / 96 kHz) and a 4-minute `hw` run, all clean (GitHub Actions run 36714340543); the same
+  run also passes, without the sanitizers and on both platforms, the 12-minute `steady` / `seq` / `knobs` / `notes` soak runs, two 13-minute `hw` runs (48 and
+  44.1 kHz) and `chaos` runs of 12 minutes (48 kHz) and 6 minutes (96 kHz).
 * **A known weakness that is not fixed: hum close to the fundamental.** A tone that is not harmonic of the note - mains hum is the usual one - modulates
   the clones: on a 94.5 Hz note, 50 Hz hum at −31 dB (0.0039 against a note of 0.14 rms) puts sidebands at (n + ½)·f0 around every harmonic, −44 dB
   against the harmonics at BALANCED (−47 dB at ULTRA); without the hum the same note gives −54 / −60 dB (its own pitch drift), at −43 dB hum (0.001)
