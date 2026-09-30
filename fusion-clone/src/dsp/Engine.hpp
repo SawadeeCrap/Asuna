@@ -146,11 +146,15 @@ public:
 		envSm_ = envInst_ = 0.f;
 		envGain_ = 0.f;
 		noveltyShort_ = noveltyLong_ = 0.f;
+		noveltyArmed_ = false;
 		avgValid_ = false;
 		cancelBuild();
 		samplesSincePub_ = 1 << 20;
 		omegaS_ = 0.0;
 		stepMismatch_ = 0;
+		mismatchSince_ = 0;
+		judgedLane_ = -1;
+		judgedSeq_ = 0;
 		badHops_ = 0;
 		acqCount_ = 0;
 		doublingCount_ = 0;
@@ -344,6 +348,9 @@ public:
 		double P = analyzer_.active() ? analyzer_.period() : 0.0;
 		status_.bloomMs = (float) (P > 0 ? 1000.0 * P * (analyzer_.windowPeriods() + 3.0) / fs_ : 0.0);
 		status_.latencySamples = 0.f;
+		status_.dropsTotal = dropCount_[0] + dropCount_[1] + dropCount_[2] + dropCount_[3] + dropCount_[4];
+		status_.lastDropReason = lastDropReason_;
+		status_.guardHits = guardHits_;
 		return status_;
 	}
 
@@ -473,6 +480,7 @@ private:
 	void updateNovelty(float x) {
 		if (state_ != ST_LOCKED || !analyzer_.active()) {
 			noveltyShort_ = noveltyLong_ = 0.f;
+			noveltyArmed_ = false;
 			return;
 		}
 		const uint64_t n = ring_.count();
@@ -490,9 +498,20 @@ private:
 		noveltyShort_ += (e2 - noveltyShort_) * (1.f - std::exp(-1.f / tauFast));
 		noveltyLong_ += (e2 - noveltyLong_) * (1.f - std::exp(-1.f / (10.f * tauFast)));
 		const float floorV = 2e-3f * envInst_ * envInst_;
-		// Absolute floor: a glide's onset raises the one-period residual by a few % of the power, a real step/onset by tens of %.
-		if (lockAge_ > 6 && noveltyShort_ > 6.f * noveltyLong_ + floorV && noveltyShort_ > 0.10f * envInst_ * envInst_)
-			dropLock(1);
+		if (lockAge_ > 6) {
+			// Both estimates start from zero when the lock begins, so for the first ~10 time constants the slow one lags far behind whatever the
+			// fast one has settled to, and "fast > 6 x slow" says nothing about a change. With a residual of 8 - 14 % of the power (a saw with a
+			// 5 Hz vibrato at 55 Hz: the tracked frequency is always a little late) that made every fresh lock trip the detector, the lock was
+			// dropped, re-acquired 100 ms later, tripped again, and so on for as long as the note lasted. The slow estimate therefore starts from
+			// what the fast one shows when the detector is armed: only a *rise* against the level seen since then counts.
+			if (!noveltyArmed_) {
+				noveltyArmed_ = true;
+				noveltyLong_ = std::max(noveltyLong_, noveltyShort_);
+			}
+			// Absolute floor: a glide's onset raises the one-period residual by a few % of the power, a real step/onset by tens of %.
+			if (noveltyShort_ > 6.f * noveltyLong_ + floorV && noveltyShort_ > 0.10f * envInst_ * envInst_)
+				dropLock(1);
+		}
 	}
 
 	void dropLock(int reason = 0) {
@@ -518,12 +537,21 @@ private:
 		const PitchTracker::Estimate& e = tracker_.estimate();
 		if (cooldown_ > 0)
 			cooldown_--;
-		const bool loud = envInst_ > 3e-4f; // about -70 dB re 5 V
+		// The tracker re-reports a lane's last estimate whenever another lane runs. Every measurement is judged once, so that a single one cannot
+		// count as several "consecutive" confirmations of a streak, a mismatch or a period doubling.
+		const bool repeat = e.valid && e.lane == judgedLane_ && e.laneSeq == judgedSeq_;
+		judgedLane_ = e.valid ? e.lane : -1;
+		judgedSeq_ = e.laneSeq;
+		// about -70 dB re 5 V. envSm_ (fast attack, slow release) and not envInst_: before the first lock the instantaneous level is measured over
+		// a window of only 64 samples, which for a low note sees just the flat part of the wave and reads a tiny AC level most of the time
+		const bool loud = envSm_ > 3e-4f;
 		if (state_ == ST_IDLE) {
 			if (!e.valid || e.conf < 0.85f || !loud || cooldown_ > 0) {
 				estStreak_ = 0;
 				return;
 			}
+			if (repeat)
+				return;
 			if (estStreak_ > 0 && std::fabs(e.period / lastEstPeriod_ - 1.0) < 0.03)
 				estStreak_++;
 			else
@@ -534,12 +562,16 @@ private:
 			if (estStreak_ >= 2 && (double) (ring_.count() - dropSample_) >= need)
 				beginAcquisition(refinePeriod(e.period));
 		} else if (state_ == ST_LOCKED) {
-			// verification: repeated confident estimates that match neither the tracked period nor a simple multiple of it
-			if (e.valid && e.conf > 0.9f) {
+			// verification: confident estimates that match neither the tracked period nor a simple multiple of it, at least three of them
+			// (independent measurements) over at least 40 ms. A real step keeps disagreeing (and the novelty and coherence detectors see it
+			// within a few ms anyway); a lane's momentary misjudgement must not cost the listener a drop-out of all the clones.
+			if (e.valid && e.conf > 0.9f && !repeat) {
 				const double ratio = e.period / analyzer_.period();
 				bool consistent = std::fabs(ratio - 1.0) < 0.05 || std::fabs(ratio - 0.5) < 0.03 || std::fabs(ratio - 2.0) < 0.08;
 				if (!consistent) {
-					if (++stepMismatch_ >= 3) {
+					if (stepMismatch_++ == 0)
+						mismatchSince_ = ring_.count();
+					if (stepMismatch_ >= 3 && ring_.count() - mismatchSince_ >= (uint64_t) (0.04 * fs_)) {
 						stepMismatch_ = 0;
 						dropLock(2);
 					}
@@ -1128,6 +1160,7 @@ private:
 	float dcSlow_ = 0.f, dcCoef_ = 0.f;
 	float envSm_ = 0.f, envInst_ = 0.f, envGain_ = 0.f, envSlew_ = 0.02f;
 	float noveltyShort_ = 0.f, noveltyLong_ = 0.f;
+	bool noveltyArmed_ = false;
 
 	// state machine
 	State state_ = ST_IDLE;
@@ -1147,7 +1180,9 @@ private:
 	std::unique_ptr<RealFFT> refFft_;
 	AlignedBuffer<float> refA_, refB_, refSpecA_, refSpecB_;
 
-	uint64_t acqStartSample_ = 0, slowFadeUntil_ = 0;
+	uint64_t acqStartSample_ = 0, slowFadeUntil_ = 0, mismatchSince_ = 0;
+	int judgedLane_ = -1;   // (lane, run) of the tracker measurement onTrackerEstimate() judged last
+	uint32_t judgedSeq_ = 0;
 	int guardHits_ = 0;
 	int lastDropReason_ = 0;
 	int dropCount_[5] = {0, 0, 0, 0, 0};

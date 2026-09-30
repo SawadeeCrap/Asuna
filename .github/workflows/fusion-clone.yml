@@ -11,6 +11,9 @@
 #   * "DSP tests" run tests/ (portable code, pffft as FFT backend) twice - once with plain -O2 and once with the optimisation flags the plugin
 #     itself is built with (Rack's -O3 -funsafe-math-optimizations -march=...) - and, on Apple silicon, the CPU benchmark (numbers are those of a
 #     shared GitHub VM, informative only).
+#   * "Soak" jobs push minutes of audio through the engine (steady / sequenced / knob-twiddling / random-note / hardware-like / chaos inputs) and check
+#     the invariants that only a long run can break; "Sanitizers" runs the chaos input and the tracker / dynamics tests under AddressSanitizer and
+#     UndefinedBehaviorSanitizer (float -> int conversions and float divisions by zero included) on Apple silicon and on Linux.
 #
 # The SDK is downloaded from vcvrack.com (RACK_SDK_VERSION = "latest" or e.g. "2.5.2"; pick the version that matches your Rack).
 name: fusion-clone
@@ -220,3 +223,74 @@ jobs:
           cat soak_*.status
           for f in soak_*.txt; do echo "===== $f"; grep -E "minute|FAIL|t=|PASSED|FAILED" "$f" | tail -30; done
           if grep -l "FAILED" soak_*.txt; then exit 1; fi
+
+  soak-hw:
+    name: Soak test, hardware-like and chaos inputs (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-14, march: '-march=armv8-a+fp+simd'}
+          - {os: ubuntu-latest, march: '-march=nehalem'}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true      # informational until it has proven stable; a failure is a real finding, read its log
+    timeout-minutes: 60
+    env:
+      PLUGIN_OPT: -std=c++11 -O3 -funsafe-math-optimizations -fno-omit-frame-pointer ${{ matrix.march }} -Wall -Wextra -Wno-unused-parameter
+    steps:
+      - uses: actions/checkout@v4
+      - name: pffft (FFT backend of the plugin)
+        run: git clone --depth 1 https://github.com/marton78/pffft.git "$RUNNER_TEMP/pffft"
+      - name: Build the soak test with the plugin's flags
+        working-directory: fusion-clone/tests
+        run: CXXFLAGS="$PLUGIN_OPT" make PFFFT="$RUNNER_TEMP/pffft" test_soak
+      - name: Minutes of hardware-like notes and of hostile input through the engine (four runs in parallel)
+        working-directory: fusion-clone/tests
+        run: |
+          run() { name=$1; shift; ./test_soak "$@" > "soak_$name.txt" 2>&1; echo "$name: exit status $?" > "soak_$name.status"; }
+          run hw48 13 48000 hw 3 16 &
+          run hw44 13 44100 hw 2 16 &
+          SOAK_SEED=2 run chaos48 12 48000 chaos 3 16 &
+          SOAK_SEED=3 run chaos96 6 96000 chaos 1 16 &
+          wait
+          cat soak_*.status
+          for f in soak_*.txt; do echo "===== $f"; grep -E "minute|FAIL|t=|PASSED|FAILED" "$f" | tail -30; done
+          if grep -l "FAILED" soak_*.txt; then exit 1; fi
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true      # informational until it has proven stable; a report is a real finding, read its log
+    timeout-minutes: 60
+    env:
+      # float-cast-overflow: a NaN / huge float converted to an int is undefined and differs between x86 (INT_MIN) and Apple silicon (0 / INT_MAX)
+      SAN: -fsanitize=address,undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all -fno-omit-frame-pointer
+    steps:
+      - uses: actions/checkout@v4
+      - name: pffft (FFT backend of the plugin)
+        run: git clone --depth 1 https://github.com/marton78/pffft.git "$RUNNER_TEMP/pffft"
+      - name: Build the tests with the sanitizers
+        working-directory: fusion-clone/tests
+        run: CXXFLAGS="-std=c++11 -O1 -g $SAN -pthread -Wall -Wextra -Wno-unused-parameter" make -j3 PFFFT="$RUNNER_TEMP/pffft" test_soak test_tracker test_dynamics test_analyzer
+      - name: Unit tests under the sanitizers
+        working-directory: fusion-clone/tests
+        run: |
+          ./test_analyzer
+          ./test_tracker quick
+          ./test_dynamics
+      - name: Chaos input (all controls, hostile signals, NaN / Inf bursts) and hardware-like notes under the sanitizers
+        working-directory: fusion-clone/tests
+        run: |
+          run() { name=$1; shift; ./test_soak "$@" > "san_$name.txt" 2>&1; echo "$name: exit status $?" > "san_$name.status"; }
+          SOAK_SEED=1 run chaos1 5 48000 chaos 3 16 &
+          SOAK_SEED=2 run chaos2 5 44100 chaos 1 16 &
+          SOAK_SEED=3 run chaos3 4 96000 chaos 2 16 &
+          run hw 4 48000 hw 3 16 &
+          wait
+          cat san_*.status
+          for f in san_*.txt; do echo "===== $f"; grep -E "runtime error|ERROR: |SUMMARY|FAIL|t=|PASSED|FAILED" "$f" | tail -30; done
+          if grep -lE "runtime error|ERROR: AddressSanitizer|FAILED" san_*.txt; then exit 1; fi

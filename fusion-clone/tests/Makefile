@@ -4,6 +4,7 @@
 #   make quick        only the fast component tests (FFT, sinc, Hilbert, pitch tracker, cycle analyser)
 #   make engine       only the engine test suite (a few minutes)
 #   make lock         lock-robustness matrix (waveform x pitch); `./test_lock full` covers all four quality modes
+#   make tracker      pitch tracker: no confident wrong estimates at any pitch or lane edge (half a minute)
 #   make dynamics     vibrato, SUB sweep, WAVE switch, note gap
 #   make realtime     allocation-free / finite / per-sample cost check of the audio path
 #   make PFFFT=/path/to/pffft   use pffft instead of the built-in FFT (what the plugin uses)
@@ -27,14 +28,15 @@ ifdef PFFFT
 endif
 
 QUICK := test_fft test_sinc test_hilbert test_pitch test_analyzer
-ALL := $(QUICK) test_lock test_dynamics test_artifacts test_engine test_realtime
+ALL := $(QUICK) test_tracker test_lock test_dynamics test_artifacts test_engine test_realtime
 
-.PHONY: all quick engine lock dynamics artifacts realtime soak clean
+.PHONY: all quick engine lock tracker dynamics artifacts realtime soak clean
 .SECONDARY:
 all: $(ALL:%=run-%)
 quick: $(QUICK:%=run-%)
 engine: run-test_engine
 lock: run-test_lock
+tracker: run-test_tracker
 dynamics: run-test_dynamics
 artifacts: run-test_artifacts
 realtime: run-test_realtime

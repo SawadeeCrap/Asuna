@@ -32,7 +32,7 @@
 1. Откройте <https://github.com/SawadeeCrap/Asuna/actions/workflows/fusion-clone.yml> и зайдите в самый свежий запуск ветки
    `claude/jolly-einstein-e9h02j`, у которого задачи **Plugin (mac-arm64)** и **Load in Rack (mac-arm64)** зелёные (галочки в списке задач запуска).
 2. Внизу страницы запуска, в разделе **Artifacts**, скачайте **FusionClone-mac-arm64** (`.zip` около 85 КБ; нужно быть залогиненным в GitHub)
-   и распакуйте. Внутри `FusionClone-2.0.0-mac-arm64.vcvplugin`. GitHub хранит артефакты 90 дней; потом перезапустите workflow (Actions →
+   и распакуйте. Внутри `FusionClone-2.0.1-mac-arm64.vcvplugin`. GitHub хранит артефакты 90 дней; потом перезапустите workflow (Actions →
    *fusion-clone* → *Run workflow*) или соберите из исходников (А).
 3. Установка: дважды кликните по `.vcvplugin` (Rack установит его сам) **или** скопируйте файл в
    `~/Library/Application Support/Rack2/plugins-mac-arm64/` и запустите Rack — Rack сам распакует пакет при старте.
@@ -51,7 +51,7 @@
 
 Ту же проверку можно повторить **на вашем Rack** (сначала закройте Rack: тест запускает собственный экземпляр без окна; он использует временную пользовательскую папку и не трогает ваши настройки; нужен `brew install zstd`):
 ```sh
-bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
+bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.1-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```
 (для Rack Pro: `"/Applications/VCV Rack 2 Pro.app/Contents/MacOS/Rack"`). В конце будет `RACK SMOKE TEST: PASS` или `FAIL` и лог Rack.
 
@@ -74,6 +74,8 @@ bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vc
 | macOS блокирует скачанный плагин | `xattr -dr com.apple.quarantine …` как выше. |
 | Дисплей висит на *ACQUIRING* / *PASS-THRU* | На входе должен быть стабильный монофонический периодический сигнал (saw/tri/pulse/sine, можно с суб-осциллятором); шум, аккорды и постоянная составляющая по замыслу не захватываются. Проверьте уровень входа. |
 | Слишком высокая загрузка CPU | Снизьте QUALITY (ECO/BALANCED) или VOICES; в `docs/BENCHMARKS.md` §1–§4 — x86-Linux, §6 — виртуальная машина Apple M1. |
+| Через какое-то время металлический, «дребезжащий» или мигающий звук клонов на треугольнике или пиле на определённых нотах (около 46–47, 165–168 и 590–597 Гц) | Исправлено в **2.0.1**: трекер высоты принимал такую ноту за период на 7 % короче, захват сбрасывался и заново ловился десятки раз в секунду (клоны мигали). Какая сборка у вас стоит, видно по строке `Loaded plugin FusionClone v2.0.1` в `log.txt`; если и в 2.0.1 так бывает, в `log.txt` появится строка `Fusion Clone: the lock was dropped N times in the last 2 s …` — пришлите её вместе с высотой ноты и формой волны. |
+| Rack вылетает | Пришлите: (1) самый новый файл `~/Library/Logs/DiagnosticReports/Rack*.ips` (или Console.app → Crash Reports → *Rack*), (2) последние 100 строк `~/Library/Application Support/Rack2/log.txt`, (3) что подключено и положения VOICES / QUALITY / переключателя FUSION, а также частоту дискретизации аудиоустройства. Без отчёта о вылете нельзя сказать, виноват плагин, Rack или аудиодрайвер. |
 
 ## Что мне важно узнать после первого запуска
 

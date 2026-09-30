@@ -23,7 +23,7 @@ static std::vector<float> scaled(std::vector<float> x, float g) {
 int main() {
 	// ---- D1 vibrato -----------------------------------------------------------------------------------------------------------
 	printf("D1  vibrato: +-15 cents at 5 Hz\n");
-	for (int q : {1, 2}) {
+	for (int q : {0, 1, 2, 3}) {
 		for (double f0 : {55.0, 110.0, 220.0, 880.0}) {
 			SourceSpec s;
 			s.fs = FS; s.f0 = f0; s.seconds = 4.0; s.seed = 5; s.noiseDb = -80;
@@ -53,7 +53,7 @@ int main() {
 			// The frequency measurement refers to the window centre, (M/2) periods in the past; at M = 4 and 55 Hz that is 36 ms, 65 degrees of a 5 Hz
 			// vibrato, which no predictor can bridge. There the requirement is only "stay locked and do not make the modulation worse"
 			// (the modulation itself is 10.6 cents rms); everywhere else the clones must follow within 6 cents rms.
-			const double limit = (q >= 2 && f0 < 100.0) ? 14.0 : 6.0;
+			const double limit = (q >= 2 && f0 < 100.0) ? 14.0 : (q == 0 && f0 < 100.0 ? 7.0 : 6.0); // ECO (M = 2) follows a little worse than BALANCED at 55 Hz
 			CHECK(lockedFrac > 0.97 && drops == 0 && rms < limit, "q%d %6.1f Hz: locked %.3f, drops %d, clone-vs-source pitch error %.2f cents rms (limit %.0f)", q, f0, lockedFrac, drops, rms, limit);
 		}
 	}

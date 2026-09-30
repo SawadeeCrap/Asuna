@@ -27,6 +27,12 @@ chorus, a generic pitch shifter, a supersaw or a phase-vocoder effect — see `d
 >   Fundamental VCO patched in: the module locks onto the oscillator (261.63 Hz) with 16 voices and the NaN/Inf safety net never fires**
 >   (`tests/rack_smoke.sh`, `docs/INSTALL.md`).
 >
+> * **Version 2.0.1 fixes a defect found by the first user report** ("worked for five minutes, then a metallic sound, then Rack crashed"): the pitch
+>   tracker was confidently wrong at pitches just below its lane edges (triangle wave at ≈ 46.6, 166 and 591.5 Hz: every estimate), which made the lock
+>   drop and re-acquire dozens of times a second — the clones flickered in and out. Found by the new long-run tests (`tests/test_soak.cpp`), fixed, with
+>   regression tests (`tests/test_tracker.cpp` and more); details in `docs/ARCHITECTURE.md` §9.7. **The crash itself was not reproduced and its cause
+>   is unknown**; `docs/INSTALL.md` lists what to send if Rack quits again.
+>
 > What was **not** verified: how the panel looks and feels on a real screen (unless a screenshot is listed under `docs/figures/rack/`), real-time CPU
 > on a real Mac inside a busy patch, and — most importantly — **listening**: nobody has heard this module. The perceptual claims rest on objective proxy
 > metrics measured on a *synthetic hypothesis model* of the source (`docs/RESEARCH.md`), not on recordings of the real module.
@@ -109,6 +115,9 @@ wrapper) or drop the define to fall back to the built-in radix-2 FFT (slower but
 ```sh
 make -C tests                 # every DSP test with the portable FFT (about ten minutes: components, lock matrix, dynamics, engine, real-time)
 make -C tests quick           # component tests only (FFT, sinc, Hilbert, tracker, analyser), seconds
+make -C tests tracker         # pitch tracker: no confident wrong estimate at any pitch or lane edge (half a minute)
+make -C tests soak            # minutes of audio through the engine: steady / sequenced / knobs / random notes / hardware-like / chaos (36 min)
+tests/test_soak 12 48000 chaos 3 16    # one scenario: minutes, sample rate, scenario, quality, voices (SOAK_SEED=n draws another random run)
 make -C tests artifacts       # click / zipper / fade / aliasing probes on a pure tone
 make -C tests realtime        # allocation counter, randomised stress, per-sample cost of the audio path
 make -C tools                 # fusionclone_cli (offline renderer / A-B ladder) and bench (CPU per quality x voices x pitch, bloom table)

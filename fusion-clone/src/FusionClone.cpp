@@ -224,6 +224,39 @@ struct FusionCloneWidget : ModuleWidget {
 		addOutput(createOutputCentered<PJ301MPort>(Vec(POS_OUT_R), module, FusionClone::R_OUTPUT));
 	}
 
+	// Diagnostics for Rack's log.txt, from the GUI thread (never the audio thread): a lock that is dropped over and over makes the clone layer
+	// stutter, and the safety net firing means a bug. Both deserve one line that a bug report can quote. Rate limited.
+	double lastCheck = 0.0, lastWarn = -1e9;
+	int lastDrops = 0, lastGuard = 0;
+	void step() override {
+		ModuleWidget::step();
+		FusionClone* m = dynamic_cast<FusionClone*>(module);
+		if (!m)
+			return;
+		const double now = system::getTime();
+		if (now - lastCheck < 2.0)
+			return;
+		lastCheck = now;
+		fc::EngineStatus st;
+		int voices = 0, quality = 0, algorithm = 0;
+		float range = 0.f;
+		bool connected = false, poly = false;
+		if (!m->readSnapshot(st, voices, quality, algorithm, range, connected, poly))
+			return;
+		const int drops = st.dropsTotal - lastDrops;
+		lastDrops = st.dropsTotal;
+		if (drops >= 8 && now - lastWarn > 60.0) {
+			lastWarn = now;
+			WARN("Fusion Clone: the lock was dropped %d times in the last 2 s (last reason %d: 1 novelty, 2 tracker mismatch, 3 coherence, 4 doubling); repeating unit %.2f Hz, input %.1f dB. "
+			     "The clones flicker while this lasts; please report the pitch and waveform.",
+			     drops, st.lastDropReason, st.unitFreqHz, (double) st.inputLevelDb);
+		}
+		if (st.guardHits != lastGuard) {
+			lastGuard = st.guardHits;
+			WARN("Fusion Clone: the engine's safety net intervened (%d time(s) so far); this should never happen, please report it.", st.guardHits);
+		}
+	}
+
 	void appendContextMenu(ui::Menu* menu) override {
 		FusionClone* m = dynamic_cast<FusionClone*>(module);
 		if (!m)

@@ -8,7 +8,7 @@ Generated from `src/FusionCloneModule.hpp` (the single source of truth for ids, 
 | Field | Value |
 |---|---|
 | slug / module slug | `FusionClone` / `FusionClone` |
-| version | 2.0.0 (patch-data version 2) |
+| version | 2.0.1 (patch-data version 2) |
 | tags | Effect, Oscillator |
 | license | GPL-3.0-or-later |
 | Rack API | Rack 2 (`ARCH` any; C++11) |
@@ -93,3 +93,13 @@ automated test can see that the plugin was instantiated and what the engine was 
 
 `last state` is `LOCKED`, `ACQUIRING` or `PASS-THRU` (the display's states); `safety-net hits` is the engine's counter of non-finite / absurd output samples
 that had to be caught (always 0 in every test). `tests/rack_smoke.sh` reads these lines from a real Rack.
+
+Two warnings come from the panel widget (GUI thread, checked every 2 s, never from `process()`), each rate limited:
+
+```
+[warn src/FusionClone.cpp:… step] Fusion Clone: the lock was dropped 24 times in the last 2 s (last reason 2: 1 novelty, 2 tracker mismatch, 3 coherence, 4 doubling); repeating unit 166.00 Hz, input -12.3 dB. The clones flicker while this lasts; please report the pitch and waveform.
+[warn src/FusionClone.cpp:… step] Fusion Clone: the engine's safety net intervened (1 time(s) so far); this should never happen, please report it.
+```
+
+The first is the symptom of the bug fixed in 2.0.1 (see `ARCHITECTURE.md` §9.7): a lock that is dropped and re-acquired many times a second makes the
+clone layer stutter. Rack itself logs `Loaded plugin FusionClone v2.0.1`, which tells which build is installed.

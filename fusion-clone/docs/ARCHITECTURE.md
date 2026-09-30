@@ -274,12 +274,16 @@ All per-voice quantities are **derived deterministically from (seed, voice index
 
 ## 6. Tracking, transients, latency
 
-**States.** IDLE → (two consistent confident tracker estimates, ≥ M+1 periods of clean history) ACQ → LOCKED when coherence > 0.92, at least
-two good hops and periodicity > 0.30. A 0.6 s watchdog abandons an acquisition that produces no usable set.
+**States.** IDLE → (two consistent confident tracker estimates from two *different* runs of a lane, ≥ M+1 periods of clean history, smoothed input
+level above −70 dB) ACQ → LOCKED when coherence > 0.92, at least two good hops and periodicity > 0.30. A 0.6 s watchdog abandons an acquisition that
+produces no usable set. (The tracker re-reports a lane's last estimate whenever *another* lane runs; each measurement is judged once, by its
+`(lane, run)` identity — before 2.0.1 one estimate could count as several confirmations.)
 
 **Drops** (`dropCount` reasons): 1 novelty — the one-period residual `x(n) − x(n−P)` rises 6× above its slow estimate and above 10 % of the level
-within a few ms (onsets, pitch steps, waveform switches; slow natural modulation never opens that gap); 2 tracker mismatch — three confident
-tracker estimates incompatible with P, P/2, 2P; 3 coherence < 0.6 or periodicity < 0.12 twice in a row; 4 re-lock at the *doubled* period
+within a few ms (onsets, pitch steps, waveform switches; slow natural modulation never opens that gap; the slow estimate starts from the fast one when
+the detector is armed, two hops after a lock — starting it from zero made every fresh lock trip the detector when the steady residual was already
+8 – 14 % of the power, e.g. a saw with a 5 Hz vibrato at 55 Hz: drop, re-acquire 100 ms later, drop, …); 2 tracker mismatch — at least three
+independent confident tracker estimates incompatible with P, P/2, 2P, spread over at least 40 ms; 3 coherence < 0.6 or periodicity < 0.12 twice in a row; 4 re-lock at the *doubled* period
 (the SUB knob turned up during a held note: the tracker now reports 2P and the single-period model explains the signal poorly). On a drop the
 lock weight falls (two cascaded 0.6 ms stages, ≈2 ms from 90 % to 10 %; 3 ms stages for a user-triggered drop such as a QUALITY switch) and the
 original carries on alone; a new lock waits until the clones of the previous one have faded out.
@@ -448,6 +452,53 @@ panel widget and runs it for 20 s with a Fundamental VCO patched in: the module 
 `docs/figures/rack/` if screenshots are present), real-time CPU on a real Mac inside a busy patch, and *listening*. Real-Fusion behaviour (sub sync,
 detune, tube colour, waveform switching transients) is a hypothesis model; the reference protocol describes the measurements that would settle it.
 
+**9.7 Long runs, the flicker bug of 2.0.0, and what is (not) known about the crash.** A user reported that the 2.0.0 package "worked for five minutes,
+then a metallic sound appeared, and Rack crashed". Nothing in the earlier test suites ran longer than seconds, so `tests/test_soak.cpp` was written: minutes
+of audio through the engine with realistic inputs (a 20 s note stream with drift, mains hum, DC and tremolo — the `hw` scenario — among them), the
+invariants checked all along, an inter-harmonic-energy metric for "metallic", and the engine's safety-net counter. What it found:
+
+* **A pitch-tracker defect, present since the tracker was written.** The tracker's five lanes each search a limited range of lags. Just below a lane's lowest frequency
+  (50, 180, 640, 2200 Hz) the true dip of the normalised difference lies beyond the last lag the lane looks at; the value at the last lag, still falling
+  towards the dip, was reported as a confident (0.87 … 0.93) period 5 – 10 % too short, and the "shortest period wins" rule then preferred it to the
+  lane that saw the true period. For a **triangle wave at 46.6, 166 and 591.5 Hz every estimate was wrong**: the engine locked, three confident
+  mismatching estimates dropped the lock, it re-acquired 100 ms later, and so on — 27 / 80 / 318 drops in a 2.6 s note, the clones locked 24 – 32 % of
+  the time, i.e. they flickered in and out dozens of times a second. Saw and pulse waves showed it only now and then (0.5 – 2.8 % of the estimates), which
+  is why the earlier matrix (12 pitches) never hit it: in the `hw` soak the 164.7 Hz saw of the 36th note (11.7 minutes into the run) sat in the band,
+  and six seconds into the note three re-reports of a wrong estimate happened to coincide — two lock drops within 0.2 s, a +7 dB level jump after the
+  re-lock and broadband transients (which the inter-harmonic metric flagged as "metallic"). A hardware oscillator drifts with temperature and a played
+  note can sit on such a pitch for any length of time, so a source that is fine for minutes and then stutters is consistent with this defect (it is a
+  hypothesis about the reported symptom, not something that was heard).
+  Fixed: a dip must be a true local minimum (no estimate from the edge of a lane's range); each tracker measurement is judged once (not once per lane
+  run that re-reports it); a mismatch must persist for 40 ms; acquisition is gated on the smoothed input level (the instantaneous one is measured over 64
+  samples before the first lock and flickers for low notes — the old double counting had hidden that); the novelty detector's slow estimate starts from
+  the fast one (a marginal 55 Hz vibrato case that the old engine escaped by luck after six drops now never drops). Regression tests: `test_tracker`
+  (85 pitches × 5 waveforms = 425 cells; the old tracker fails 24 of them, 7 without a single right answer), the three pitches added to `test_lock`,
+  vibrato in all four quality modes in `test_dynamics`, triangle and sine notes in the `hw` scenario.
+* **Undefined behaviour that is harmless on the machines tested but should not be there**: a 0/0 in the phase-slope estimate when the harmonic set has no
+  energy at all (digital silence while locked; the NaN it produced never reached the audio path), and a `kaiser(n, 0, β)` in the design of a one-tap
+  filter. Both found by the sanitizer runs, fixed.
+* **What the sanitizer runs cover.** The `chaos` scenario feeds every kind of input a patch can produce (notes with vibrato, glides and steps; noise at all
+  levels; DC steps; hard-clipped tones; impulse trains; sweeps through the whole range; sub-audio waves; tones near Nyquist; denormal-level and 50× signals;
+  NaN / Inf bursts; silence) while *every* control, the expert ones and the random seed included, is changed at random, sometimes several times within a
+  millisecond. Under AddressSanitizer + UBSan + `float-cast-overflow` + `float-divide-by-zero` (GCC, x86-64): 3 runs of 12 minutes (48 / 96 kHz, three
+  quality modes), and 13 more randomised 12-minute runs without the sanitizers at 44.1 – 96 kHz in all four quality modes: no memory error, no
+  non-finite output, the safety net never fired (one run was stopped by the test's own output bound, which was too tight for a 50× input at +12 dB
+  output trim; corrected). These are x86-64 results; the CI workflow has jobs that repeat the sanitizer run on Apple silicon (clang) and Linux.
+* **A known weakness that is not fixed: hum close to the fundamental.** A tone that is not harmonic of the note - mains hum is the usual one - modulates
+  the clones: on a 94.5 Hz note, 50 Hz hum at −31 dB (0.0039 against a note of 0.14 rms) puts sidebands at (n + ½)·f0 around every harmonic, −44 dB
+  against the harmonics at BALANCED (−47 dB at ULTRA); without the hum the same note gives −54 / −60 dB (its own pitch drift), at −43 dB hum (0.001)
+  −52 dB, at −51 dB hum (0.0004) nothing is left, and above ≈ 200 Hz the effect is gone (the hum is then far from the fundamental). About nine tenths of the
+  excess come through the *level follower* (`updateEnvelope` / `envGain`: the AC RMS over one period contains the cross term between the fundamental
+  and the hum, a ripple of 0.7 % at the beat frequency, and the 1 ms smoothing passes it to the clones), the rest at BALANCED through the leakage of
+  the two-period analysis window into the neighbouring harmonic bin (at M = 4 that part is 27 dB smaller). Measured with a scratch copy of the engine in
+  which the analysis input, or the follower, was made hum-free. A smoother follower window (two cascaded boxcars of two periods: −48 dB at that beat)
+  would remove it at the price of a level lag of about two periods; it was not done because the effect needs hum stronger than about −45 dB, and the follower
+  is tuned against the artifact tests. `tests/test_soak.cpp` keeps its hum at −41 dB or below for that reason.
+* **What is not known.** Whether the reported crash was this defect, another one, Rack or the audio driver. A flickering lock alone does not corrupt
+  memory (30 s of the old engine in its worst case, 600 drops, ran clean under the sanitizers) and no crash was ever reproduced; without a crash report
+  (`~/Library/Logs/DiagnosticReports/Rack*.ips`) and the `log.txt` around it that cannot be settled. 2.0.1 therefore writes a warning to `log.txt` when
+  the lock is dropped ≥ 8 times in 2 s and when the safety net fires (`MANIFEST.md`, *Diagnostics*), and `INSTALL.md` lists what to send.
+
 ## 10. Acceptance tests (specification tests 1 – 15) and where they run
 
 | # | Test | Where | Result |
@@ -462,6 +513,8 @@ detune, tube colour, waveform switching transients) is a hypothesis model; the r
 | 13 | WIDTH = 0 mono-compatible; WIDTH > 0 keeps the mono fold-down | `test_engine` TEST 13 | L = R exactly at 0; fold-down deviation 1.5·10⁻⁷ |
 | 14, 15 | MIX = 0 → original only; MIX = 100 % → processed sum | `test_engine` TESTS 14/15, `test_module` | exact / differs by 0.79 rel. |
 
-Further suites: `test_lock` (waveform × pitch matrix, 168 cells per quality mode), `test_dynamics` (vibrato, SUB sweep, WAVE switch, note gap),
+Further suites: `test_lock` (waveform × pitch matrix, 210 cells per quality mode), `test_tracker` (no confident wrong pitch estimate at any pitch, in
+particular just below the lane edges), `test_dynamics` (vibrato in all four quality modes, SUB sweep, WAVE switch, note gap), `test_soak` (minutes of
+audio: steady / sequenced / knob-twiddling / random notes / hardware-like notes / chaos, see §9.7),
 `test_artifacts` (clicks, zipper steps, fades, aliasing — §8.5), `test_realtime` (allocations, finiteness, randomised stress, per-sample cost),
 `test_analyzer`, `test_pitch`, `test_sinc`, `test_fft`, `test_hilbert`, `test_module` (real `Module` class, headless).

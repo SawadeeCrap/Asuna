@@ -49,6 +49,9 @@ struct EngineStatus {
 	int quality = 1;
 	int Nc = 0;
 	int J = 0;
+	int dropsTotal = 0;        // lock drops since the engine was prepared (all reasons)
+	int lastDropReason = 0;    // 1 novelty, 2 tracker mismatch, 3 coherence, 4 re-lock at the doubled period
+	int guardHits = 0;         // safety-net interventions (must stay 0)
 	// lightweight spectrum snapshot for the GUI (dB of the first kSpecBins table harmonics, seqlock protected)
 	static const int kSpecBins = 48;
 	float spectrumDb[kSpecBins];

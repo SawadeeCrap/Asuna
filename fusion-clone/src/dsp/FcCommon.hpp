@@ -230,6 +230,8 @@ inline double besselI0(double x) {
 
 inline double kaiser(double n, double N, double beta) {
 	// n in [0,N], symmetric
+	if (!(N > 0.0))
+		return 1.0; // a one-tap filter: N = 0 would divide by zero
 	double r = 2.0 * n / N - 1.0;
 	double a = 1.0 - r * r;
 	if (a < 0)

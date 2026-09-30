@@ -32,7 +32,7 @@ written in is a Linux container that has neither your Mac nor Rack. You therefor
 1. Open <https://github.com/SawadeeCrap/Asuna/actions/workflows/fusion-clone.yml> and click the newest run of the branch
    `claude/jolly-einstein-e9h02j` whose jobs **Plugin (mac-arm64)** and **Load in Rack (mac-arm64)** are green (the small check marks in the run's job list).
 2. At the bottom of the run page, under **Artifacts**, download **FusionClone-mac-arm64** (a ~85 KB `.zip`; you must be logged in to GitHub) and
-   unzip it. It contains `FusionClone-2.0.0-mac-arm64.vcvplugin`. GitHub keeps artifacts for 90 days; after that re-run the workflow (Actions →
+   unzip it. It contains `FusionClone-2.0.1-mac-arm64.vcvplugin`. GitHub keeps artifacts for 90 days; after that re-run the workflow (Actions →
    *fusion-clone* → *Run workflow*) or build from source (A).
 3. Install it: double-click the `.vcvplugin` (Rack installs it), **or** copy it into
    `~/Library/Application Support/Rack2/plugins-mac-arm64/` and start Rack — Rack unpacks the package itself at start-up.
@@ -51,7 +51,7 @@ its log shows the plugin loaded, the module created, and the module locked onto 
 
 You can repeat the load test against **your own Rack** (quit Rack first: the test starts its own windowless instance; it uses a scratch user folder and does not touch your Rack settings; needs `brew install zstd`):
 ```sh
-bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
+bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.1-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```
 (for Rack Pro use `"/Applications/VCV Rack 2 Pro.app/Contents/MacOS/Rack"`). It ends with `RACK SMOKE TEST: PASS` or `FAIL` and prints Rack's log.
 
@@ -74,6 +74,8 @@ bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vc
 | macOS blocks the downloaded plugin | `xattr -dr com.apple.quarantine …` as above. |
 | The display stays at *ACQUIRING* / *PASS-THRU* | The input must be a stable, monophonic, periodic oscillator (saw/tri/pulse/sine, optional sub); noise, chords and DC never lock by design. Check the input level (input meter in the display). |
 | CPU too high | Lower QUALITY (ECO/BALANCED) or VOICES; see `docs/BENCHMARKS.md` (§1–§4 are from an x86 Linux machine, §6 from an Apple M1 virtual machine). |
+| A metallic, stuttering or flickering sound from the clones after a while, on a triangle or saw at certain pitches (about 46–47, 165–168 and 590–597 Hz) | Fixed in **2.0.1**: the pitch tracker mistook such notes for a period 7 % too short, the lock was dropped and re-acquired dozens of times a second (the clones flickered in and out). `Loaded plugin FusionClone v2.0.1` in `log.txt` tells which build you run; if 2.0.1 still does it, `log.txt` then holds a line `Fusion Clone: the lock was dropped N times in the last 2 s …` — please send it together with the pitch and the waveform. |
+| Rack quits by itself | Please send (1) the newest file `~/Library/Logs/DiagnosticReports/Rack*.ips` (or Console.app → Crash Reports → *Rack*), (2) the last 100 lines of `~/Library/Application Support/Rack2/log.txt`, (3) what was patched and the settings of VOICES / QUALITY / the FUSION switch, and the audio device's sample rate. Without a crash report nobody can tell whether the plugin, Rack or the audio driver was at fault. |
 
 ## Tell me what happens
 

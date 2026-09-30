@@ -92,7 +92,9 @@ int main(int argc, char** argv) {
 	    {"saw doppler .3", 1, 0, 0, 0, 0.5, 0.0, DETUNE_DOPPLER, 0.3, 0},
 	    {"saw ssb .3", 1, 0, 0, 0, 0.5, 0.0, DETUNE_SSB, 0.3, 0},
 	};
-	const double freqs[] = {20, 30, 41.2, 55, 82.4, 110, 220, 440, 880, 1760, 3520, 4186};
+	// 46.6, 166 and 591.5 Hz sit just below the lower edges of three lanes of the pitch tracker (50, 180, 640 Hz): there a triangle wave used to be
+	// mistaken for a period 7 % too short, and the engine locked and dropped the lock 30 - 300 times per note
+	const double freqs[] = {20, 30, 41.2, 46.6, 55, 82.4, 110, 166, 220, 440, 591.5, 880, 1760, 3520, 4186};
 	static const char* qn[] = {"ECO", "BALANCED", "HIGH", "ULTRA"};
 	std::vector<int> qualities;
 	for (int a = 1; a < argc; a++) {

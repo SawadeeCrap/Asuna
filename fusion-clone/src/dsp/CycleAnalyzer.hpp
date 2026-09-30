@@ -549,8 +549,8 @@ private:
 			for (int h = 1; h <= Jc && h <= jMax; h++) {
 				double ar = tmpRe_[h], ai = tmpIm_[h], br = prev_.re[h], bi = prev_.im[h];
 				double mag2a = ar * ar + ai * ai, mag2b = br * br + bi * bi;
-				if (mag2a < magFloor || mag2b < magFloor)
-					continue;
+				if (!(mag2a > magFloor) || !(mag2b > magFloor))
+					continue; // (also: a set without any energy - digital silence - has no phase to measure; est / sxx below would be 0 / 0)
 				// c_now * conj(c_prev): phase = 2*pi*j*delta for a pure time shift
 				double pr = ar * br + ai * bi, pi = ai * br - ar * bi;
 				double meas = std::atan2(pi, pr);
@@ -577,7 +577,7 @@ private:
 				double rr = ar * cr - ai * ci, ri = ar * ci + ai * cr;
 				double pr = rr * br + ri * bi, pi = ri * br - rr * bi; // c_now(shifted) * conj(c_prev): its phase is the residual
 				double mag2a = ar * ar + ai * ai, mag2b = br * br + bi * bi;
-				if (h <= jMax && mag2a >= magFloor && mag2b >= magFloor) { // same harmonics as the slope estimate above
+				if (h <= jMax && mag2a > magFloor && mag2b > magFloor) { // same harmonics as the slope estimate above
 					double w = std::sqrt(mag2a * mag2b);
 					double r = std::atan2(pi, pr);
 					swr += w * r * r;

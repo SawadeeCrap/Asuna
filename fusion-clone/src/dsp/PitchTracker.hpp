@@ -38,6 +38,8 @@ public:
 		bool valid = false;
 		uint32_t seq = 0;    // increments whenever a new estimate is produced
 		int lane = -1;
+		uint32_t laneSeq = 0; // run counter of the lane that made it: choose() re-reports a lane's last estimate until that lane runs again, so
+		                      // (lane, laneSeq) identifies an independent measurement
 	};
 
 	static const int kLanes = 5;
@@ -162,6 +164,7 @@ private:
 		double fLo = 0, fHi = 0, rate = 0, tauLo = 0, tauHi = 0;
 		int decim = 1, tauMax = 0, win = 0, bufN = 0, hop = 16, sinceRun = 0;
 		uint64_t w = 0, w0 = 0; // w0: first lane sample that may be used (history before it is forgotten)
+		uint32_t runs = 0;      // number of runs of this lane (never reset: identifies a measurement)
 		std::vector<float> buf, seg, d, cm;
 		FirDecimator dec;
 		Estimate est;
@@ -210,7 +213,7 @@ private:
 		const double kSignificance = 0.05; // minimum window AC power as a share of the long-term AC power
 		Estimate e;
 		e.lane = li;
-		e.seq = L.est.seq + 1;
+		e.seq = e.laneSeq = ++L.runs;
 		if (energy < silenceThresh_ || windowAc < kSignificance * (double) level2_) {
 			L.est = e; // invalid: silence, or a window that only sees an insignificant stretch of the signal
 			return;
@@ -265,6 +268,14 @@ private:
 			L.est = e;
 			return;
 		}
+		// A dip must be a true local minimum. A normalised difference that is still falling at the last lag of the search range (or already
+		// rising at the first) belongs to a period the lane cannot see: the dip lies just beyond the edge. Such a value looks like a confident
+		// (0.87 .. 0.93) period 5 - 10 % too short - it used to win choose() ("shortest period") against the lane that does see the true one,
+		// and for a triangle wave just below a lane's lower edge it was reported for almost every run.
+		if (L.cm[found - 1] < L.cm[found] || L.cm[found + 1] < L.cm[found]) {
+			L.est = e;
+			return;
+		}
 		double off, val;
 		parabolic(L.cm[found - 1], L.cm[found], L.cm[found + 1], off, val);
 		double tau1 = found + off;
@@ -286,6 +297,8 @@ private:
 					bv = L.cm[q];
 					bi = q;
 				}
+			if (L.cm[bi - 1] < L.cm[bi] || L.cm[bi + 1] < L.cm[bi])
+				continue; // not a dip: the +-2 lags around 2 tau only show a slope
 			double o2, v2;
 			parabolic(L.cm[bi - 1], L.cm[bi], L.cm[bi + 1], o2, v2);
 			// the longer period must be *substantially* better than the shorter one and the shorter one must be imperfect
