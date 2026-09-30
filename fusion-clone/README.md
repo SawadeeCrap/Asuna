@@ -38,7 +38,7 @@ chorus, a generic pitch shifter, a supersaw or a phase-vocoder effect — see `d
 
 *(A real screenshot, taken by CI with `tests/rack_gui_shot.sh`: the module in VCV Rack Free 2.6.6 on Linux — a virtual display with Mesa software rendering — with a
 Fundamental VCO patched into AUDIO IN. Display: 16 voices, `LOCK 261.6 Hz` (the VCO's C4), the source's partials, and the clones' detune positions around the
-original (amber marker). The full screenshot is `docs/figures/rack/rack-lin-x64-full.png`; the dialog in it is Rack's start-up tip.)*
+original (amber marker). The full screenshot, with the VCO and the cable, is `docs/figures/rack/rack-lin-x64-full.png`; the crop above is enlarged 2×.)*
 
 ![Panel layout preview](docs/figures/panel_preview.png)
 
