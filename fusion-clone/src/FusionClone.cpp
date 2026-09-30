@@ -15,7 +15,8 @@
 namespace {
 
 const NVGcolor kAmber = nvgRGB(0xff, 0xb0, 0x30);
-const NVGcolor kAmberDim = nvgRGBA(0xff, 0xb0, 0x30, 70);
+const NVGcolor kAmberDim = nvgRGBA(0xff, 0xb0, 0x30, 70);   // hairlines only: too faint for text
+const NVGcolor kAmberText = nvgRGBA(0xff, 0xb0, 0x30, 165); // secondary display text (a first Rack screenshot showed 70 was unreadable at 100 % zoom)
 const NVGcolor kTeal = nvgRGB(0x40, 0xd8, 0xc8);
 const NVGcolor kInk = nvgRGB(0xd8, 0xdc, 0xe2);
 
@@ -80,7 +81,7 @@ struct CloneDisplay : TransparentWidget {
 			snprintf(buf, sizeof buf, "%d", voices);
 			nvgText(vg, 8.f, 46.f, buf, NULL);
 			nvgFontSize(vg, 7.f);
-			nvgFillColor(vg, kAmberDim);
+			nvgFillColor(vg, kAmberText);
 			nvgText(vg, 9.f, 58.f, voices == 1 ? "VOICE" : "VOICES", NULL);
 
 			// state line
@@ -93,9 +94,9 @@ struct CloneDisplay : TransparentWidget {
 				stateTxt = buf;
 			} else if (connected && st.inputLevelDb > -70.f)
 				stateTxt = st.acquiring ? "ACQUIRING" : "PASS-THRU";
-			nvgFillColor(vg, st.locked ? kTeal : kAmberDim);
+			nvgFillColor(vg, st.locked ? kTeal : kAmberText);
 			nvgText(vg, W - 6.f, 12.f, stateTxt, NULL);
-			nvgFillColor(vg, kAmberDim);
+			nvgFillColor(vg, kAmberText);
 			char b2[48];
 			snprintf(b2, sizeof b2, "%s  %s", qn[clamp(quality, 0, 3)], algorithm ? "FUSION" : "CLASSIC");
 			nvgText(vg, W - 6.f, 22.f, b2, NULL);
@@ -114,7 +115,7 @@ struct CloneDisplay : TransparentWidget {
 			}
 			nvgFontSize(vg, 6.5f);
 			nvgTextAlign(vg, NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE);
-			nvgFillColor(vg, kAmberDim);
+			nvgFillColor(vg, kAmberText);
 			nvgText(vg, x0, 12.f, "PARTIALS", NULL);
 
 			// detune density strip: original at 0 (bright), clones as dots at their static+drift offset
@@ -141,7 +142,7 @@ struct CloneDisplay : TransparentWidget {
 			nvgFill(vg);
 			nvgFontSize(vg, 6.5f);
 			nvgTextAlign(vg, NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE);
-			nvgFillColor(vg, kAmberDim);
+			nvgFillColor(vg, kAmberText);
 			snprintf(buf, sizeof buf, "-%.0fc", rng);
 			nvgText(vg, 8.f, ys - 6.f, buf, NULL);
 			nvgTextAlign(vg, NVG_ALIGN_RIGHT | NVG_ALIGN_BASELINE);

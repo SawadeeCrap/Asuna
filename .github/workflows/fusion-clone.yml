@@ -6,8 +6,8 @@
 #     The package is then unpacked again and inspected (architecture, linked libraries, exported symbols); a failed inspection fails the job.
 #   * "Load in Rack" jobs (experimental, do not fail the run) install Rack Free, put the package into a scratch user folder and run a patch
 #     headless for a while (tests/rack_smoke.sh): proves that a real Rack loads the plugin, creates the module and survives the engine
-#     (the module reports on shutdown that it locked onto the VCO). "Rack with its window" starts Rack with a window (virtual display on Linux)
-#     and takes a screenshot (tests/rack_gui_shot.sh), which exercises the drawing code of the panel.
+#     (the module reports on shutdown that it locked onto the VCO). "Rack with its window" (Linux only) starts Rack with a window on a virtual
+#     display and takes a screenshot (tests/rack_gui_shot.sh), which exercises the drawing code of the panel.
 #   * "DSP tests" run tests/ (portable code, pffft as FFT backend) twice - once with plain -O2 and once with the optimisation flags the plugin
 #     itself is built with (Rack's -O3 -funsafe-math-optimizations -march=...) - and, on Apple silicon, the CPU benchmark (numbers are those of a
 #     shared GitHub VM, informative only).
@@ -117,7 +117,7 @@ jobs:
     name: Rack with its window (${{ matrix.platform }})
     needs: plugin
     if: ${{ !cancelled() }}
-    continue-on-error: true      # experimental: needs OpenGL (Mesa on Linux) and, on macOS, permission to capture the screen
+    continue-on-error: true      # experimental: needs OpenGL (Mesa software rendering on a virtual X display)
     timeout-minutes: 15
     permissions:
       contents: write            # only to commit the screenshot when the pushed commit message contains [shots]
@@ -125,7 +125,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {platform: mac-arm64, os: macos-14}
+          # Linux only: the macOS runner VMs cannot give Rack an OpenGL 2 context ("Could not open GLFW window"), so a window test is impossible there
           - {platform: lin-x64, os: ubuntu-latest}
     runs-on: ${{ matrix.os }}
     steps:
