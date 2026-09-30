@@ -185,3 +185,38 @@ jobs:
         run: |
           CXXFLAGS="$PLUGIN_OPT" make PFFFT="$RUNNER_TEMP/pffft" bench
           { echo '## CPU benchmark on '"$(sysctl -n machdep.cpu.brand_string) ($(sysctl -n hw.ncpu) cores, shared GitHub VM), flags: $PLUGIN_OPT"; echo; ./bench 4 md; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  soak:
+    name: Soak test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-14, march: '-march=armv8-a+fp+simd'}
+          - {os: ubuntu-latest, march: '-march=nehalem'}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true      # informational until it has proven stable; a failure is a real finding, read its log
+    timeout-minutes: 60
+    env:
+      PLUGIN_OPT: -std=c++11 -O3 -funsafe-math-optimizations -fno-omit-frame-pointer ${{ matrix.march }} -Wall -Wextra -Wno-unused-parameter
+    steps:
+      - uses: actions/checkout@v4
+      - name: pffft (FFT backend of the plugin)
+        run: git clone --depth 1 https://github.com/marton78/pffft.git "$RUNNER_TEMP/pffft"
+      - name: Build the soak test with the plugin's flags
+        working-directory: fusion-clone/tests
+        run: CXXFLAGS="$PLUGIN_OPT" make PFFFT="$RUNNER_TEMP/pffft" test_soak
+      - name: Minutes of audio through the engine (six runs in parallel)
+        working-directory: fusion-clone/tests
+        run: |
+          run() { name=$1; shift; ./test_soak "$@" > "soak_$name.txt" 2>&1; echo "$name: exit status $?" > "soak_$name.status"; }
+          run steady48 12 48000 steady 3 16 &
+          run steady44 12 44100 steady 3 16 &
+          run steady96 6 96000 steady 3 16 &
+          run seq48 12 48000 seq 3 16 &
+          run knobs48 12 48000 knobs 3 16 &
+          run notes48 12 48000 notes 3 16 &
+          wait
+          cat soak_*.status
+          for f in soak_*.txt; do echo "===== $f"; grep -E "minute|FAIL|t=|PASSED|FAILED" "$f" | tail -30; done
+          if grep -l "FAILED" soak_*.txt; then exit 1; fi

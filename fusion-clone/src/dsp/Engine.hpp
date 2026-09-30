@@ -788,7 +788,7 @@ private:
 		// GUI spectrum snapshot (seqlock: odd while writing)
 		status_.specSeq++;
 		float mx = 1e-14f;
-		for (int j = 1; j <= std::min(J, EngineStatus::kSpecBins); j++)
+		for (int j = 1; j <= std::min(J, (int) EngineStatus::kSpecBins); j++)
 			mx = std::max(mx, pubRe_[j] * pubRe_[j] + pubIm_[j] * pubIm_[j]);
 		for (int j = 0; j < EngineStatus::kSpecBins; j++) {
 			const float m2 = (j + 1 <= J) ? pubRe_[j + 1] * pubRe_[j + 1] + pubIm_[j + 1] * pubIm_[j + 1] : 1e-14f;

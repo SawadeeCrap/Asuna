@@ -29,7 +29,7 @@ endif
 QUICK := test_fft test_sinc test_hilbert test_pitch test_analyzer
 ALL := $(QUICK) test_lock test_dynamics test_artifacts test_engine test_realtime
 
-.PHONY: all quick engine lock dynamics artifacts realtime clean
+.PHONY: all quick engine lock dynamics artifacts realtime soak clean
 .SECONDARY:
 all: $(ALL:%=run-%)
 quick: $(QUICK:%=run-%)
@@ -38,6 +38,7 @@ lock: run-test_lock
 dynamics: run-test_dynamics
 artifacts: run-test_artifacts
 realtime: run-test_realtime
+soak: test_soak ; ./test_soak 6 48000 all   # minutes of audio (not part of `all`); see test_soak.cpp for the arguments
 
 run-%: %
 	@echo "=== $<"
