@@ -75,6 +75,7 @@ class KevClient:
         return out
 
     def models(self) -> dict:
+        """GET /v1/models as the server returns it (Kev: ``{"models": [{"name", "run", "backend", ...}]}``)."""
         try:
             with self._open(self.url + "/v1/models", timeout=max(self.timeout, 2.0)) as r:
                 return json.loads(r.read().decode("utf-8"))
@@ -151,5 +152,19 @@ def choice_confidence(p: list[float]) -> float:
     return 1.0 if K <= 1 else (max(p) - 1.0 / K) / (1.0 - 1.0 / K)
 
 
+def describe(info) -> str:
+    """One line about the served model, from GET /v1/models: Kev's own ``{"models": [...]}`` ("kev-latest
+    (jaredpalmer/kev-0.8b, mlx, bfloat16)"), or an OpenAI-style ``{"data": [{"id"}]}`` list."""
+    ms = info.get("models") if isinstance(info, dict) else None
+    if isinstance(ms, list) and ms and isinstance(ms[0], dict):
+        m = ms[0]
+        extra = ", ".join(str(m[k]) for k in ("run", "backend", "dtype") if m.get(k))
+        return str(m.get("name", "?")) + (f" ({extra})" if extra else "")
+    data = info.get("data") if isinstance(info, dict) else None
+    if isinstance(data, list) and data:
+        return ", ".join(str(d.get("id", "?")) for d in data[:3] if isinstance(d, dict)) or "a model"
+    return "a model"
+
+
 __all__ = ["KevClient", "KevError", "is_local", "LETTERS", "INTENSITY", "state_text", "candidates_questions",
-           "operations_questions", "choice_confidence"]
+           "operations_questions", "choice_confidence", "describe"]

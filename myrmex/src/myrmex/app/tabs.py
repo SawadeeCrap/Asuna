@@ -204,12 +204,10 @@ def _brain_set(win, enabled=None, mode=None, kev_url=None, **controls) -> None:
 
 
 def _brain_check_kev(win) -> None:
-    from ..brain.kev_client import KevClient, KevError
+    from ..brain.kev_client import KevClient, KevError, describe
     url = win.txt_kev.text().strip()
     try:
-        info = KevClient(url, timeout=1.5).models()
-        names = ", ".join(str(m.get("id", "?")) for m in info.get("data", [])[:3]) or "a model"
-        win.log(f"Kev at {url}: {names}")
+        win.log(f"Kev at {url}: {describe(KevClient(url, timeout=1.5).models())}")
     except KevError as e:
         win.log(f"! no Kev at {url}: {e}")
 

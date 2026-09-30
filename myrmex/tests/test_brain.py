@@ -19,7 +19,7 @@ from myrmex.brain.adapter import inverse_blend, make_adapter, softmax3, user_cue
 from myrmex.brain.candidates import DIRECTIONS, RADICAL, UserCue, direction, evaluate, generate
 from myrmex.brain.core import BrainConfig, BrainControls, BrainCore, Decision, with_env
 from myrmex.brain.fingerprint import Fingerprint, Scale, blend_cloud, embed, geometry
-from myrmex.brain.kev_client import KevClient, KevError, is_local
+from myrmex.brain.kev_client import KevClient, KevError, describe, is_local
 from myrmex.brain.memory import MorphMemory
 from myrmex.brain.metrics import diagnose
 from myrmex.brain.novelty import novelty
@@ -430,8 +430,10 @@ class MockKev(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self):
-        self._send(200, {"object": "list", "data": [{"id": "kev-latest", "note": "mock"}]})
+    def do_GET(self):                               # (the shape a real kev.serve answers, MLX on a Mac)
+        self._send(200, {"models": [{"name": "kev-latest", "description": "mock", "run": "jaredpalmer/kev-0.8b",
+                                     "base": "Qwen/Qwen3.5-0.8B-Base", "device": "mps", "backend": "mlx",
+                                     "dtype": "bfloat16"}]})
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
@@ -492,7 +494,11 @@ def _q():
 def test_kev_client_validates_answers(mock_kev):
     srv, url = mock_kev
     cli = KevClient(url, timeout=0.5)
-    assert cli.models()["data"][0]["id"] == "kev-latest"
+    info = cli.models()
+    assert info["models"][0]["name"] == "kev-latest"
+    assert describe(info) == "kev-latest (jaredpalmer/kev-0.8b, mlx, bfloat16)"
+    assert describe({"object": "list", "data": [{"id": "kev-latest"}]}) == "kev-latest"
+    assert describe({}) == describe({"models": []}) == describe(None) == "a model"
     ans = cli.ask({"organism": "spear"}, _q())
     assert ans["next"]["choice"] == "B" and ans["level"]["score"] == 1.0
     assert srv.requests[-1]["model"] == "kev-latest" and srv.requests[-1]["state"] == {"organism": "spear"}
