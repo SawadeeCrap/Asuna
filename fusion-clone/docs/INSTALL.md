@@ -29,13 +29,29 @@ written in is a Linux container that has neither your Mac nor Rack. You therefor
 
 ## B. Download the package built by GitHub (no compiler needed)
 
-Open the repository on GitHub → **Actions** → the latest *fusion-clone* run of branch `claude/jolly-einstein-e9h02j` → **Artifacts** →
-`FusionClone-mac-arm64`. Unzip it and double-click the `.vcvplugin` (Rack installs it), or unzip the archive's content into
-`~/Library/Application Support/Rack2/plugins-mac-arm64/`. If macOS refuses to load it because it was downloaded:
+1. Open <https://github.com/SawadeeCrap/Asuna/actions/workflows/fusion-clone.yml> and click the newest run of the branch
+   `claude/jolly-einstein-e9h02j` whose jobs **Plugin (mac-arm64)** and **Load in Rack (mac-arm64)** are green (the small check marks in the run's job list).
+2. At the bottom of the run page, under **Artifacts**, download **FusionClone-mac-arm64** (a ~85 KB `.zip`; you must be logged in to GitHub) and
+   unzip it. It contains `FusionClone-2.0.0-mac-arm64.vcvplugin`. GitHub keeps artifacts for 90 days; after that re-run the workflow (Actions →
+   *fusion-clone* → *Run workflow*) or build from source (A).
+3. Install it: double-click the `.vcvplugin` (Rack installs it), **or** copy it into
+   `~/Library/Application Support/Rack2/plugins-mac-arm64/` and start Rack — Rack unpacks the package itself at start-up.
+4. If macOS refuses to load it because it was downloaded from the internet:
+   ```sh
+   xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-mac-arm64/FusionClone"
+   ```
+
+What the package is: an arm64 build against the official **Rack SDK 2.6.x** (it is ad-hoc code-signed, not notarised — like every plugin that is not
+downloaded through the VCV Library), for **Rack 2** (tested only with Rack 2.6.6; other 2.x versions should work because the plugin ABI is stable within a major version, but that is untested). The same workflow run also
+loads exactly this package into a real **VCV Rack Free 2.6.6 on an Apple-silicon runner**, patches a Fundamental VCO into it and lets it run for 20 s;
+its log shows the plugin loaded, the module created, and the module locked onto the VCO's pitch (details: `tests/rack_smoke.sh`, the job *Load in Rack
+(mac-arm64)*). The DSP test suite and the CPU benchmark run on an Apple M1 runner in the same workflow.
+
+You can repeat the load test against **your own Rack** (it uses a scratch user folder and does not touch your Rack settings; needs `brew install zstd`):
 ```sh
-xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-mac-arm64/FusionClone"
+bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```
-The same run also executes the DSP tests and the CPU benchmark on an Apple-silicon runner (summary tab).
+(for Rack Pro use `"/Applications/VCV Rack 2 Pro.app/Contents/MacOS/Rack"`). It ends with `RACK SMOKE TEST: PASS` or `FAIL` and prints Rack's log.
 
 ## First use
 
@@ -50,7 +66,7 @@ The same run also executes the DSP tests and the CPU benchmark on an Apple-silic
 | Symptom | Fix |
 |---|---|
 | `make`: *plugin.mk / RACK_DIR not found* | `RACK_DIR` must point at the unzipped SDK folder (it contains `plugin.mk`). |
-| Rack shows no module / log says the plugin was built for another version | Use the SDK whose 2.x version equals your Rack's. Log: `~/Library/Application Support/Rack2/log.txt`. |
+| Rack shows no module / log says the plugin was built for another version | Use the SDK whose 2.x version equals your Rack's (the CI package was built with SDK 2.6.x and tested with Rack 2.6.6). Log: `~/Library/Application Support/Rack2/log.txt` — look for `Loaded plugin FusionClone` and `Fusion Clone: module added`. |
 | Link error mentioning `pffft_…` | The SDK does not export pffft: edit `FLAGS` in `Makefile` — `-DFC_FFT_RACK` (Rack's own FFT wrapper) or remove `-DFC_FFT_PFFFT` (built-in FFT, slower). |
 | Suspected SIMD problem on a platform | Rebuild with the portable dot product: `FLAGS=-DFC_NO_SIMD make -j … && make install`. |
 | macOS blocks the downloaded plugin | `xattr -dr com.apple.quarantine …` as above. |

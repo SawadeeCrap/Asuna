@@ -119,6 +119,8 @@ jobs:
     if: ${{ !cancelled() }}
     continue-on-error: true      # experimental: needs OpenGL (Mesa on Linux) and, on macOS, permission to capture the screen
     timeout-minutes: 15
+    permissions:
+      contents: write            # only to commit the screenshot when the pushed commit message contains [shots]
     strategy:
       fail-fast: false
       matrix:
@@ -128,13 +130,29 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0             # the screenshot step rebases onto the branch tip before it pushes
       - uses: actions/download-artifact@v4
         with:
           name: FusionClone-${{ matrix.platform }}
           path: pkg
       - uses: ./.github/actions/install-rack-free
       - name: Load the package in Rack with its window, take a screenshot
-        run: bash fusion-clone/tests/rack_gui_shot.sh pkg/*.vcvplugin "$RACK_BIN" 15 1.0
+        run: RACK_SHOT_OUT="$PWD/shots" bash fusion-clone/tests/rack_gui_shot.sh pkg/*.vcvplugin "$RACK_BIN" 15 1.0
+      - name: Commit the screenshot to the branch (only for pushes whose commit message contains [shots])
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[shots]')
+        run: |
+          ls -l shots || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p fusion-clone/docs/figures/rack
+          cp shots/*.png fusion-clone/docs/figures/rack/
+          git add fusion-clone/docs/figures/rack
+          git commit -m "CI: screenshot of Fusion Clone in Rack 2.6.6 (${{ matrix.platform }}) [skip ci]" || exit 0
+          for i in 1 2 3 4; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && break
+            sleep $((i * 3))
+          done
 
   dsp-tests:
     name: DSP tests (${{ matrix.os }})

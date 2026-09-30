@@ -29,13 +29,29 @@
 
 ## Б. Готовый пакет, собранный GitHub (компилятор не нужен)
 
-Откройте репозиторий на GitHub → **Actions** → последний запуск *fusion-clone* для ветки `claude/jolly-einstein-e9h02j` → **Artifacts** →
-`FusionClone-mac-arm64`. Распакуйте и дважды кликните по `.vcvplugin` (Rack установит его сам) либо распакуйте содержимое архива в
-`~/Library/Application Support/Rack2/plugins-mac-arm64/`. Если macOS не даёт загрузить плагин, потому что он скачан из интернета:
+1. Откройте <https://github.com/SawadeeCrap/Asuna/actions/workflows/fusion-clone.yml> и зайдите в самый свежий запуск ветки
+   `claude/jolly-einstein-e9h02j`, у которого задачи **Plugin (mac-arm64)** и **Load in Rack (mac-arm64)** зелёные (галочки в списке задач запуска).
+2. Внизу страницы запуска, в разделе **Artifacts**, скачайте **FusionClone-mac-arm64** (`.zip` около 85 КБ; нужно быть залогиненным в GitHub)
+   и распакуйте. Внутри `FusionClone-2.0.0-mac-arm64.vcvplugin`. GitHub хранит артефакты 90 дней; потом перезапустите workflow (Actions →
+   *fusion-clone* → *Run workflow*) или соберите из исходников (А).
+3. Установка: дважды кликните по `.vcvplugin` (Rack установит его сам) **или** скопируйте файл в
+   `~/Library/Application Support/Rack2/plugins-mac-arm64/` и запустите Rack — Rack сам распакует пакет при старте.
+4. Если macOS не даёт загрузить плагин, потому что он скачан из интернета:
+   ```sh
+   xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-mac-arm64/FusionClone"
+   ```
+
+Что это за пакет: сборка для arm64 на официальном **Rack SDK 2.6.x** (подпись ad-hoc, без нотаризации — как у любого плагина не из VCV Library), для
+**Rack 2** (проверялось только на Rack 2.6.6; другие версии 2.x должны работать, потому что ABI плагинов стабилен внутри мажорной версии, но это не проверено). В том же запуске именно этот пакет загружается в настоящий **VCV Rack Free 2.6.6 на
+раннере с Apple silicon**: в патч добавляется осциллятор Fundamental VCO, всё работает 20 секунд; в логе видно, что плагин загружен, модуль создан и
+модуль захватил высоту осциллятора (подробности: `tests/rack_smoke.sh`, задача *Load in Rack (mac-arm64)*). DSP-тесты и бенчмарк CPU выполняются на
+раннере Apple M1 в том же workflow.
+
+Ту же проверку можно повторить **на вашем Rack** (она использует временную пользовательскую папку и не трогает ваши настройки Rack; нужен `brew install zstd`):
 ```sh
-xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-mac-arm64/FusionClone"
+bash fusion-clone/tests/rack_smoke.sh ~/Downloads/FusionClone-2.0.0-mac-arm64.vcvplugin "/Applications/VCV Rack 2 Free.app/Contents/MacOS/Rack" 20
 ```
-В том же запуске на Apple-silicon-раннере выполняются DSP-тесты и бенчмарк CPU (вкладка Summary).
+(для Rack Pro: `"/Applications/VCV Rack 2 Pro.app/Contents/MacOS/Rack"`). В конце будет `RACK SMOKE TEST: PASS` или `FAIL` и лог Rack.
 
 ## Первое использование
 
@@ -50,7 +66,7 @@ xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Rack2/plugins-
 | Симптом | Что делать |
 |---|---|
 | `make`: *plugin.mk / RACK_DIR not found* | `RACK_DIR` должен указывать на распакованную папку SDK (в ней лежит `plugin.mk`). |
-| Модуля нет в Rack / в логе «plugin built for another version» | Возьмите SDK той же версии 2.x, что и Rack. Лог: `~/Library/Application Support/Rack2/log.txt`. |
+| Модуля нет в Rack / в логе «plugin built for another version» | Возьмите SDK той же версии 2.x, что и Rack (пакет из CI собран на SDK 2.6.x и проверен на Rack 2.6.6). Лог: `~/Library/Application Support/Rack2/log.txt`, ищите строки `Loaded plugin FusionClone` и `Fusion Clone: module added`. |
 | Ошибка линковки про `pffft_…` | SDK не экспортирует pffft: в `Makefile` в `FLAGS` замените на `-DFC_FFT_RACK` (обёртка FFT из Rack) или уберите `-DFC_FFT_PFFFT` (встроенный FFT, медленнее). |
 | Подозрение на проблему со SIMD | Пересоберите с переносимым скалярным кодом: `FLAGS=-DFC_NO_SIMD make -j … && make install`. |
 | macOS блокирует скачанный плагин | `xattr -dr com.apple.quarantine …` как выше. |

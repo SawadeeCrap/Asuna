@@ -80,3 +80,16 @@ Bypass routes: `AUDIO_INPUT` → `L_OUTPUT` and `R_OUTPUT`.
   short stages, one stage per sample) and double-buffered with a cross-fade; parameter changes are smoothed per sample; a QUALITY change
   reconfigures without reallocating. The worst single `process()` call measured is 100 – 170 µs at 16 voices (`docs/BENCHMARKS.md`).
 * The GUI reads a seqlock-protected status snapshot written every 1024 samples; it never touches the DSP state.
+
+## Diagnostics in Rack's log
+
+The module writes one line to Rack's `log.txt` when it enters the engine and one when it leaves it (never from `process()`), so that a bug report or an
+automated test can see that the plugin was instantiated and what the engine was doing:
+
+```
+[info src/FusionCloneModule.hpp:119 onAdd] Fusion Clone: module added
+[info src/FusionCloneModule.hpp:130 onRemove] Fusion Clone: module removed; last state LOCKED, repeating unit 261.63 Hz, 16 voice(s), input -5.7 dB, safety-net hits 0
+```
+
+`last state` is `LOCKED`, `ACQUIRING` or `PASS-THRU` (the display's states); `safety-net hits` is the engine's counter of non-finite / absurd output samples
+that had to be caught (always 0 in every test). `tests/rack_smoke.sh` reads these lines from a real Rack.

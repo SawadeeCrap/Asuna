@@ -1,14 +1,12 @@
 #!/bin/bash
-# Starts a real Rack WITH its window and the same patch as rack_smoke.sh (Fundamental VCO -> Fusion Clone), waits, takes a screenshot and prints a
-# small PNG of it as a base64 block, so that the picture can be recovered from a CI log:
+# Starts a real Rack WITH its window and the same patch as rack_smoke.sh (Fundamental VCO -> Fusion Clone), waits, and takes a screenshot:
 #
-#   tests/rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]
+#   [RACK_SHOT_OUT=dir] tests/rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]
 #
 # Linux: a virtual X display (Xvfb, Mesa software OpenGL) is started when DISPLAY is not set. macOS: the desktop of the runner.
 # What it exercises that the headless test cannot: the drawing code of the panel (display, spectrum bars, labels) and everything a window needs.
-# PASS = Rack is still alive after SECONDS and its log has no warning/error mentioning Fusion Clone. Every base64 line is prefixed with the
-# picture's name (small / crop); recover a picture from a saved CI log (whose lines start with a timestamp) with
-#   grep -E '^(.*Z )?small ' job.log | sed -E 's/^(.*Z )?small //' | base64 -d > small.png
+# PASS = Rack is still alive after SECONDS, the module was created and its log has no warning/error mentioning Fusion Clone. With RACK_SHOT_OUT
+# set, the full-size screenshot is copied to that directory as rack-<platform>-full.png.
 set -u
 PKG=${1:?usage: rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]}
 RACK=${2:?usage: rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]}
@@ -73,6 +71,10 @@ if [ "$CRASHED" = 0 ]; then
 	echo "Rack process after $SECS s:"; ps -o pid=,cputime=,etime=,rss= -p "$PID" || true
 	if [ "$(uname -s)" = Darwin ]; then
 		screencapture -x "$SHOT" || echo "screencapture failed"
+		sips -g pixelWidth -g pixelHeight "$SHOT" 2>/dev/null | tail -2
+		# keep the file small: never wider than 1600 px
+		w=$(sips -g pixelWidth "$SHOT" 2>/dev/null | awk '/pixelWidth/{print $2}')
+		if [ -n "$w" ] && [ "$w" -gt 1600 ]; then sips --resampleWidth 1600 "$SHOT" --out "$SHOT.small.png" >/dev/null 2>&1 && mv "$SHOT.small.png" "$SHOT"; fi
 	else
 		if command -v import >/dev/null 2>&1; then import -display "$DISPLAY" -window root "$SHOT" || echo "import failed"; else echo "ImageMagick 'import' is missing"; fi
 	fi
@@ -86,32 +88,17 @@ fi
 [ -n "$XVFB" ] && kill "$XVFB" 2>/dev/null
 
 echo; echo "================ Rack stdout/stderr (last 40 lines)"; tail -40 "$WORK/rack.out"
+echo; echo "================ log.txt (last 80 lines)"; tail -80 "$USER_DIR/log.txt" 2>/dev/null || echo "(no log.txt)"
 echo; echo "================ lines of log.txt about Fusion Clone, warnings and errors"
 grep -iE "fusion ?clone|\[(warn|fatal)" "$USER_DIR/log.txt" 2>/dev/null || echo "(none)"
 
 if [ -s "$SHOT" ]; then
 	echo; echo "screenshot: $(ls -l "$SHOT" | awk '{print $5}') bytes"
-	if command -v convert >/dev/null 2>&1; then
-		# the whole window first (small), then a crop of the top-left area at full resolution
-		convert "$SHOT" -resize 800x -colors 48 PNG8:"$WORK/small.png"
-		convert "$SHOT" -crop 900x1000+0+0 +repage -resize 60% -colors 48 PNG8:"$WORK/crop.png"
-	elif command -v sips >/dev/null 2>&1; then
-		sips -Z 800 "$SHOT" --out "$WORK/small.png" >/dev/null
-		sips -c 1000 900 --cropOffset 0 0 "$SHOT" --out "$WORK/crop_full.png" >/dev/null && sips -Z 700 "$WORK/crop_full.png" --out "$WORK/crop.png" >/dev/null
+	if [ -n "${RACK_SHOT_OUT:-}" ]; then
+		mkdir -p "$RACK_SHOT_OUT" && cp "$SHOT" "$RACK_SHOT_OUT/rack-$ARCH-full.png" && echo "copied to $RACK_SHOT_OUT/rack-$ARCH-full.png"
 	fi
-	for f in small crop; do
-		if [ -s "$WORK/$f.png" ]; then
-			sz=$(wc -c < "$WORK/$f.png")
-			echo "$f.png: $sz bytes"
-			if [ "$sz" -lt 120000 ]; then
-				echo "-----BEGIN PNG $f-----"
-				base64 < "$WORK/$f.png" | fold -w 160 | sed "s/^/$f /"
-				echo "-----END PNG $f-----"
-			else
-				echo "($f.png is too large to print)"
-			fi
-		fi
-	done
+else
+	echo; echo "no screenshot was taken"
 fi
 
 FAIL=0
