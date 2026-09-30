@@ -11,7 +11,7 @@ set -u
 PKG=${1:?usage: rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]}
 RACK=${2:?usage: rack_gui_shot.sh PACKAGE.vcvplugin /path/to/Rack [SECONDS] [ZOOM]}
 SECS=${3:-15}
-ZOOM=${4:-1.0}     # Rack stores log2(zoom) in the patch: 0 = 100 %, 1 = 200 %
+ZOOM=${4:-1.0}     # Rack's zoom setting is log2 of the zoom factor: 0 = 100 %, 1 = 200 %
 PKG=$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")
 RACK=$(cd "$(dirname "$RACK")" && pwd)/$(basename "$RACK")
 
@@ -29,7 +29,6 @@ cp "$PKG" "$USER_DIR/plugins-$ARCH/"
 cat > "$WORK/patch/patch.json" <<EOF
 {
   "version": "2.0.0",
-  "zoom": $ZOOM,
   "gridOffset": [0.0, 0.0],
   "modules": [
     {"id": 1, "plugin": "Fundamental", "model": "VCO", "params": [], "pos": [0, 0]},
@@ -44,7 +43,8 @@ EOF
 cp "$WORK/patch/patch.json" "$USER_DIR/autosave/patch.json"
 (cd "$WORK/patch" && tar -c patch.json | zstd -q -19 -o "$WORK/shot.vcv") || { echo "could not create the patch archive (need tar and zstd)"; exit 2; }
 # fill the (virtual) screen with the Rack window
-echo '{"windowSize": [1600, 1000], "windowPos": [0, 0]}' > "$USER_DIR/settings.json"
+# (zoom is Rack's log2 zoom, a setting of Rack, not of the patch; the start-up tip dialog would cover part of a zoomed-in module)
+echo '{"windowSize": [1600, 1000], "windowPos": [0, 0], "zoom": '"$ZOOM"', "showTipsOnLaunch": false}' > "$USER_DIR/settings.json"
 
 XVFB=
 if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
